@@ -1063,6 +1063,8 @@ dtb-$(CONFIG_ARCH_SPEAR3XX) += \
 	spear320-hmi.dtb
 dtb-$(CONFIG_ARCH_SPEAR6XX) += \
 	spear600-evb.dtb
+dtb-$(CONFIG_ARCH_SPMP30XX) += \
+	spmp30xx.dtb
 dtb-$(CONFIG_ARCH_STI) += \
 	stih407-b2120.dtb \
 	stih410-b2120.dtb \

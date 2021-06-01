@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config ARCH_SPMP30XX
+	bool "Sunplus SPMP30xx family"
+	depends on ARCH_MULTI_V5
+	select CPU_ARM926T
+	select SPMP_INTC
+	select SPMP_UART
+	select SPMP_TIMER
+	select GPIOLIB
+	select GPIO_GENERIC_PLATFORM
+	help
+	  Support for the Sunplus SPMP30xx (3052, 3055, 3062) SoC family.

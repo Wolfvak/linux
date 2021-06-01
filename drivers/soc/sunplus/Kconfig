@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-2.0-only
+menu "Sunplus SoC drivers"
+
+config SPMP30XX_SERIAL
+	bool "Enable SPMP30xx serial driver"
+	depends on SERIAL_CORE
+	default ARCH_SPMP30XX
+	help
+	  Say yes to enable support for the serial driver found
+	  in the Sunplus SPMP30xx SoC.
+
+config SPMP30XX_SERIAL_EARLYCON
+	bool
+	depends on SPMP30XX_SERIAL
+	select SERIAL_EARLYCON
+	default y
+
+endmenu

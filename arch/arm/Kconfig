@@ -700,6 +700,8 @@ source "arch/arm/mach-socfpga/Kconfig"
 
 source "arch/arm/mach-spear/Kconfig"
 
+source "arch/arm/mach-spmp30xx/Kconfig"
+
 source "arch/arm/mach-sti/Kconfig"
 
 source "arch/arm/mach-stm32/Kconfig"

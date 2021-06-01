@@ -1,0 +1,66 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Sunplus SPMP30XX SoC
+ *
+ * Copyright (c) 2021 Santiago Herrera
+ */
+
+/dts-v1/;
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/gpio/gpio.h>
+
+/ {
+	compatible = "sunplus,spmp30xx";
+	model = "Sunplus SPMP30XX (Device Tree)";
+
+	#address-cells = <1>;
+	#size-cells = <1>;
+	interrupt-parent = <&intc>;
+
+	memory {
+		device_type = "memory";
+		reg = <0x24000000 0x1000000>;
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,arm926ej-s";
+			reg = <0x0>;
+
+			operating-points = <24000 0>;
+			/*clocks = <&cpuclk>;
+			clock-names = "cpu";
+			clock-latency = <1000000>;*/
+		};
+	};
+
+	apb@10000000 {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges = <0 0x1000000 0x10000>;
+
+		intc: interrupt-parent@10c0 {
+			compatible = "sunplus,spmp30xx-intc";
+			reg = <0x10c0 0x20>;
+
+			#interrupt-cells = <1>;
+			interrupt-controller;
+		};
+
+		uart1: serial@1820 {
+			compatible = "sunplus,spmp30xx-uart";
+			reg = <0x1820 0x20>;
+			interrupts = <3>;
+		};
+	};
+
+	chosen {
+		bootargs = "console=ttyS0,115200 root=/dev/ram earlycon=ec_spmp30xx,0x10001820";
+		stdout-path = &uart1;
+	};
+};
