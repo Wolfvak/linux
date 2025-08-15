@@ -1101,13 +1101,19 @@ void __init setup_arch(char **cmdline_p)
 	if (__atags_pointer)
 		atags_vaddr = FDT_VIRT_BASE(__atags_pointer);
 
+	early_print("setup_processor() ");
 	setup_processor();
+	early_print("done\natags_vaddr=0x%08x\n", atags_vaddr);
+
 	if (atags_vaddr) {
+		early_print("setup_machine_fdt(0x%08x) ", atags_vaddr);
 		mdesc = setup_machine_fdt(atags_vaddr);
+		early_print("done, mdesc = 0x%08x\n", mdesc);
 		if (mdesc)
 			memblock_reserve(__atags_pointer,
 					 fdt_totalsize(atags_vaddr));
 	}
+	early_print("mdesc = 0x%08x\n", mdesc);
 	if (!mdesc)
 		mdesc = setup_machine_tags(atags_vaddr, __machine_arch_type);
 	if (!mdesc) {

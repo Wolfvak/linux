@@ -97,6 +97,18 @@ config SERIAL_EARLYCON_RISCV_SBI
 	  with "earlycon=sbi" on the kernel command line. The console is
 	  enabled when early_param is processed.
 
+config SERIAL_EARLYCON_NTR_NOCASH
+	bool "Early console using NTR/TWL no$gba debug port"
+	depends on SOC_NINTENDO_NTR || SOC_NINTENDO_TWL
+	select SERIAL_CORE
+	select SERIAL_CORE_CONSOLE
+	select SERIAL_EARLYCON
+	help
+	  Support for early debug console using the no$gba emulator debug port.
+	  This enables the console before standard serial driver is probed. This
+	  is enabled with "earlycon=ntr_nocash" on the kernel command line. The
+	  console is enabled when early_param is processed.
+
 config SERIAL_SB1250_DUART
 	tristate "BCM1xxx on-chip DUART serial support"
 	depends on SIBYTE_SB1xxx_SOC=y

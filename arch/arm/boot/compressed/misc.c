@@ -100,6 +100,23 @@ static void putstr(const char *ptr)
 	flush();
 }
 
+static void puthex(unsigned int x)
+{
+	static const char hexmap[] = {
+		'0', '1', '2', '3', '4', '5', '6', '7',
+		'8', '9', 'a', 'b', 'c', 'd', 'e', 'f'
+	};
+
+	putc('0');
+	putc('x');
+	for (int i = 0; i < 8; i++) {
+		putc(hexmap[x >> 28]);
+		x <<= 4;
+	}
+
+	flush();
+}
+
 /*
  * gzip declarations
  */
@@ -146,6 +163,11 @@ decompress_kernel(unsigned long output_start, unsigned long free_mem_ptr_p,
 	arch_decomp_setup();
 
 	putstr("Uncompressing Linux...");
+
+	putstr("input_data = "); puthex((unsigned int)input_data); putc('\n');
+	putstr("input_data_end = "); puthex((unsigned int)input_data_end); putc('\n');
+	putstr("output_data = "); puthex((unsigned int)output_data); putc('\n');
+
 	ret = do_decompress(input_data, input_data_end - input_data,
 			    output_data, error);
 	if (ret)

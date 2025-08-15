@@ -816,7 +816,7 @@ config CPU_DCACHE_DISABLE
 config CPU_DCACHE_SIZE
 	hex
 	depends on CPU_ARM740T || CPU_ARM946E
-	default 0x00001000 if CPU_ARM740T
+	default 0x00001000 if CPU_ARM740T || SOC_NINTENDO_NTR || SOC_NINTENDO_TWL
 	default 0x00002000 # default size for ARM946E-S
 	help
 	  Some cores are synthesizable to have various sized cache. For

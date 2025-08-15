@@ -1,0 +1,131 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+/dts-v1/;
+
+/ {
+	compatible = "nintendo,twl";
+	model = "Nintendo DSi (TWL)";
+
+	#address-cells = <1>;
+	#size-cells = <1>;
+	interrupt-parent = <&pic>;
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu@0 {
+			compatible = "arm,arm946e-s";
+			device_type = "cpu";
+			reg = <0>;
+		};
+	};
+
+	memory@2000000 {
+		device_type = "memory";
+		reg = <0x2000000 0x1000000>;
+	};
+
+	aliases {
+		serial0 = &uart0;
+	};
+
+	chosen {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		bootargs = "debug earlyprintk earlycon=ntr_nocash keep_bootcon";
+
+		stdout-path = "serial0:115200n8";
+
+		framebuffer0: framebuffer@6800000 {
+			compatible = "simple-framebuffer";
+			reg = <0x6800000 (256 * 192 * 2)>;
+			width = <256>;
+			height = <192>;
+			stride = <(256 * 2)>;
+			format = "a1r5g5b5";
+		};
+	};
+
+	soc {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		pic: interrupt-controller@4000208 {
+			compatible = "nintendo,ntr-irqc";
+			reg = <0x4000208 0x10>;
+
+			#interrupt-cells = <1>;
+			interrupt-controller;
+		};
+
+		pit: timer@4000100 {
+			compatible = "nintendo,ntr-timer";
+			reg = <0x4000100 0x10>;
+			interrupts = <3>, <4>, <5>, <6>;
+			clocks = <&clk33M>;
+		};
+
+		slot1: mfd@40001a0 {
+			#address-cells = <0>;
+			#size-cells = <0>;
+
+			compatible = "nintendo,ntr-slot1";
+			reg = <0x40001a0 16>;
+
+			auxspi: spi {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				compatible = "nintendo,ntr-slot1-auxspi";
+				num-cs = <1>;
+
+				uart0: serial@0 {
+					compatible = "nxp,sc16is740";
+					reg = <0>;
+
+					spi-rx-bus-width = <1>;
+					spi-tx-bus-width = <1>;
+					spi-max-frequency = <4000000>;
+
+					clocks = <&clk4M>;
+
+					gpio-controller;
+					#gpio-cells = <2>;
+				};
+			};
+
+			cartrom: cart {
+				compatible = "nintendo,ntr-slot1-cart";
+				interrupts = <19>, <20>;
+			};
+		};
+	};
+
+	clocks {
+		clk33M: clk-33M {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <33513982>;
+			clock-output-names = "clk33M";
+		};
+
+		clk16M: clk-16M {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <16756991>;
+			clock-output-names = "clk16M";
+		};
+
+		clk4M: clk-4M {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <4189248>;
+			clock-output-names = "clk4M";
+		};
+	};
+};
