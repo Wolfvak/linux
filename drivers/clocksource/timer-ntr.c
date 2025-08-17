@@ -29,35 +29,28 @@
  * TIMER1-3 are chained to build a software-only 48bit count-up clocksource.
  */
 
-#define NTR_TIMER_FALLBACK_FREQ	(33513982)
+#define NTR_TIMER_FREQ	(33513982)
+
+#define NTR_CLKEVT_FREQ	(NTR_TIMER_FREQ / 1024)
+#define NTR_CLKSRC_FREQ	(NTR_TIMER_FREQ / 256)
 
 #define REG_TICKVAL_OFFSET(n)	(4 * (n))
 #define REG_CONFIG_OFFSET(n)	((4 * (n)) + 2)
 
-/** Prescaler selection */
-#define NTR_TIMER_CONFIG_PRESCALE_1	(0 << 0)
-#define NTR_TIMER_CONFIG_PRESCALE_64	(1 << 0)
-#define NTR_TIMER_CONFIG_PRESCALE_256	(2 << 0)
-#define NTR_TIMER_CONFIG_PRESCALE_1024	(3 << 0)
+#define NTR_TIMER_CONFIG_START	((3u << 0) |	/* prescaler = 1024 */ \
+				 BIT(6) |	/* IRQ enabled */ \
+				 BIT(7))	/* start counting*/
 
-/**
- * If this bit is set, the timer will only
- * increment when the previous one overflows
- */
-#define NTR_TIMER_CONFIG_COUNT_UP	BIT(2)
+#define NTR_CLKSRC_CONFIG_START	((2u << 0) |	/* prescaler = 256 */ \
+				 BIT(7))	/* start counting */
 
-// Enable IRQ on Timer overflow
-#define NTR_TIMER_CONFIG_IRQ_ENABLE	BIT(6)
-
-// 1=Start/Count, 0=Stopped
-#define NTR_TIMER_CONFIG_COUNT_ENABLE	BIT(7)
+#define NTR_CLKSRC_CONFIG_CHAIN	(BIT(2) |	/* count-up */ \
+				 BIT(7))	/* start counting */
 
 static struct {
 	void __iomem *io;
-
-	u16 clkevt_ticks;
 	spinlock_t clkevt_lock;
-	spinlock_t counter_lock;
+	spinlock_t clksrc_lock;
 } ntr_timer;
 
 static void ntr_timer_stop(void)
@@ -68,52 +61,45 @@ static void ntr_timer_stop(void)
 static void ntr_timer_start(u16 ticks)
 {
 	unsigned long flags;
-	static const u16 timer_control =
-		NTR_TIMER_CONFIG_PRESCALE_1024 |
-		NTR_TIMER_CONFIG_IRQ_ENABLE |
-		NTR_TIMER_CONFIG_COUNT_ENABLE;
-
-	spin_lock_irqsave(&ntr_timer.clkevt_lock, flags);
 	void __iomem *io = ntr_timer.io;
-
-	// disable, reload with the new counter value, enable again
-	iowrite16(0, io + REG_CONFIG_OFFSET(0));
-	iowrite16(0xFFFF - ticks, io + REG_TICKVAL_OFFSET(0));
-	iowrite16(timer_control, io + REG_CONFIG_OFFSET(0));
+	spin_lock_irqsave(&ntr_timer.clkevt_lock, flags);
+	iowrite32(0, io);				/* disable the timer */
+	iowrite16(0xFFFF - ticks, io);			/* reload the new counter value */
+	iowrite16(NTR_TIMER_CONFIG_START, io + 2);	/* restart the timer */
 	spin_unlock_irqrestore(&ntr_timer.clkevt_lock, flags);
 }
 
 static inline void ntr_clksrc_reset(void)
 {
-	static const u16 base_flags = NTR_TIMER_CONFIG_PRESCALE_1024 | NTR_TIMER_CONFIG_COUNT_ENABLE;
-	static const u16 chained_flags = NTR_TIMER_CONFIG_COUNT_UP | NTR_TIMER_CONFIG_COUNT_ENABLE;
-
-	void __iomem *io = ntr_timer.io + REG_TICKVAL_OFFSET(1);
-	for (unsigned i = 0; i < 3; i++) {			/* stop and reset all the counters */
-		iowrite16(0, io + REG_CONFIG_OFFSET(i));
-		iowrite16(0, io + REG_TICKVAL_OFFSET(i));
-	}
-	iowrite16(chained_flags, io + REG_CONFIG_OFFSET(1));	/* start the chained counters */
-	iowrite16(chained_flags, io + REG_CONFIG_OFFSET(2));
-	iowrite16(base_flags, io + REG_CONFIG_OFFSET(0));	/* start the base counter*/
+	unsigned long flags;
+	void __iomem *io = ntr_timer.io + 4;
+	spin_lock_irqsave(&ntr_timer.clksrc_lock, flags);
+	iowrite32(0, io + 0); /* fully disable the 3 sources */
+	iowrite32(0, io + 4);
+	iowrite32(0, io + 8);
+	iowrite16(NTR_CLKSRC_CONFIG_CHAIN, io + REG_CONFIG_OFFSET(1));	/* configure the chained timers */
+	iowrite16(NTR_CLKSRC_CONFIG_CHAIN, io + REG_CONFIG_OFFSET(2));
+	iowrite16(NTR_CLKSRC_CONFIG_START, io + REG_CONFIG_OFFSET(0));	/* configure the low timer last */
+	spin_unlock_irqrestore(&ntr_timer.clksrc_lock, flags);
 }
 
 static inline u64 ntr_sched_clock_read(void)
 {
 	unsigned long flags;
-	u16 b15_0, b31_16, b47_32, lo2;
+	u16 lo1, lo2;
+	u32 hi;
 
-	spin_lock_irqsave(&ntr_timer.counter_lock, flags);
-	void __iomem *io = ntr_timer.io + REG_TICKVAL_OFFSET(1);
+	spin_lock_irqsave(&ntr_timer.clksrc_lock, flags);
+	void __iomem *io = ntr_timer.io + 4;
 	do {
-		b15_0	= ioread16(io + REG_TICKVAL_OFFSET(0));
-		b31_16	= ioread16(io + REG_TICKVAL_OFFSET(1));
-		b47_32	= ioread16(io + REG_TICKVAL_OFFSET(2));
+		lo1	= ioread16(io + REG_TICKVAL_OFFSET(0));
+		hi	= (u32)ioread16(io + REG_TICKVAL_OFFSET(1)) |
+			  (u32)ioread16(io + REG_TICKVAL_OFFSET(2)) << 16;
 		lo2	= ioread16(io + REG_TICKVAL_OFFSET(0));
-	} while(b15_0 > lo2);
-	spin_unlock_irqrestore(&ntr_timer.counter_lock, flags);
+	} while(lo2 < lo1);
+	spin_unlock_irqrestore(&ntr_timer.clksrc_lock, flags);
 
-	return ((u64)b47_32 << 32) | ((u64)b31_16 << 16) | b15_0;
+	return (u64)hi << 16 | lo2;
 }
 
 static u64 ntr_clksrc_read(struct clocksource *c)
@@ -143,7 +129,7 @@ static int ntr_clkevt_set_state_shutdown(struct clock_event_device *evt)
 
 static int ntr_clkevt_set_state_periodic(struct clock_event_device *evt)
 {
-	ntr_timer_start(ntr_timer.clkevt_ticks);
+	ntr_timer_start(NTR_CLKEVT_FREQ / HZ);
 	return 0;
 }
 
@@ -166,13 +152,11 @@ static irqreturn_t ntr_timer_irq(int irq, void *dev_id)
 static int __init ntr_timer_of_init(struct device_node *np)
 {
 	int irq, err;
-	struct clk *clk;
-	unsigned long rate;
 
 	pr_info("starting NDS TIMER driver...\n");
 
 	spin_lock_init(&ntr_timer.clkevt_lock);
-	spin_lock_init(&ntr_timer.counter_lock);
+	spin_lock_init(&ntr_timer.clksrc_lock);
 
 	irq = irq_of_parse_and_map(np, 0);
 	if (irq <= 0) {
@@ -185,28 +169,13 @@ static int __init ntr_timer_of_init(struct device_node *np)
 
 	pr_debug("mapped registers @ %px\n", ntr_timer.io);
 
-	clk = of_clk_get(np, 0);
-	BUG_ON(IS_ERR_OR_NULL(clk));
-
-	err = clk_prepare_enable(clk);
-	if (err) {
-		rate = NTR_TIMER_FALLBACK_FREQ;
-		pr_err("failed to prepare clk (%d), falling back to default freq %ld\n", err, rate);
-	} else {
-		rate = clk_get_rate(clk);
-	}
-
-	// All clocks are prescaled by 1024
-	rate /= 1024;
-
 	// Reset TIMER0
-	ntr_timer.clkevt_ticks = DIV_ROUND_CLOSEST(rate, HZ);
 	ntr_timer_stop();
 
 	// Set up TIMER1-3 as a clocksource
 	ntr_clksrc_reset();
-	clocksource_register_hz(&ntr_clksrc, rate);
-	sched_clock_register(ntr_sched_clock_read, 48, rate);
+	clocksource_register_hz(&ntr_clksrc, NTR_CLKSRC_FREQ);
+	sched_clock_register(ntr_sched_clock_read, 48, NTR_CLKSRC_FREQ);
 
 	// Set up TIMER0 as a clockevent
 	err = request_irq(irq, ntr_timer_irq, IRQF_TIMER | IRQF_IRQPOLL,
@@ -215,7 +184,7 @@ static int __init ntr_timer_of_init(struct device_node *np)
 		pr_err("failed to request irq %d (%d)\n", irq, err);
 	} else {
 		clockevents_config_and_register(&ntr_clkevt,
-			rate, 1, 0xFFFF);
+			NTR_CLKEVT_FREQ, 0, 0xFFFF);
 	}
 
 	pr_info("ready!\n");

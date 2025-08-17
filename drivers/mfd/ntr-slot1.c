@@ -25,21 +25,19 @@ static const struct mfd_cell ntr_slot1_cells[] = {
     MFD_CELL_OF("ntr_slot1_cart", NULL, NULL, 0, 0, "nintendo,ntr-slot1-cart"),
 };
 
-int ntr_slot1_configure_spi(struct ntr_slot1 *slot1)
+void __iomem *ntr_slot1_configure_spi(struct ntr_slot1 *slot1)
 {
-    pr_err("ntr_slot1_configure_spi(%px)\n", slot1);
     if (!slot1)
-        return -EINVAL;
+        return ERR_PTR(-EINVAL);
 
     if (!mutex_trylock(&slot1->lock))
-        return -EBUSY;
+        return ERR_PTR(-EBUSY);
     iowrite16(NTR_SLOT1_CNT_SPIAUX | NTR_SLOT1_CNT_ENABLE, slot1->io);
-    return 0;
+    return slot1->io;
 }
 
 int ntr_slot1_configure_cart(struct ntr_slot1 *slot1)
 {
-    pr_err("ntr_slot1_configure_cart(%px)\n", slot1);
     if (!slot1)
         return -EINVAL;
 
@@ -51,7 +49,6 @@ int ntr_slot1_configure_cart(struct ntr_slot1 *slot1)
 
 int ntr_slot1_release(struct ntr_slot1 *slot1)
 {
-    pr_err("ntr_slot1_release(%px)\n", slot1);
     if (!slot1)
         return -EINVAL;
 
@@ -59,14 +56,6 @@ int ntr_slot1_release(struct ntr_slot1 *slot1)
     iowrite16(0, slot1->io);
     mutex_unlock(&slot1->lock);
     return 0;
-}
-
-void __iomem *ntr_slot1_iomem(struct ntr_slot1 *slot1)
-{
-    pr_err("ntr_slot1_iomem(%px)\n", slot1);
-    if (slot1)
-        return slot1->io;
-    return NULL;
 }
 
 static int ntr_slot1_probe(struct platform_device *pdev)

@@ -24,9 +24,9 @@
 
 static struct {
 	void __iomem *io;
-	struct irq_domain *irq_domain;
+	struct irq_domain *irqd;
 	// TODO: should we do locking here?
-} irqc_data;
+} ntr_irqc;
 
 static inline void ntr_irqc_rmw_enabled(void __iomem *io, u32 set, u32 clr)
 {
@@ -70,15 +70,16 @@ static struct irq_chip ntr_irqc_chip = {
 	.irq_mask_ack	= ntr_irqc_mask_ack,
 };
 
-static asmlinkage void __exception_irq_entry ntr_irqc_handle_irq(struct pt_regs *regs)
+static asmlinkage
+void __exception_irq_entry ntr_irqc_handle_irq(struct pt_regs *regs)
 {
 	int irq;
 	u32 pending;
 	void __iomem *reg_if;
 	struct irq_domain *irqd;
 
-	reg_if = irqc_data.io + REG_IF;
-	irqd = irqc_data.irq_domain;
+	reg_if = ntr_irqc.io + REG_IF;
+	irqd = ntr_irqc.irqd;
 	pending = ioread32(reg_if);
 
 	do {
@@ -99,7 +100,7 @@ static asmlinkage void __exception_irq_entry ntr_irqc_handle_irq(struct pt_regs 
 static int ntr_irqc_domain_map(struct irq_domain *d, unsigned int irq,
 				irq_hw_number_t hwirq)
 {
-	irq_set_chip_data(irq, irqc_data.io);
+	irq_set_chip_data(irq, ntr_irqc.io);
 	irq_set_chip_and_handler(irq, &ntr_irqc_chip, handle_edge_irq);
 	irq_set_probe(irq);
 	return 0;
@@ -122,22 +123,23 @@ static int __init ntr_irqc_of_init(struct device_node *node,
 {
 	pr_info("starting nds irq controller driver...\n");
 
-	irqc_data.io = of_iomap(node, 0);
-	BUG_ON(irqc_data.io == NULL);
+	ntr_irqc.io = of_iomap(node, 0);
+	BUG_ON(ntr_irqc.io == NULL);
 
-	pr_debug("mapped registers @ %px\n", irqc_data.io);
+	pr_debug("mapped registers @ %px\n", ntr_irqc.io);
 
 	// mask IME, acknowledge & mask interrupts, unmask IME
-	iowrite32(0, irqc_data.io + REG_IME);
+	iowrite32(0, ntr_irqc.io + REG_IME);
 
-	iowrite32(0, irqc_data.io + REG_IE);
-	iowrite32(~0, irqc_data.io + REG_IF);
+	iowrite32(0, ntr_irqc.io + REG_IE);
+	iowrite32(~0, ntr_irqc.io + REG_IF);
 
-	iowrite32(1, irqc_data.io + REG_IME);
+	iowrite32(1, ntr_irqc.io + REG_IME);
 
-	irqc_data.irq_domain = irq_domain_add_simple(node, NTR_IRQC_NR_IRQS, 0,
-						&ntr_irqc_domain_ops, NULL);
-	pr_debug("mapped %d interrupts\n", irqc_data.irq_domain->mapcount);
+	ntr_irqc.irqd = irq_domain_create_simple(of_fwnode_handle(node),
+						 NTR_IRQC_NR_IRQS, 0,
+						 &ntr_irqc_domain_ops, NULL);
+	pr_debug("mapped %d interrupts\n", ntr_irqc.irqd->mapcount);
 
 	set_handle_irq(ntr_irqc_handle_irq);
 	pr_info("ready!\n");

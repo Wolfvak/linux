@@ -10,20 +10,16 @@
 #include <linux/mod_devicetable.h>
 #include <linux/spi/spi.h>
 
-struct ntr_slot1;
-extern int ntr_slot1_configure_spi(struct ntr_slot1 *slot1);
-extern int ntr_slot1_release(struct ntr_slot1 *slot1);
-extern void __iomem *ntr_slot1_iomem(struct ntr_slot1 *slot1);
+#define SPI_NTR_SLOT1_FREQUENCY	(4000000)
 
-struct ntr_spi {
-	struct ntr_slot1 *slot1;
-	void __iomem *io;
-};
+struct ntr_slot1;
+extern void __iomem *ntr_slot1_configure_spi(struct ntr_slot1 *slot1);
+extern int ntr_slot1_release(struct ntr_slot1 *slot1);
 
 static void ntr_spi_wait_busy(void __iomem *io)
 {
 	while(ioread16(io + 0) & BIT(7))
-		usleep_range(1, 4);
+		usleep_range(1, 2);
 }
 
 static u8 ntr_spi_txrx_byte(void __iomem *io, u8 v)
@@ -31,17 +27,32 @@ static u8 ntr_spi_txrx_byte(void __iomem *io, u8 v)
 	iowrite16(v, io + 2);
 	ntr_spi_wait_busy(io);
 	u8 r = ioread16(io + 2);
-	pr_info("tx = 0x%02x, rx = 0x%02x\n", v, r);
+	// pr_info("tx = 0x%02x, rx = 0x%02x\n", v, r);
 	return r;
 }
 
-static int ntr_spi_xfer(struct ntr_spi *spi,
+static int ntr_spi_baudrate(const struct spi_transfer *xfer)
+{
+	/*
+	 * our transfer rate must be <= xfer->speed_hz
+	 * and we can only do /1, /2, /4 or /8
+	 */
+	unsigned freq = SPI_NTR_SLOT1_FREQUENCY;
+	for (unsigned div = 0; div < 4; div++, freq >>= 1) {
+		if (freq <= xfer->speed_hz)
+			return div;
+	}
+
+	pr_err("requested transfer rate %d Hz is too low, expect glitches\n",
+		xfer->speed_hz);
+	return 3;
+}
+
+static int ntr_spi_xfer(void __iomem *io,
 			struct spi_device *dev,
 			struct spi_transfer *xfer,
 			int last)
 {
-	void __iomem *io = spi->io;
-
 	u8 *rx = xfer->rx_buf;
 	const u8 *tx = xfer->tx_buf;
 
@@ -55,13 +66,13 @@ static int ntr_spi_xfer(struct ntr_spi *spi,
 		return -EINVAL;
 	}
 
-	static const u16 cnt = 3 | BIT(13) | BIT(15);
-	ntr_spi_wait_busy(io); // make sure there are no pending transactions
+	u16 cnt = (ioread16(io) & ~3) | ntr_spi_baudrate(xfer);
+	iowrite16(cnt | BIT(6), io);	// start and hold CS
+	ntr_spi_wait_busy(io);		// wait until ready
 
 	for (unsigned i = 0; i < xfer->len; i++) {
-		if (last && (i == (xfer->len - 1))) {
-			iowrite16(cnt, io); // deselect CS if this is the last byte
-			pr_info("deselect CS");
+		if (last && (i == xfer->len-1)) {
+			iowrite16(cnt & ~BIT(6), io); // deselect CS if this is the last byte
 			ntr_spi_wait_busy(io);
 		}
 
@@ -74,29 +85,34 @@ static int ntr_spi_xfer(struct ntr_spi *spi,
 static int ntr_spi_transfer_one_message(struct spi_controller *ctrl,
 					struct spi_message *msg)
 {
-	struct ntr_spi *spi = spi_controller_get_devdata(ctrl);
+	struct ntr_slot1 *slot1 = spi_controller_get_devdata(ctrl);
 	struct spi_device *dev = msg->spi;
 	struct spi_transfer *xfer = NULL;
 
 	int status = 0;
-
-	status = ntr_slot1_configure_spi(spi->slot1);
-	if (status != 0) {
-		pr_err("failed to configure Slot-1 to be in SPI mode (%d)\n", status);
+	void __iomem *io = ntr_slot1_configure_spi(slot1);
+	if (IS_ERR(io)) {
+		pr_err("failed to configure Slot-1 to be in SPI mode (%ld)\n", PTR_ERR(io));
 		return status;
 	}
 
-	// u16 cnt = ioread16(io);
-	void __iomem *io = spi->io;
-
-	static const u16 cnt = 3 | BIT(13) | BIT(15);
-	iowrite16(cnt | BIT(6), io); // hold CS (bit6)
-	pr_info("hold CS");
 	ntr_spi_wait_busy(io);
 
 	list_for_each_entry(xfer, &msg->transfers, transfer_list) {
-		status = ntr_spi_xfer(spi, dev, xfer, spi_transfer_is_last(ctrl, xfer) ? 1 : 0);
-		if (status != 0) break;
+		if (xfer->cs_change) {
+			/**
+			 * xfer->cs_change "affects chipselect after this transfer completes"
+			 * should it deassert and reassert after the last byte of the xfer?
+			 * if so we should treat it as the last xfer of the msg
+			 */
+			pr_warn_ratelimited("spi transfer requested an unsupported chipselect change");
+		}
+
+		int last = spi_transfer_is_last(ctrl, xfer);
+		status = ntr_spi_xfer(io, dev, xfer, last);
+		if (status != 0) {
+			break;
+		}
 
 		msg->actual_length += xfer->len;
 		spi_transfer_delay_exec(xfer);
@@ -104,18 +120,15 @@ static int ntr_spi_transfer_one_message(struct spi_controller *ctrl,
 
 	msg->status = status;
 	spi_finalize_current_message(ctrl);
-	ntr_slot1_release(spi->slot1);
+	ntr_slot1_release(slot1);
 	return 0;
 }
 
 static int ntr_spi_probe(struct platform_device *pdev)
 {
 	int err;
-	struct ntr_spi *spi;
-	struct spi_controller *ctrl;
-
 	struct device *parent_dev;
-	struct platform_device *parent_pdev;
+	struct spi_controller *ctrl;
 
 	pr_info("starting driver\n");
 
@@ -125,31 +138,27 @@ static int ntr_spi_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	parent_pdev = to_platform_device(parent_dev);
+	struct ntr_slot1 *slot1 = platform_get_drvdata(to_platform_device(parent_dev));
+	if (!slot1) {
+		pr_err("failed to get the Slot-1 handle\n");
+		return -EINVAL;
+	}
 
-	ctrl = devm_spi_alloc_host(&pdev->dev, sizeof(struct ntr_spi));
+	ctrl = devm_spi_alloc_host(&pdev->dev, sizeof(struct ntr_slot1*));
 	if (!ctrl) {
 		pr_err("failed to allocate SPI controller\n");
 		return -ENOMEM;
 	}
 
-	spi = spi_controller_get_devdata(ctrl);
-	spi->slot1 = platform_get_drvdata(parent_pdev);
-	if (!spi->slot1) {
-		pr_err("failed to get the Slot-1 handle\n");
-		return -EINVAL;
-	}
-
-	spi->io = ntr_slot1_iomem(spi->slot1);
-	pr_debug("mapped SPI control registers @ %px\n", spi->io);
+	spi_controller_set_devdata(ctrl, slot1);
 
 	ctrl->dev.of_node = pdev->dev.of_node;
 	ctrl->mode_bits = SPI_MODE_0 | SPI_NO_CS;
 	ctrl->flags = SPI_CONTROLLER_MUST_RX | SPI_CONTROLLER_MUST_TX;
 	ctrl->bits_per_word_mask = SPI_BPW_MASK(8);
 	ctrl->transfer_one_message = ntr_spi_transfer_one_message;
-	ctrl->max_speed_hz = 1u << 22;
-	ctrl->min_speed_hz = 1u << 19;
+	ctrl->max_speed_hz = SPI_NTR_SLOT1_FREQUENCY;
+	ctrl->min_speed_hz = SPI_NTR_SLOT1_FREQUENCY / 8;
 	ctrl->num_chipselect = 1;
 	platform_set_drvdata(pdev, ctrl);
 
