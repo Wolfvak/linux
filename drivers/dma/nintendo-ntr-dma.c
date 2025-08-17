@@ -164,7 +164,7 @@ static struct dma_async_tx_descriptor *ntr_dma_prep_memset(struct dma_chan *chan
 {
 	return ntr_dma_prep_xfer(to_ntr_dma_chan(chan),
 		dest, (u32)(to_ntr_dma_chan(chan)->fill), len, (u32)value,
-		DMA_CNT_SRC_INCREMENT | DMA_CNT_DST_INCREMENT,
+		DMA_CNT_SRC_FIXED | DMA_CNT_DST_INCREMENT,
 		flags
 	);
 }

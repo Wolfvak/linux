@@ -75,6 +75,13 @@
 			#dma-cells = <1>;
 		};
 
+		ndma: dma@4004100 {
+			compatible = "nintendo,twl-ndma";
+			reg = <0x4004100 0x80>;
+			interrupts = <28>, <29>, <30>, <31>;
+			#dma-cells = <2>;
+		};
+
 		slot1: mfd@40001a0 {
 			#address-cells = <0>;
 			#size-cells = <0>;
