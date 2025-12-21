@@ -4,7 +4,7 @@
 #define DRIVER_NAME "ntr_slot1_auxspi"
 
 #include <linux/io.h>
-#include <linux/delay.h>
+#include <linux/iopoll.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/mod_devicetable.h>
@@ -18,8 +18,8 @@ extern int ntr_slot1_release(struct ntr_slot1 *slot1);
 
 static void ntr_spi_wait_busy(void __iomem *io)
 {
-	while(ioread16(io + 0) & BIT(7))
-		usleep_range(1, 2);
+	u16 cnt;
+	readw_poll_timeout(io + 0, cnt, !(cnt & BIT(7)), 0, 0);
 }
 
 static u8 ntr_spi_txrx_byte(void __iomem *io, u8 v)
@@ -27,11 +27,10 @@ static u8 ntr_spi_txrx_byte(void __iomem *io, u8 v)
 	iowrite16(v, io + 2);
 	ntr_spi_wait_busy(io);
 	u8 r = ioread16(io + 2);
-	// pr_info("tx = 0x%02x, rx = 0x%02x\n", v, r);
 	return r;
 }
 
-static int ntr_spi_baudrate(const struct spi_transfer *xfer)
+static int ntr_spi_baudrate_div(const struct spi_transfer *xfer)
 {
 	/*
 	 * our transfer rate must be <= xfer->speed_hz
@@ -43,7 +42,8 @@ static int ntr_spi_baudrate(const struct spi_transfer *xfer)
 			return div;
 	}
 
-	pr_err("requested transfer rate %d Hz is too low, expect glitches\n",
+	pr_warn_ratelimited(
+		"requested transfer rate %d Hz is too low, expect glitches\n",
 		xfer->speed_hz);
 	return 3;
 }
@@ -66,7 +66,7 @@ static int ntr_spi_xfer(void __iomem *io,
 		return -EINVAL;
 	}
 
-	u16 cnt = (ioread16(io) & ~3) | ntr_spi_baudrate(xfer);
+	u16 cnt = (ioread16(io) & ~3) | ntr_spi_baudrate_div(xfer);
 	iowrite16(cnt | BIT(6), io);	// start and hold CS
 	ntr_spi_wait_busy(io);		// wait until ready
 
