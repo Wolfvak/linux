@@ -36,11 +36,11 @@
 #define NTR_CLKEVT_FREQ	(NTR_TIMER_FREQ / 64)
 #define NTR_CLKSRC_FREQ	(NTR_TIMER_FREQ / 256)
 
-#define NTR_TIMER_CONFIG_START	((2u << 0) |	/* prescaler = 256 */ \
+#define NTR_CLKEVT_CONFIG_START	((1u << 0) |	/* prescaler = 64 */ \
 				 BIT(6) |	/* IRQ enabled */ \
 				 BIT(7))	/* start counting*/
 
-#define NTR_CLKSRC_CONFIG_START	((1u << 0) |	/* prescaler = 64 */ \
+#define NTR_CLKSRC_CONFIG_START	((2u << 0) |	/* prescaler = 256 */ \
 				 BIT(7))	/* start counting */
 
 #define NTR_CLKSRC_CONFIG_CHAIN	(BIT(2) |	/* count-up */ \
@@ -122,7 +122,7 @@ static int ntr_clkevt_set_state_periodic(struct clock_event_device *evt)
 {
 	__ntr_timer_set_control(ntr_timer.io, 0, 0);
 	__ntr_timer_set_count(ntr_timer.io, 0, 0xFFFF - (NTR_CLKEVT_FREQ / HZ));
-	__ntr_timer_set_control(ntr_timer.io, 0, NTR_TIMER_CONFIG_START);
+	__ntr_timer_set_control(ntr_timer.io, 0, NTR_CLKEVT_CONFIG_START);
 	return 0;
 }
 
