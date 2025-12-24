@@ -523,6 +523,17 @@ config SERIAL_IMX_EARLYCON
 	  If you have enabled the earlycon on the Freescale IMX
 	  CPU you can make it the earlycon by answering Y to this option.
 
+config SERIAL_IS_SPI_USB_ADAPTER
+	bool "IS-SPI-USB-ADAPTER serial port support"
+	depends on SPI
+	select SERIAL_CORE
+	default y if ARCH_NINTENDO
+	help
+	  Say Y here if you want to use the IS-SPI-USB-ADAPTER serial port
+	  controller attached via Slot-1.
+
+	  The port will be available in /dev/ttyIS0.
+
 config SERIAL_UARTLITE
 	tristate "Xilinx uartlite serial port support"
 	depends on HAS_IOMEM
