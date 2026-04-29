@@ -24,11 +24,11 @@
  * timer N will cause timer N+1 to increment.
  * This way wider (32/48/64bit) counters can be constructed.
  *
- * TIMER0 is a /64 prescaled, IRQ-capable clk events source, yielding
- * a resolution of ~1.9us and a maximum idle of ~125ms.
- * TIMER1-3 are chained to build a /256 prescaled, software-only
- * 48bit count-up clocksource with a resolution of ~7.63us and a
- * wraparound every ~68 years.
+ * TIMER0 is configured as a /64 prescaled, IRQ-capable clock events
+ * source, yielding a resolution of ~1.9us and a maximum idle time of ~125ms.
+ *
+ * TIMER1-3 are chained to build a /256 prescaled, software-only 48bit
+ * clocksource counter with a resolution of ~7.63us and a wraparound every ~68 years.
  */
 
 #define NTR_TIMER_FREQ	(33513982)
@@ -36,90 +36,87 @@
 #define NTR_CLKEVT_FREQ	(NTR_TIMER_FREQ / 64)
 #define NTR_CLKSRC_FREQ	(NTR_TIMER_FREQ / 256)
 
-#define NTR_CLKEVT_CONFIG_START	((1u << 0) |	/* prescaler = 64 */ \
-				 BIT(6) |	/* IRQ enabled */ \
-				 BIT(7))	/* start counting*/
+/* Clock event (timer + IRQ) config: prescaler = 64, IRQ enabled, start */
+#define NTR_CLKEVT_CONFIG_START	((1u << 0) | BIT(6) | BIT(7))
+/* Clock source (48bit counter) low config: prescaler = 256, IRQ disabled, start */
+#define NTR_CLKSRC_CONFIG_START	((2u << 0) | BIT(7))
+/* Clock source (48bit counter) chained config: enable count-up, IRQ disabled, start*/
+#define NTR_CLKSRC_CONFIG_CHAIN	(BIT(2) | BIT(7))
 
-#define NTR_CLKSRC_CONFIG_START	((2u << 0) |	/* prescaler = 256 */ \
-				 BIT(7))	/* start counting */
-
-#define NTR_CLKSRC_CONFIG_CHAIN	(BIT(2) |	/* count-up */ \
-				 BIT(7))	/* start counting */
+#define TIMER_VAL_OFFS(tmr)	((tmr) * 4)
+#define TIMER_CNT_OFFS(tmr)	(TIMER_VAL_OFFS(tmr) + 2)
 
 static struct {
 	void __iomem *io;
 	unsigned next_ticks;
 } ntr_timer;
 
-static void __ntr_timer_set_control(void __iomem *io, unsigned timer, u16 control)
-{
-	iowrite16(control, io + (timer * 4) + 2);
+static void __ntr_timer_set_control(void __iomem *io, unsigned timer, u16 control) {
+	iowrite16(control, io + TIMER_CNT_OFFS(timer));
 }
 
-static void __ntr_timer_set_count(void __iomem *io, unsigned timer, u16 count)
-{
-	iowrite16(count, io + (timer * 4));
+static void __ntr_timer_set_count(void __iomem *io, unsigned timer, u16 count) {
+	iowrite16(count, io + TIMER_CNT_OFFS(timer));
 }
 
-static u16 __ntr_timer_get_count(void __iomem *io, unsigned timer)
-{
-	return ioread16(io + (timer * 4));
+static u16 __ntr_timer_get_count(void __iomem *io, unsigned timer) {
+	return ioread16(io + TIMER_VAL_OFFS(timer));
 }
 
-static void __ntr_timer_reset(void __iomem *io, unsigned timer)
-{
-	iowrite32(0, io + (timer * 4));
+static void __ntr_timer_reset(void __iomem *io, unsigned timer) {
+	iowrite32(0, io + TIMER_VAL_OFFS(timer));
 }
 
-static inline u64 ntr_sched_clock_read(void)
-{
+static inline u64 ntr_sched_clock_read(void) {
 	u16 count[2][3];
 
 	void __iomem *io = ntr_timer.io;
 	while (true) {
-		count[0][0] = __ntr_timer_get_count(io, 1);
-		count[0][1] = __ntr_timer_get_count(io, 2);
-		count[0][2] = __ntr_timer_get_count(io, 3);
-		count[1][0] = __ntr_timer_get_count(io, 1);
-		count[1][1] = __ntr_timer_get_count(io, 2);
-		count[1][2] = __ntr_timer_get_count(io, 3);
+		/**
+		 * Atomic reads are impossible because each 16bit counter is in a separate 32bit word.
+		 * To work around this issue and prevent rollbacks we read the timers twice and
+		 * only accept the result if the second read is _strictly_ in the future:
+		 * - the low 16bits of the second read are >= the low 16bits of the first read
+		 * - bits 16-47 are the same in both reads
+		 **/
+		for (unsigned i = 0; i < 2; i++) {
+			for (unsigned t = 0; t < 3; t++) {
+				count[i][t] = __ntr_timer_get_count(io, t + 1);
+			}
+		}
 
-		if ((count[0][0] <= count[1][0]) ||
-		    (count[0][1] == count[1][1]) ||
+		if ((count[0][0] <= count[1][0]) &&
+		    (count[0][1] == count[1][1]) &&
 		    (count[0][2] == count[1][2]))
-			break;
+			break; /* passes all conditions, break out and return the second read */
 	}
 
 	return ((u64)count[1][2] << 32) | ((u32)count[1][1] << 16) | count[1][0];
 }
 
-static u64 ntr_clksrc_read(struct clocksource *c)
-{
+static u64 ntr_clksrc_read(struct clocksource *c) {
 	return ntr_sched_clock_read();
 }
 
 static struct clocksource ntr_clksrc = {
-	.name	= KBUILD_MODNAME "_clksrc",
+	.name	= KBUILD_MODNAME,
 	.rating	= 200,
 	.read	= ntr_clksrc_read,
 	.mask	= CLOCKSOURCE_MASK(48),
 	.flags	= CLOCK_SOURCE_IS_CONTINUOUS,
 };
 
-static int ntr_clkevt_set_next_event(unsigned long next, struct clock_event_device *evt)
-{
+static int ntr_clkevt_set_next_event(unsigned long next, struct clock_event_device *evt) {
 	__ntr_timer_set_count(ntr_timer.io, 0, 0xFFFF - next);
 	return 0;
 }
 
-static int ntr_clkevt_set_state_shutdown(struct clock_event_device *evt)
-{
+static int ntr_clkevt_set_state_shutdown(struct clock_event_device *evt) {
 	__ntr_timer_set_control(ntr_timer.io, 0, 0);
 	return 0;
 }
 
-static int ntr_clkevt_set_state_periodic(struct clock_event_device *evt)
-{
+static int ntr_clkevt_set_state_periodic(struct clock_event_device *evt) {
 	__ntr_timer_set_control(ntr_timer.io, 0, 0);
 	__ntr_timer_set_count(ntr_timer.io, 0, 0xFFFF - (NTR_CLKEVT_FREQ / HZ));
 	__ntr_timer_set_control(ntr_timer.io, 0, NTR_CLKEVT_CONFIG_START);
@@ -127,7 +124,7 @@ static int ntr_clkevt_set_state_periodic(struct clock_event_device *evt)
 }
 
 static struct clock_event_device ntr_clkevt = {
-	.name			= KBUILD_MODNAME "_clkevt",
+	.name			= KBUILD_MODNAME,
 	.features		= CLOCK_EVT_FEAT_PERIODIC,
 	.rating			= 300,
 	.set_next_event		= ntr_clkevt_set_next_event,

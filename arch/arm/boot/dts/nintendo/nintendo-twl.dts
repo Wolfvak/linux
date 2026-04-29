@@ -35,7 +35,7 @@
 		#size-cells = <1>;
 		ranges;
 
-		bootargs = "debug earlyprintk earlycon=ntr_nocash keep_bootcon";
+		bootargs = "debug earlyprintk earlycon=ntr keep_bootcon";
 
 		stdout-path = "serial0:115200n8";
 
@@ -89,7 +89,10 @@
 			compatible = "nintendo,ntr-slot1";
 			reg = <0x40001a0 16>;
 
-			auxspi: spi {
+			num-cs = <1>;
+			interrupts = <19>, <20>;
+
+			slot1_auxspi: spi {
 				#address-cells = <1>;
 				#size-cells = <0>;
 
@@ -97,15 +100,16 @@
 				num-cs = <1>;
 
 				uart0: serial@0 {
-					compatible = "nxp,sc16is740";
+					compatible = "is,spi-usb-adapter";
 					reg = <0>;
-					clock-frequency = <1843200>; /* still pending design */
 				};
 			};
 
-			cartrom: cart {
+			cart: cart {
+				#address-cells = <0>;
+				#size-cells = <0>;
+
 				compatible = "nintendo,ntr-slot1-cart";
-				interrupts = <19>, <20>;
 			};
 		};
 	};

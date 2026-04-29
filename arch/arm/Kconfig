@@ -424,6 +424,8 @@ source "arch/arm/mach-mxs/Kconfig"
 
 source "arch/arm/mach-nomadik/Kconfig"
 
+source "arch/arm/mach-ntr/Kconfig"
+
 source "arch/arm/mach-npcm/Kconfig"
 
 source "arch/arm/mach-omap1/Kconfig"

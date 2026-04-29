@@ -793,18 +793,4 @@ config SUNPLUS_SP7021_INTC
 	  chained controller, routing all interrupt source in P-Chip to
 	  the primary controller on C-Chip.
 
-config NINTENDO_NTR_IRQC
-	depends on SOC_NINTENDO_NTR || COMPILE_TEST
-	bool "Nintendo NDS interrupt controller"
-	default SOC_NINTENDO_NTR
-	help
-	  Support for the Nintendo DS (NTR) interrupt controller.
-
-config NINTENDO_TWL_INTC
-	depends on SOC_NINTENDO_TWL && NINTENDO_NTR_IRQC
-	bool "Nintendo DSi interrupt controller"
-	default SOC_NINTENDO_TWL
-	help
-	  Support for the extended DSi (TWL) interrupts.
-
 endmenu

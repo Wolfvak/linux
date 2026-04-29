@@ -2463,18 +2463,5 @@ config MFD_UPBOARD_FPGA
 	  To compile this driver as a module, choose M here: the module will be
 	  called upboard-fpga.
 
-config MFD_NTR_SLOT1
-	tristate "Nintendo DS family Slot-1 driver"
-	depends on ARCH_NINTENDO
-	select MFD_CORE
-	default y
-	help
-	  Support for the Nintendo DS family (DS, lite, DSi) Slot-1 driver,
-	  including a 1-bit SPI interface and 8-bit parallel ROM interface
-	  through a cartridge slot.
-
-	  This driver provides port synchronization facilities, but each
-	  driver must individually must be enabled to be usable.
-
 endmenu
 endif

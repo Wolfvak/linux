@@ -450,14 +450,6 @@ config SPI_HISI_SFC_V3XX
 	  This enables support for HiSilicon v3xx SPI NOR flash controller
 	  found in hi16xx chipsets.
 
-config SPI_NTR_SLOT1
-	tristate "Nintendo DS family Slot-1 SPI controller"
-	depends on MFD_NTR_SLOT1
-	default y
-	help
-	  This enables support for the Nintendo DS family (DS, lite, DSi)
-	  SPI controller that talks to the cartridge slot.
-
 config SPI_NXP_FLEXSPI
 	tristate "NXP Flex SPI controller"
 	depends on ARCH_LAYERSCAPE || ARCH_MXC || COMPILE_TEST

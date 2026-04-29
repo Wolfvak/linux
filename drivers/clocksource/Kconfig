@@ -779,14 +779,4 @@ config NXP_STM_TIMER
           Enables the support for NXP System Timer Module found in the
           s32g NXP platform series.
 
-config NINTENDO_NTR_TIMER
-	bool "Nintendo DS family timer driver"
-	depends on GENERIC_CLOCKEVENTS
-	default y if SOC_NINTENDO_NTR
-	select CLKSRC_MMIO
-	select TIMER_OF
-	help
-	  Enables support for the Nintendo DS
-	  family (DS, lite, DSi) timer hardware.
-
 endmenu

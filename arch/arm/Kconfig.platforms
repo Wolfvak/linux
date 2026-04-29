@@ -130,48 +130,6 @@ config ARCH_NSPIRE
 	help
 	  This enables support for systems using the TI-NSPIRE CPU
 
-menuconfig ARCH_NINTENDO
-	bool "Nintendo ARM SoCs"
-	depends on CPU_LITTLE_ENDIAN && (MMU=n || ARCH_MULTI_V6)
-	help
-	  This enables support for the Nintendo handheld SoCs (NDS, DSi, 3DS)
-
-if ARCH_NINTENDO
-
-config SOC_NINTENDO_NTR
-	bool "Nintendo DS support (NTR)"
-	depends on MMU=n
-	default y
-	select CPU_ARM946E
-	help
-	  Enable support for the original NDS (NTR SoC)
-
-config SOC_NINTENDO_TWL
-	bool "Nintendo DSi support (TWL)"
-	depends on SOC_NINTENDO_NTR
-	default y
-	help
-	  Enable support for the extended DSi feature set (TWL SoC)
-
-config SOC_NINTENDO_CTR
-	bool "Nintendo 3DS support (CTR)"
-	depends on ARCH_MULTI_V6
-	default y
-	select CPU_V6K
-	select HAVE_ARM_ARCH_TIMER
-	select ARM_GIC
-	help
-	  Enable support for the original 3DS (CTR SoC)
-
-config SOC_NINTENDO_LGR
-	bool "New Nintendo 3DS support (LGR)"
-	depends on SOC_NINTENDO_CTR
-	default y
-	help
-	  Enable support for the extended new3DS featureset (LGR SoC)
-
-endif # ARCH_NINTENDO
-
 config ARCH_RDA
 	bool "RDA Micro SoCs"
 	depends on ARCH_MULTI_V7
