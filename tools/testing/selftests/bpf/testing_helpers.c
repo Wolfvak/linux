@@ -212,6 +212,7 @@ int parse_test_list_file(const char *path,
 			break;
 	}
 
+	free(buf);
 	fclose(f);
 	return err;
 }
@@ -399,7 +400,7 @@ int unload_module(const char *name, bool verbose)
 	return 0;
 }
 
-int load_module(const char *path, bool verbose)
+static int __load_module(const char *path, const char *param_values, bool verbose)
 {
 	int fd;
 
@@ -411,7 +412,7 @@ int load_module(const char *path, bool verbose)
 		fprintf(stdout, "Can't find %s kernel module: %d\n", path, -errno);
 		return -ENOENT;
 	}
-	if (finit_module(fd, "", 0)) {
+	if (finit_module(fd, param_values, 0)) {
 		fprintf(stdout, "Failed to load %s into the kernel: %d\n", path, -errno);
 		close(fd);
 		return -EINVAL;
@@ -421,6 +422,16 @@ int load_module(const char *path, bool verbose)
 	if (verbose)
 		fprintf(stdout, "Successfully loaded %s.\n", path);
 	return 0;
+}
+
+int load_module_params(const char *path, const char *param_values, bool verbose)
+{
+	return __load_module(path, param_values, verbose);
+}
+
+int load_module(const char *path, bool verbose)
+{
+	return __load_module(path, "", verbose);
 }
 
 int unload_bpf_testmod(bool verbose)

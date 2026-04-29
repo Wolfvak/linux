@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <linux/bitops.h>
 #include "build-id.h"
+#include "debuginfo.h"
 #include "mutex.h"
 #include <internal/rc_check.h>
 
@@ -159,12 +160,11 @@ enum dso_load_errno {
 	__DSO_LOAD_ERRNO__END,
 };
 
-#define DSO__SWAP(dso, type, val)				\
+#define DSO_SWAP_TYPE__SWAP(swap_type, type, val)		\
 ({								\
 	type ____r = val;					\
-	enum dso_swap_type ___dst = dso__needs_swap(dso);	\
-	BUG_ON(___dst == DSO_SWAP__UNSET);			\
-	if (___dst == DSO_SWAP__YES) {				\
+	BUG_ON(swap_type == DSO_SWAP__UNSET);			\
+	if (swap_type == DSO_SWAP__YES) {			\
 		switch (sizeof(____r)) {			\
 		case 2:						\
 			____r = bswap_16(val);			\
@@ -182,17 +182,38 @@ enum dso_load_errno {
 	____r;							\
 })
 
+#define DSO__SWAP(dso, type, val) DSO_SWAP_TYPE__SWAP(dso__needs_swap(dso), type, val)
+
 #define DSO__DATA_CACHE_SIZE 4096
 #define DSO__DATA_CACHE_MASK ~(DSO__DATA_CACHE_SIZE - 1)
 
-/*
- * Data about backing storage DSO, comes from PERF_RECORD_MMAP2 meta events
+/**
+ * struct dso_id
+ *
+ * Data about backing storage DSO, comes from PERF_RECORD_MMAP2 meta events,
+ * reading from /proc/pid/maps or synthesis of build_ids from DSOs. Possibly
+ * incomplete at any particular use.
  */
 struct dso_id {
-	u32	maj;
-	u32	min;
-	u64	ino;
-	u64	ino_generation;
+	/* Data related to the mmap2 event or read from /proc/pid/maps. */
+	struct {
+		u32	maj;
+		u32	min;
+		u64	ino;
+		u64	ino_generation;
+	};
+	/** @mmap2_valid: Are the maj, min and ino fields valid? */
+	bool	mmap2_valid;
+	/**
+	 * @mmap2_ino_generation_valid: Is the ino_generation valid? Generally
+	 * false for /proc/pid/maps mmap event.
+	 */
+	bool	mmap2_ino_generation_valid;
+	/**
+	 * @build_id: A possibly populated build_id. build_id__is_defined checks
+	 * whether it is populated.
+	 */
+	struct build_id build_id;
 };
 
 struct dso_cache {
@@ -243,16 +264,13 @@ DECLARE_RC_STRUCT(dso) {
 		u64		addr;
 		struct symbol	*symbol;
 	} last_find_result;
-	struct build_id	 bid;
 	u64		 text_offset;
 	u64		 text_end;
 	const char	 *short_name;
 	const char	 *long_name;
 	void		 *a2l;
+	void		 *libdw;
 	char		 *symsrc_filename;
-#if defined(__powerpc__)
-	void		*dwfl;			/* DWARF debug info */
-#endif
 	struct nsinfo	*nsinfo;
 	struct auxtrace_cache *auxtrace_cache;
 	union { /* Tool specific area */
@@ -276,12 +294,12 @@ DECLARE_RC_STRUCT(dso) {
 	enum dso_swap_type	needs_swap:2;
 	bool			is_kmod:1;
 	u8		 adjust_symbols:1;
-	u8		 has_build_id:1;
 	u8		 header_build_id:1;
 	u8		 has_srcline:1;
 	u8		 hit:1;
 	u8		 annotate_warned:1;
 	u8		 auxtrace_warned:1;
+	u8		 debuginfo_warned:1;
 	u8		 short_name_allocated:1;
 	u8		 long_name_allocated:1;
 	u8		 is_64_bit:1;
@@ -292,6 +310,9 @@ DECLARE_RC_STRUCT(dso) {
 };
 
 extern struct mutex _dso__data_open_lock;
+extern const struct dso_id dso_id_empty;
+
+int dso_id__cmp(const struct dso_id *a, const struct dso_id *b);
 
 /* dso__for_each_symbol - iterate over the symbols of given type
  *
@@ -311,6 +332,26 @@ static inline void dso__set_a2l(struct dso *dso, void *val)
 {
 	RC_CHK_ACCESS(dso)->a2l = val;
 }
+
+static inline void *dso__libdw(const struct dso *dso)
+{
+	return RC_CHK_ACCESS(dso)->libdw;
+}
+
+static inline void dso__set_libdw(struct dso *dso, void *val)
+{
+	RC_CHK_ACCESS(dso)->libdw = val;
+}
+
+struct Dwfl;
+#ifdef HAVE_LIBDW_SUPPORT
+struct Dwfl *dso__libdw_dwfl(struct dso *dso);
+#else
+static inline struct Dwfl *dso__libdw_dwfl(struct dso *dso __maybe_unused)
+{
+	return NULL;
+}
+#endif
 
 static inline unsigned int dso__a2l_fails(const struct dso *dso)
 {
@@ -342,6 +383,16 @@ static inline void dso__set_annotate_warned(struct dso *dso)
 	RC_CHK_ACCESS(dso)->annotate_warned = 1;
 }
 
+static inline bool dso__debuginfo_warned(const struct dso *dso)
+{
+	return RC_CHK_ACCESS(dso)->debuginfo_warned;
+}
+
+static inline void dso__set_debuginfo_warned(struct dso *dso)
+{
+	RC_CHK_ACCESS(dso)->debuginfo_warned = 1;
+}
+
 static inline bool dso__auxtrace_warned(const struct dso *dso)
 {
 	return RC_CHK_ACCESS(dso)->auxtrace_warned;
@@ -362,29 +413,9 @@ static inline void dso__set_auxtrace_cache(struct dso *dso, struct auxtrace_cach
 	RC_CHK_ACCESS(dso)->auxtrace_cache = cache;
 }
 
-static inline struct build_id *dso__bid(struct dso *dso)
-{
-	return &RC_CHK_ACCESS(dso)->bid;
-}
-
-static inline const struct build_id *dso__bid_const(const struct dso *dso)
-{
-	return &RC_CHK_ACCESS(dso)->bid;
-}
-
 static inline struct dso_bpf_prog *dso__bpf_prog(struct dso *dso)
 {
 	return &RC_CHK_ACCESS(dso)->bpf_prog;
-}
-
-static inline bool dso__has_build_id(const struct dso *dso)
-{
-	return RC_CHK_ACCESS(dso)->has_build_id;
-}
-
-static inline void dso__set_has_build_id(struct dso *dso)
-{
-	RC_CHK_ACCESS(dso)->has_build_id = true;
 }
 
 static inline bool dso__has_srcline(const struct dso *dso)
@@ -460,6 +491,16 @@ static inline struct dso_id *dso__id(struct dso *dso)
 static inline const struct dso_id *dso__id_const(const struct dso *dso)
 {
 	return &RC_CHK_ACCESS(dso)->id;
+}
+
+static inline const struct build_id *dso__bid(const struct dso *dso)
+{
+	return &dso__id_const(dso)->build_id;
+}
+
+static inline bool dso__has_build_id(const struct dso *dso)
+{
+	return build_id__is_defined(dso__bid(dso));
 }
 
 static inline struct rb_root_cached *dso__inlined_nodes(struct dso *dso)
@@ -699,9 +740,6 @@ static inline void dso__set_text_offset(struct dso *dso, u64 val)
 	RC_CHK_ACCESS(dso)->text_offset = val;
 }
 
-int dso_id__cmp(const struct dso_id *a, const struct dso_id *b);
-bool dso_id__empty(const struct dso_id *id);
-
 struct dso *dso__new_id(const char *name, const struct dso_id *id);
 struct dso *dso__new(const char *name);
 void dso__delete(struct dso *dso);
@@ -709,7 +747,7 @@ void dso__delete(struct dso *dso);
 int dso__cmp_id(struct dso *a, struct dso *b);
 void dso__set_short_name(struct dso *dso, const char *name, bool name_allocated);
 void dso__set_long_name(struct dso *dso, const char *name, bool name_allocated);
-void __dso__inject_id(struct dso *dso, const struct dso_id *id);
+void __dso__improve_id(struct dso *dso, const struct dso_id *id);
 
 int dso__name_len(const struct dso *dso);
 
@@ -739,15 +777,15 @@ void dso__sort_by_name(struct dso *dso);
 
 int dso__swap_init(struct dso *dso, unsigned char eidata);
 
-void dso__set_build_id(struct dso *dso, struct build_id *bid);
-bool dso__build_id_equal(const struct dso *dso, struct build_id *bid);
+void dso__set_build_id(struct dso *dso, const struct build_id *bid);
+bool dso__build_id_equal(const struct dso *dso, const struct build_id *bid);
 void dso__read_running_kernel_build_id(struct dso *dso,
 				       struct machine *machine);
 int dso__kernel_module_get_build_id(struct dso *dso, const char *root_dir);
 
 char dso__symtab_origin(const struct dso *dso);
 int dso__read_binary_type_filename(const struct dso *dso, enum dso_binary_type type,
-				   char *root_dir, char *filename, size_t size);
+				   const char *root_dir, char *filename, size_t size);
 bool is_kernel_module(const char *pathname, int cpumode);
 bool dso__needs_decompress(struct dso *dso);
 int dso__decompress_kmodule_fd(struct dso *dso, const char *name);
@@ -828,7 +866,8 @@ int dso__data_file_size(struct dso *dso, struct machine *machine);
 off_t dso__data_size(struct dso *dso, struct machine *machine);
 ssize_t dso__data_read_offset(struct dso *dso, struct machine *machine,
 			      u64 offset, u8 *data, ssize_t size);
-uint16_t dso__e_machine(struct dso *dso, struct machine *machine);
+uint16_t dso__read_e_machine(struct dso *optional_dso, int fd, uint32_t *e_flags);
+uint16_t dso__e_machine(struct dso *dso, struct machine *machine, uint32_t *e_flags);
 ssize_t dso__data_read_addr(struct dso *dso, struct map *map,
 			    struct machine *machine, u64 addr,
 			    u8 *data, ssize_t size);
@@ -895,5 +934,11 @@ u64 dso__findnew_global_type(struct dso *dso, u64 addr, u64 offset);
 /* Check if dso name is of format "/tmp/perf-%d.map" */
 bool perf_pid_map_tid(const char *dso_name, int *tid);
 bool is_perf_pid_map_name(const char *dso_name);
+
+struct debuginfo *dso__debuginfo(struct dso *dso);
+
+const u8 *dso__read_symbol(struct dso *dso, const char *symfs_filename,
+			   const struct map *map, const struct symbol *sym,
+			   u8 **out_buf, u64 *out_buf_len, bool *is_64bit);
 
 #endif /* __PERF_DSO */

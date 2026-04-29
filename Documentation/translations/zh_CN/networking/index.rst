@@ -21,6 +21,15 @@
    :maxdepth: 1
 
    msg_zerocopy
+   napi
+   vxlan
+   netif-msg
+   xfrm_proc
+   netmem
+   alias
+   mptcp-sysctl
+   generic-hdlc
+   timestamping
 
 Todolist:
 
@@ -45,7 +54,6 @@ Todolist:
 *   page_pool
 *   phy
 *   sfp-phylink
-*   alias
 *   bridge
 *   snmp_counter
 *   checksum-offloads
@@ -71,7 +79,6 @@ Todolist:
 *   eql
 *   fib_trie
 *   filter
-*   generic-hdlc
 *   generic_netlink
 *   netlink_spec/index
 *   gen_stats
@@ -91,17 +98,13 @@ Todolist:
 *   mctp
 *   mpls-sysctl
 *   mptcp
-*   mptcp-sysctl
 *   multiqueue
 *   multi-pf-netdev
-*   napi
 *   net_cachelines/index
 *   netconsole
 *   netdev-features
 *   netdevices
 *   netfilter-sysctl
-*   netif-msg
-*   netmem
 *   nexthop-group-resilient
 *   nf_conntrack-sysctl
 *   nf_flowtable
@@ -124,7 +127,6 @@ Todolist:
 *   sctp
 *   secid
 *   seg6-sysctl
-*   skbuff
 *   smc-sysctl
 *   sriov
 *   statistics
@@ -136,17 +138,14 @@ Todolist:
 *   tcp_ao
 *   tcp-thin
 *   team
-*   timestamping
 *   tipc
 *   tproxy
 *   tuntap
 *   udplite
 *   vrf
-*   vxlan
 *   x25
 *   x25-iface
 *   xfrm_device
-*   xfrm_proc
 *   xfrm_sync
 *   xfrm_sysctl
 *   xdp-rx-metadata

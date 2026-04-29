@@ -220,7 +220,6 @@ nsim_dev_hwstats_enable_ifindex(struct nsim_dev_hwstats *hwstats,
 	struct nsim_dev_hwstats_netdev *hwsdev;
 	struct nsim_dev *nsim_dev;
 	struct net_device *netdev;
-	bool notify = false;
 	struct net *net;
 	int err = 0;
 
@@ -239,7 +238,7 @@ nsim_dev_hwstats_enable_ifindex(struct nsim_dev_hwstats *hwstats,
 		goto out_unlock_list;
 	}
 
-	hwsdev = kzalloc(sizeof(*hwsdev), GFP_KERNEL);
+	hwsdev = kzalloc_obj(*hwsdev);
 	if (!hwsdev) {
 		err = -ENOMEM;
 		goto out_put_netdev;
@@ -251,11 +250,9 @@ nsim_dev_hwstats_enable_ifindex(struct nsim_dev_hwstats *hwstats,
 
 	if (netdev_offload_xstats_enabled(netdev, type)) {
 		nsim_dev_hwsdev_enable(hwsdev, NULL);
-		notify = true;
+		rtnl_offload_xstats_notify(netdev);
 	}
 
-	if (notify)
-		rtnl_offload_xstats_notify(netdev);
 	rtnl_unlock();
 	return err;
 

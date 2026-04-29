@@ -34,6 +34,8 @@ extern uint64_t guest_tsc_khz;
 
 #define NMI_VECTOR		0x02
 
+const char *ex_str(int vector);
+
 #define X86_EFLAGS_FIXED	 (1u << 1)
 
 #define X86_CR4_VME		(1ul << 0)
@@ -199,6 +201,7 @@ struct kvm_x86_cpu_feature {
 #define X86_FEATURE_TSCRATEMSR          KVM_X86_CPU_FEATURE(0x8000000A, 0, EDX, 4)
 #define X86_FEATURE_PAUSEFILTER         KVM_X86_CPU_FEATURE(0x8000000A, 0, EDX, 10)
 #define X86_FEATURE_PFTHRESHOLD         KVM_X86_CPU_FEATURE(0x8000000A, 0, EDX, 12)
+#define	X86_FEATURE_V_VMSAVE_VMLOAD	KVM_X86_CPU_FEATURE(0x8000000A, 0, EDX, 15)
 #define	X86_FEATURE_VGIF		KVM_X86_CPU_FEATURE(0x8000000A, 0, EDX, 16)
 #define X86_FEATURE_IDLE_HLT		KVM_X86_CPU_FEATURE(0x8000000A, 0, EDX, 30)
 #define X86_FEATURE_SEV			KVM_X86_CPU_FEATURE(0x8000001F, 0, EAX, 1)
@@ -265,7 +268,7 @@ struct kvm_x86_cpu_property {
 #define X86_PROPERTY_PMU_NR_GP_COUNTERS		KVM_X86_CPU_PROPERTY(0xa, 0, EAX, 8, 15)
 #define X86_PROPERTY_PMU_GP_COUNTERS_BIT_WIDTH	KVM_X86_CPU_PROPERTY(0xa, 0, EAX, 16, 23)
 #define X86_PROPERTY_PMU_EBX_BIT_VECTOR_LENGTH	KVM_X86_CPU_PROPERTY(0xa, 0, EAX, 24, 31)
-#define X86_PROPERTY_PMU_EVENTS_MASK		KVM_X86_CPU_PROPERTY(0xa, 0, EBX, 0, 7)
+#define X86_PROPERTY_PMU_EVENTS_MASK		KVM_X86_CPU_PROPERTY(0xa, 0, EBX, 0, 12)
 #define X86_PROPERTY_PMU_FIXED_COUNTERS_BITMASK	KVM_X86_CPU_PROPERTY(0xa, 0, ECX, 0, 31)
 #define X86_PROPERTY_PMU_NR_FIXED_COUNTERS	KVM_X86_CPU_PROPERTY(0xa, 0, EDX, 0, 4)
 #define X86_PROPERTY_PMU_FIXED_COUNTERS_BIT_WIDTH	KVM_X86_CPU_PROPERTY(0xa, 0, EDX, 5, 12)
@@ -332,6 +335,11 @@ struct kvm_x86_pmu_feature {
 #define X86_PMU_FEATURE_BRANCH_INSNS_RETIRED		KVM_X86_PMU_FEATURE(EBX, 5)
 #define X86_PMU_FEATURE_BRANCHES_MISPREDICTED		KVM_X86_PMU_FEATURE(EBX, 6)
 #define X86_PMU_FEATURE_TOPDOWN_SLOTS			KVM_X86_PMU_FEATURE(EBX, 7)
+#define X86_PMU_FEATURE_TOPDOWN_BE_BOUND		KVM_X86_PMU_FEATURE(EBX, 8)
+#define X86_PMU_FEATURE_TOPDOWN_BAD_SPEC		KVM_X86_PMU_FEATURE(EBX, 9)
+#define X86_PMU_FEATURE_TOPDOWN_FE_BOUND		KVM_X86_PMU_FEATURE(EBX, 10)
+#define X86_PMU_FEATURE_TOPDOWN_RETIRING		KVM_X86_PMU_FEATURE(EBX, 11)
+#define X86_PMU_FEATURE_LBR_INSERTS			KVM_X86_PMU_FEATURE(EBX, 12)
 
 #define X86_PMU_FEATURE_INSNS_RETIRED_FIXED		KVM_X86_PMU_FEATURE(ECX, 0)
 #define X86_PMU_FEATURE_CPU_CYCLES_FIXED		KVM_X86_PMU_FEATURE(ECX, 1)
@@ -354,16 +362,6 @@ static inline unsigned int x86_model(unsigned int eax)
 {
 	return ((eax >> 12) & 0xf0) | ((eax >> 4) & 0x0f);
 }
-
-/* Page table bitfield declarations */
-#define PTE_PRESENT_MASK        BIT_ULL(0)
-#define PTE_WRITABLE_MASK       BIT_ULL(1)
-#define PTE_USER_MASK           BIT_ULL(2)
-#define PTE_ACCESSED_MASK       BIT_ULL(5)
-#define PTE_DIRTY_MASK          BIT_ULL(6)
-#define PTE_LARGE_MASK          BIT_ULL(7)
-#define PTE_GLOBAL_MASK         BIT_ULL(8)
-#define PTE_NX_MASK             BIT_ULL(63)
 
 #define PHYSICAL_PAGE_MASK      GENMASK_ULL(51, 12)
 
@@ -429,8 +427,10 @@ struct kvm_x86_state {
 
 static inline uint64_t get_desc64_base(const struct desc64 *desc)
 {
-	return ((uint64_t)desc->base3 << 32) |
-		(desc->base0 | ((desc->base1) << 16) | ((desc->base2) << 24));
+	return (uint64_t)desc->base3 << 32 |
+	       (uint64_t)desc->base2 << 24 |
+	       (uint64_t)desc->base1 << 16 |
+	       (uint64_t)desc->base0;
 }
 
 static inline uint64_t rdtsc(void)
@@ -557,6 +557,11 @@ static inline uint64_t get_cr0(void)
 	return cr0;
 }
 
+static inline void set_cr0(uint64_t val)
+{
+	__asm__ __volatile__("mov %0, %%cr0" : : "r" (val) : "memory");
+}
+
 static inline uint64_t get_cr3(void)
 {
 	uint64_t cr3;
@@ -564,6 +569,11 @@ static inline uint64_t get_cr3(void)
 	__asm__ __volatile__("mov %%cr3, %[cr3]"
 			     : /* output */ [cr3]"=r"(cr3));
 	return cr3;
+}
+
+static inline void set_cr3(uint64_t val)
+{
+	__asm__ __volatile__("mov %0, %%cr3" : : "r" (val) : "memory");
 }
 
 static inline uint64_t get_cr4(void)
@@ -578,6 +588,19 @@ static inline uint64_t get_cr4(void)
 static inline void set_cr4(uint64_t val)
 {
 	__asm__ __volatile__("mov %0, %%cr4" : : "r" (val) : "memory");
+}
+
+static inline uint64_t get_cr8(void)
+{
+	uint64_t cr8;
+
+	__asm__ __volatile__("mov %%cr8, %[cr8]" : [cr8]"=r"(cr8));
+	return cr8;
+}
+
+static inline void set_cr8(uint64_t val)
+{
+	__asm__ __volatile__("mov %0, %%cr8" : : "r" (val) : "memory");
 }
 
 static inline void set_idt(const struct desc_ptr *idt_desc)
@@ -1150,7 +1173,6 @@ do {											\
 
 void kvm_get_cpu_address_width(unsigned int *pa_bits, unsigned int *va_bits);
 void kvm_init_vm_address_properties(struct kvm_vm *vm);
-bool vm_is_unrestricted_guest(struct kvm_vm *vm);
 
 struct ex_regs {
 	uint64_t rax, rcx, rdx, rbx;
@@ -1179,6 +1201,12 @@ struct idt_entry {
 
 void vm_install_exception_handler(struct kvm_vm *vm, int vector,
 			void (*handler)(struct ex_regs *));
+
+/*
+ * Exception fixup morphs #DE to an arbitrary magic vector so that '0' can be
+ * used to signal "no expcetion".
+ */
+#define KVM_MAGIC_DE_VECTOR 0xff
 
 /* If a toddler were to say "abracadabra". */
 #define KVM_EXCEPTION_MAGIC 0xabacadabaULL
@@ -1315,6 +1343,26 @@ static inline uint8_t xsetbv_safe(uint32_t index, uint64_t value)
 
 bool kvm_is_tdp_enabled(void);
 
+static inline bool get_kvm_intel_param_bool(const char *param)
+{
+	return kvm_get_module_param_bool("kvm_intel", param);
+}
+
+static inline bool get_kvm_amd_param_bool(const char *param)
+{
+	return kvm_get_module_param_bool("kvm_amd", param);
+}
+
+static inline int get_kvm_intel_param_integer(const char *param)
+{
+	return kvm_get_module_param_integer("kvm_intel", param);
+}
+
+static inline int get_kvm_amd_param_integer(const char *param)
+{
+	return kvm_get_module_param_integer("kvm_amd", param);
+}
+
 static inline bool kvm_is_pmu_enabled(void)
 {
 	return get_kvm_param_bool("enable_pmu");
@@ -1325,9 +1373,17 @@ static inline bool kvm_is_forced_emulation_enabled(void)
 	return !!get_kvm_param_integer("force_emulation_prefix");
 }
 
-uint64_t *__vm_get_page_table_entry(struct kvm_vm *vm, uint64_t vaddr,
-				    int *level);
-uint64_t *vm_get_page_table_entry(struct kvm_vm *vm, uint64_t vaddr);
+static inline bool kvm_is_unrestricted_guest_enabled(void)
+{
+	return get_kvm_intel_param_bool("unrestricted_guest");
+}
+
+static inline bool kvm_is_ignore_msrs(void)
+{
+	return get_kvm_param_bool("ignore_msrs");
+}
+
+uint64_t *vm_get_pte(struct kvm_vm *vm, uint64_t vaddr);
 
 uint64_t kvm_hypercall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2,
 		       uint64_t a3);
@@ -1399,7 +1455,7 @@ enum pg_level {
 	PG_LEVEL_2M,
 	PG_LEVEL_1G,
 	PG_LEVEL_512G,
-	PG_LEVEL_NUM
+	PG_LEVEL_256T
 };
 
 #define PG_LEVEL_SHIFT(_level) ((_level - 1) * 9 + 12)
@@ -1409,9 +1465,51 @@ enum pg_level {
 #define PG_SIZE_2M PG_LEVEL_SIZE(PG_LEVEL_2M)
 #define PG_SIZE_1G PG_LEVEL_SIZE(PG_LEVEL_1G)
 
-void __virt_pg_map(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr, int level);
+#define PTE_PRESENT_MASK(mmu)		((mmu)->arch.pte_masks.present)
+#define PTE_WRITABLE_MASK(mmu)		((mmu)->arch.pte_masks.writable)
+#define PTE_USER_MASK(mmu)		((mmu)->arch.pte_masks.user)
+#define PTE_READABLE_MASK(mmu)		((mmu)->arch.pte_masks.readable)
+#define PTE_EXECUTABLE_MASK(mmu)	((mmu)->arch.pte_masks.executable)
+#define PTE_ACCESSED_MASK(mmu)		((mmu)->arch.pte_masks.accessed)
+#define PTE_DIRTY_MASK(mmu)		((mmu)->arch.pte_masks.dirty)
+#define PTE_HUGE_MASK(mmu)		((mmu)->arch.pte_masks.huge)
+#define PTE_NX_MASK(mmu)		((mmu)->arch.pte_masks.nx)
+#define PTE_C_BIT_MASK(mmu)		((mmu)->arch.pte_masks.c)
+#define PTE_S_BIT_MASK(mmu)		((mmu)->arch.pte_masks.s)
+#define PTE_ALWAYS_SET_MASK(mmu)	((mmu)->arch.pte_masks.always_set)
+
+/*
+ * For PTEs without a PRESENT bit (i.e. EPT entries), treat the PTE as present
+ * if it's executable or readable, as EPT supports execute-only PTEs, but not
+ * write-only PTEs.
+ */
+#define is_present_pte(mmu, pte)		\
+	(PTE_PRESENT_MASK(mmu) ?		\
+	 !!(*(pte) & PTE_PRESENT_MASK(mmu)) :	\
+	 !!(*(pte) & (PTE_READABLE_MASK(mmu) | PTE_EXECUTABLE_MASK(mmu))))
+#define is_executable_pte(mmu, pte)	\
+	((*(pte) & (PTE_EXECUTABLE_MASK(mmu) | PTE_NX_MASK(mmu))) == PTE_EXECUTABLE_MASK(mmu))
+#define is_writable_pte(mmu, pte)	(!!(*(pte) & PTE_WRITABLE_MASK(mmu)))
+#define is_user_pte(mmu, pte)		(!!(*(pte) & PTE_USER_MASK(mmu)))
+#define is_accessed_pte(mmu, pte)	(!!(*(pte) & PTE_ACCESSED_MASK(mmu)))
+#define is_dirty_pte(mmu, pte)		(!!(*(pte) & PTE_DIRTY_MASK(mmu)))
+#define is_huge_pte(mmu, pte)		(!!(*(pte) & PTE_HUGE_MASK(mmu)))
+#define is_nx_pte(mmu, pte)		(!is_executable_pte(mmu, pte))
+
+void tdp_mmu_init(struct kvm_vm *vm, int pgtable_levels,
+		  struct pte_masks *pte_masks);
+
+void __virt_pg_map(struct kvm_vm *vm, struct kvm_mmu *mmu, uint64_t vaddr,
+		   uint64_t paddr,  int level);
 void virt_map_level(struct kvm_vm *vm, uint64_t vaddr, uint64_t paddr,
 		    uint64_t nr_bytes, int level);
+
+void vm_enable_tdp(struct kvm_vm *vm);
+bool kvm_cpu_has_tdp(void);
+void tdp_map(struct kvm_vm *vm, uint64_t nested_paddr, uint64_t paddr, uint64_t size);
+void tdp_identity_map_default_memslots(struct kvm_vm *vm);
+void tdp_identity_map_1g(struct kvm_vm *vm,  uint64_t addr, uint64_t size);
+uint64_t *tdp_get_pte(struct kvm_vm *vm, uint64_t l2_gpa);
 
 /*
  * Basic CPU control in CR0

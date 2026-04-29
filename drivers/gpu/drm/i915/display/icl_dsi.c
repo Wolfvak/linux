@@ -25,6 +25,8 @@
  *   Jani Nikula <jani.nikula@intel.com>
  */
 
+#include <linux/iopoll.h>
+
 #include <drm/display/drm_dsc_helper.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_fixed.h>
@@ -33,7 +35,6 @@
 #include <drm/drm_probe_helper.h>
 
 #include "i915_reg.h"
-#include "i915_utils.h"
 #include "icl_dsi.h"
 #include "icl_dsi_regs.h"
 #include "intel_atomic.h"
@@ -45,6 +46,8 @@
 #include "intel_crtc.h"
 #include "intel_ddi.h"
 #include "intel_de.h"
+#include "intel_display_regs.h"
+#include "intel_display_utils.h"
 #include "intel_dsi.h"
 #include "intel_dsi_vbt.h"
 #include "intel_panel.h"
@@ -71,8 +74,12 @@ static int payload_credits_available(struct intel_display *display,
 static bool wait_for_header_credits(struct intel_display *display,
 				    enum transcoder dsi_trans, int hdr_credit)
 {
-	if (wait_for_us(header_credits_available(display, dsi_trans) >=
-			hdr_credit, 100)) {
+	int ret, available;
+
+	ret = poll_timeout_us(available = header_credits_available(display, dsi_trans),
+			      available >= hdr_credit,
+			      10, 100, false);
+	if (ret) {
 		drm_err(display->drm, "DSI header credits not released\n");
 		return false;
 	}
@@ -83,8 +90,12 @@ static bool wait_for_header_credits(struct intel_display *display,
 static bool wait_for_payload_credits(struct intel_display *display,
 				     enum transcoder dsi_trans, int payld_credit)
 {
-	if (wait_for_us(payload_credits_available(display, dsi_trans) >=
-			payld_credit, 100)) {
+	int ret, available;
+
+	ret = poll_timeout_us(available = payload_credits_available(display, dsi_trans),
+			      available >= payld_credit,
+			      10, 100, false);
+	if (ret) {
 		drm_err(display->drm, "DSI payload credits not released\n");
 		return false;
 	}
@@ -136,8 +147,11 @@ static void wait_for_cmds_dispatched_to_panel(struct intel_encoder *encoder)
 	/* wait for LP TX in progress bit to be cleared */
 	for_each_dsi_port(port, intel_dsi->ports) {
 		dsi_trans = dsi_port_to_transcoder(port);
-		if (wait_for_us(!(intel_de_read(display, DSI_LP_MSG(dsi_trans)) &
-				  LPTX_IN_PROGRESS), 20))
+
+		ret = intel_de_wait_for_clear_us(display,
+						 DSI_LP_MSG(dsi_trans),
+						 LPTX_IN_PROGRESS, 20);
+		if (ret)
 			drm_err(display->drm, "LPTX bit not cleared\n");
 	}
 }
@@ -192,12 +206,12 @@ static int dsi_send_pkt_hdr(struct intel_dsi_host *host,
 	else
 		tmp &= ~PAYLOAD_PRESENT;
 
-	tmp &= ~VBLANK_FENCE;
+	tmp &= ~(VBLANK_FENCE | LP_DATA_TRANSFER | PIPELINE_FLUSH);
 
 	if (enable_lpdt)
 		tmp |= LP_DATA_TRANSFER;
 	else
-		tmp &= ~LP_DATA_TRANSFER;
+		tmp |= PIPELINE_FLUSH;
 
 	tmp &= ~(PARAM_WC_MASK | VC_MASK | DT_MASK);
 	tmp |= ((packet->header[0] & VC_MASK) << VC_SHIFT);
@@ -515,13 +529,14 @@ static void gen11_dsi_enable_ddi_buffer(struct intel_encoder *encoder)
 	struct intel_display *display = to_intel_display(encoder);
 	struct intel_dsi *intel_dsi = enc_to_intel_dsi(encoder);
 	enum port port;
+	int ret;
 
 	for_each_dsi_port(port, intel_dsi->ports) {
 		intel_de_rmw(display, DDI_BUF_CTL(port), 0, DDI_BUF_CTL_ENABLE);
 
-		if (wait_for_us(!(intel_de_read(display, DDI_BUF_CTL(port)) &
-				  DDI_BUF_IS_IDLE),
-				  500))
+		ret = intel_de_wait_for_clear_us(display, DDI_BUF_CTL(port),
+						 DDI_BUF_IS_IDLE, 500);
+		if (ret)
 			drm_err(display->drm, "DDI port:%c buffer idle\n",
 				port_name(port));
 	}
@@ -658,7 +673,7 @@ static void gen11_dsi_map_pll(struct intel_encoder *encoder,
 {
 	struct intel_display *display = to_intel_display(encoder);
 	struct intel_dsi *intel_dsi = enc_to_intel_dsi(encoder);
-	struct intel_shared_dpll *pll = crtc_state->shared_dpll;
+	struct intel_dpll *pll = crtc_state->intel_dpll;
 	enum phy phy;
 	u32 val;
 
@@ -837,9 +852,14 @@ gen11_dsi_configure_transcoder(struct intel_encoder *encoder,
 
 	/* wait for link ready */
 	for_each_dsi_port(port, intel_dsi->ports) {
+		int ret;
+
 		dsi_trans = dsi_port_to_transcoder(port);
-		if (wait_for_us((intel_de_read(display, DSI_TRANS_FUNC_CONF(dsi_trans)) &
-				 LINK_READY), 2500))
+
+		ret = intel_de_wait_for_set_us(display,
+					       DSI_TRANS_FUNC_CONF(dsi_trans),
+					       LINK_READY, 2500);
+		if (ret)
 			drm_err(display->drm, "DSI link not ready\n");
 	}
 }
@@ -869,7 +889,7 @@ gen11_dsi_set_transcoder_timings(struct intel_encoder *encoder,
 	 * non-compressed link speeds, and simplifies down to the ratio between
 	 * compressed and non-compressed bpp.
 	 */
-	if (crtc_state->dsc.compression_enable) {
+	if (is_vid_mode(intel_dsi) && crtc_state->dsc.compression_enable) {
 		mul = fxp_q4_to_int(crtc_state->dsc.compressed_bpp_x16);
 		div = mipi_dsi_pixel_format_to_bpp(intel_dsi->pixel_format);
 	}
@@ -1027,8 +1047,8 @@ static void gen11_dsi_enable_transcoder(struct intel_encoder *encoder)
 			     TRANSCONF_ENABLE);
 
 		/* wait for transcoder to be enabled */
-		if (intel_de_wait_for_set(display, TRANSCONF(display, dsi_trans),
-					  TRANSCONF_STATE_ENABLE, 10))
+		if (intel_de_wait_for_set_ms(display, TRANSCONF(display, dsi_trans),
+					     TRANSCONF_STATE_ENABLE, 10))
 			drm_err(display->drm,
 				"DSI transcoder not enabled\n");
 	}
@@ -1276,6 +1296,8 @@ static void gen11_dsi_enable(struct intel_atomic_state *state,
 	intel_backlight_enable(crtc_state, conn_state);
 	intel_dsi_vbt_exec_sequence(intel_dsi, MIPI_SEQ_BACKLIGHT_ON);
 
+	intel_panel_prepare(crtc_state, conn_state);
+
 	intel_crtc_vblank_on(crtc_state);
 }
 
@@ -1294,8 +1316,8 @@ static void gen11_dsi_disable_transcoder(struct intel_encoder *encoder)
 			     TRANSCONF_ENABLE, 0);
 
 		/* wait for transcoder to be disabled */
-		if (intel_de_wait_for_clear(display, TRANSCONF(display, dsi_trans),
-					    TRANSCONF_STATE_ENABLE, 50))
+		if (intel_de_wait_for_clear_ms(display, TRANSCONF(display, dsi_trans),
+					       TRANSCONF_STATE_ENABLE, 50))
 			drm_err(display->drm,
 				"DSI trancoder not disabled\n");
 	}
@@ -1318,6 +1340,7 @@ static void gen11_dsi_deconfigure_trancoder(struct intel_encoder *encoder)
 	enum port port;
 	enum transcoder dsi_trans;
 	u32 tmp;
+	int ret;
 
 	/* disable periodic update mode */
 	if (is_cmd_mode(intel_dsi)) {
@@ -1334,9 +1357,9 @@ static void gen11_dsi_deconfigure_trancoder(struct intel_encoder *encoder)
 		tmp &= ~LINK_ULPS_TYPE_LP11;
 		intel_de_write(display, DSI_LP_MSG(dsi_trans), tmp);
 
-		if (wait_for_us((intel_de_read(display, DSI_LP_MSG(dsi_trans)) &
-				 LINK_IN_ULPS),
-				10))
+		ret = intel_de_wait_for_set_us(display, DSI_LP_MSG(dsi_trans),
+					       LINK_IN_ULPS, 10);
+		if (ret)
 			drm_err(display->drm, "DSI link not in ULPS\n");
 	}
 
@@ -1364,14 +1387,16 @@ static void gen11_dsi_disable_port(struct intel_encoder *encoder)
 	struct intel_display *display = to_intel_display(encoder);
 	struct intel_dsi *intel_dsi = enc_to_intel_dsi(encoder);
 	enum port port;
+	int ret;
 
 	gen11_dsi_ungate_clocks(encoder);
 	for_each_dsi_port(port, intel_dsi->ports) {
 		intel_de_rmw(display, DDI_BUF_CTL(port), DDI_BUF_CTL_ENABLE, 0);
 
-		if (wait_for_us((intel_de_read(display, DDI_BUF_CTL(port)) &
-				 DDI_BUF_IS_IDLE),
-				 8))
+		ret = intel_de_wait_for_set_us(display, DDI_BUF_CTL(port),
+					       DDI_BUF_IS_IDLE, 8);
+
+		if (ret)
 			drm_err(display->drm,
 				"DDI port:%c buffer not idle\n",
 				port_name(port));
@@ -1386,7 +1411,7 @@ static void gen11_dsi_disable_io_power(struct intel_encoder *encoder)
 	enum port port;
 
 	for_each_dsi_port(port, intel_dsi->ports) {
-		intel_wakeref_t wakeref;
+		struct ref_tracker *wakeref;
 
 		wakeref = fetch_and_zero(&intel_dsi->io_wakeref[port]);
 		intel_display_power_put(display,
@@ -1408,6 +1433,8 @@ static void gen11_dsi_disable(struct intel_atomic_state *state,
 			      const struct drm_connector_state *old_conn_state)
 {
 	struct intel_dsi *intel_dsi = enc_to_intel_dsi(encoder);
+
+	intel_panel_unprepare(old_conn_state);
 
 	/* step1: turn off backlight */
 	intel_dsi_vbt_exec_sequence(intel_dsi, MIPI_SEQ_BACKLIGHT_OFF);
@@ -1476,7 +1503,7 @@ static void gen11_dsi_get_timings(struct intel_encoder *encoder,
 	struct drm_display_mode *adjusted_mode =
 					&pipe_config->hw.adjusted_mode;
 
-	if (pipe_config->dsc.compressed_bpp_x16) {
+	if (is_vid_mode(intel_dsi) && pipe_config->dsc.compressed_bpp_x16) {
 		int div = fxp_q4_to_int(pipe_config->dsc.compressed_bpp_x16);
 		int mul = mipi_dsi_pixel_format_to_bpp(intel_dsi->pixel_format);
 
@@ -1625,7 +1652,7 @@ static int gen11_dsi_dsc_compute_config(struct intel_encoder *encoder,
 	if (ret)
 		return ret;
 
-	crtc_state->dsc.compression_enable = true;
+	intel_dsc_enable_on_crtc(crtc_state);
 
 	return 0;
 }
@@ -1695,7 +1722,7 @@ static bool gen11_dsi_get_hw_state(struct intel_encoder *encoder,
 	struct intel_display *display = to_intel_display(encoder);
 	struct intel_dsi *intel_dsi = enc_to_intel_dsi(encoder);
 	enum transcoder dsi_trans;
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 	enum port port;
 	bool ret = false;
 	u32 tmp;
@@ -1907,7 +1934,7 @@ void icl_dsi_init(struct intel_display *display,
 	if (port == PORT_NONE)
 		return;
 
-	intel_dsi = kzalloc(sizeof(*intel_dsi), GFP_KERNEL);
+	intel_dsi = kzalloc_obj(*intel_dsi);
 	if (!intel_dsi)
 		return;
 

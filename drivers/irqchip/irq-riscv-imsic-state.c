@@ -134,7 +134,7 @@ static bool __imsic_local_sync(struct imsic_local_priv *lpriv)
 	lockdep_assert_held(&lpriv->lock);
 
 	for_each_set_bit(i, lpriv->dirty_bitmap, imsic->global.nr_ids + 1) {
-		if (!i || i == IMSIC_IPI_ID)
+		if (!i || (!imsic_noipi && i == IMSIC_IPI_ID))
 			goto skip;
 		vec = &lpriv->vectors[i];
 
@@ -419,7 +419,7 @@ void imsic_vector_debug_show(struct seq_file *m, struct imsic_vector *vec, int i
 	seq_printf(m, "%*starget_cpu      : %5u\n", ind, "", vec->cpu);
 	seq_printf(m, "%*starget_local_id : %5u\n", ind, "", vec->local_id);
 	seq_printf(m, "%*sis_reserved     : %5u\n", ind, "",
-		   (vec->local_id <= IMSIC_IPI_ID) ? 1 : 0);
+		   (!imsic_noipi && vec->local_id <= IMSIC_IPI_ID) ? 1 : 0);
 	seq_printf(m, "%*sis_enabled      : %5u\n", ind, "", is_enabled ? 1 : 0);
 	seq_printf(m, "%*sis_move_pending : %5u\n", ind, "", mvec ? 1 : 0);
 	if (mvec) {
@@ -433,16 +433,6 @@ void imsic_vector_debug_show_summary(struct seq_file *m, int ind)
 	irq_matrix_debug_show(m, imsic->matrix, ind);
 }
 #endif
-
-struct imsic_vector *imsic_vector_from_local_id(unsigned int cpu, unsigned int local_id)
-{
-	struct imsic_local_priv *lpriv = per_cpu_ptr(imsic->lpriv, cpu);
-
-	if (!lpriv || imsic->global.nr_ids < local_id)
-		return NULL;
-
-	return &lpriv->vectors[local_id];
-}
 
 struct imsic_vector *imsic_vector_alloc(unsigned int irq, const struct cpumask *mask)
 {
@@ -522,8 +512,8 @@ static int __init imsic_local_init(void)
 #endif
 
 		/* Allocate vector array */
-		lpriv->vectors = kcalloc(global->nr_ids + 1, sizeof(*lpriv->vectors),
-					 GFP_KERNEL);
+		lpriv->vectors = kzalloc_objs(*lpriv->vectors,
+					      global->nr_ids + 1);
 		if (!lpriv->vectors)
 			goto fail_local_cleanup;
 
@@ -583,7 +573,8 @@ static int __init imsic_matrix_init(void)
 	irq_matrix_assign_system(imsic->matrix, 0, false);
 
 	/* Reserve IPI ID because it is special and used internally */
-	irq_matrix_assign_system(imsic->matrix, IMSIC_IPI_ID, false);
+	if (!imsic_noipi)
+		irq_matrix_assign_system(imsic->matrix, IMSIC_IPI_ID, false);
 
 	return 0;
 }
@@ -793,7 +784,7 @@ static int __init imsic_parse_fwnode(struct fwnode_handle *fwnode,
 
 int __init imsic_setup_state(struct fwnode_handle *fwnode, void *opaque)
 {
-	u32 i, j, index, nr_parent_irqs, nr_mmios, nr_handlers = 0;
+	u32 i, j, index, nr_parent_irqs, nr_mmios, nr_guest_files, nr_handlers = 0;
 	struct imsic_global_config *global;
 	struct imsic_local_config *local;
 	void __iomem **mmios_va = NULL;
@@ -819,7 +810,7 @@ int __init imsic_setup_state(struct fwnode_handle *fwnode, void *opaque)
 		return -ENODEV;
 	}
 
-	imsic = kzalloc(sizeof(*imsic), GFP_KERNEL);
+	imsic = kzalloc_obj(*imsic);
 	if (!imsic)
 		return -ENOMEM;
 	imsic->fwnode = fwnode;
@@ -837,14 +828,14 @@ int __init imsic_setup_state(struct fwnode_handle *fwnode, void *opaque)
 		goto out_free_local;
 
 	/* Allocate MMIO resource array */
-	mmios = kcalloc(nr_mmios, sizeof(*mmios), GFP_KERNEL);
+	mmios = kzalloc_objs(*mmios, nr_mmios);
 	if (!mmios) {
 		rc = -ENOMEM;
 		goto out_free_local;
 	}
 
 	/* Allocate MMIO virtual address array */
-	mmios_va = kcalloc(nr_mmios, sizeof(*mmios_va), GFP_KERNEL);
+	mmios_va = kzalloc_objs(*mmios_va, nr_mmios);
 	if (!mmios_va) {
 		rc = -ENOMEM;
 		goto out_iounmap;
@@ -887,6 +878,7 @@ int __init imsic_setup_state(struct fwnode_handle *fwnode, void *opaque)
 	}
 
 	/* Configure handlers for target CPUs */
+	global->nr_guest_files = BIT(global->guest_index_bits) - 1;
 	for (i = 0; i < nr_parent_irqs; i++) {
 		rc = imsic_get_parent_hartid(fwnode, i, &hartid);
 		if (rc) {
@@ -926,6 +918,15 @@ int __init imsic_setup_state(struct fwnode_handle *fwnode, void *opaque)
 		local = per_cpu_ptr(global->local, cpu);
 		local->msi_pa = mmios[index].start + reloff;
 		local->msi_va = mmios_va[index] + reloff;
+
+		/*
+		 * KVM uses global->nr_guest_files to determine the available guest
+		 * interrupt files on each CPU. Take the minimum number of guest
+		 * interrupt files across all CPUs to avoid KVM incorrectly allocating
+		 * an unexisted or unmapped guest interrupt file on some CPUs.
+		 */
+		nr_guest_files = (resource_size(&mmios[index]) - reloff) / IMSIC_MMIO_PAGE_SZ - 1;
+		global->nr_guest_files = min(global->nr_guest_files, nr_guest_files);
 
 		nr_handlers++;
 	}

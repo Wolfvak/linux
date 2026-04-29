@@ -823,8 +823,7 @@ int hpet_alloc(struct hpet_data *hdp)
 		return 0;
 	}
 
-	hpetp = kzalloc(struct_size(hpetp, hp_dev, hdp->hd_nirqs),
-			GFP_KERNEL);
+	hpetp = kzalloc_flex(*hpetp, hp_dev, hdp->hd_nirqs);
 
 	if (!hpetp)
 		return -ENOMEM;
@@ -867,7 +866,7 @@ int hpet_alloc(struct hpet_data *hdp)
 
 	printk(KERN_INFO "hpet%u: at MMIO 0x%lx, IRQ%s",
 		hpetp->hp_which, hdp->hd_phys_address,
-		hpetp->hp_ntimer > 1 ? "s" : "");
+		str_plural(hpetp->hp_ntimer));
 	for (i = 0; i < hpetp->hp_ntimer; i++)
 		printk(KERN_CONT "%s %u", i > 0 ? "," : "", hdp->hd_irq[i]);
 	printk(KERN_CONT "\n");

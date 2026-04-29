@@ -1041,7 +1041,7 @@ static struct dma_async_tx_descriptor *edma_prep_slave_sg(
 		return NULL;
 	}
 
-	edesc = kzalloc(struct_size(edesc, pset, sg_len), GFP_ATOMIC);
+	edesc = kzalloc_flex(*edesc, pset, sg_len, GFP_ATOMIC);
 	if (!edesc)
 		return NULL;
 
@@ -1158,7 +1158,7 @@ static struct dma_async_tx_descriptor *edma_prep_dma_memcpy(
 			nslots = 2;
 	}
 
-	edesc = kzalloc(struct_size(edesc, pset, nslots), GFP_ATOMIC);
+	edesc = kzalloc_flex(*edesc, pset, nslots, GFP_ATOMIC);
 	if (!edesc)
 		return NULL;
 
@@ -1265,7 +1265,7 @@ edma_prep_dma_interleaved(struct dma_chan *chan,
 	if (src_bidx > SZ_64K || dst_bidx > SZ_64K)
 		return NULL;
 
-	edesc = kzalloc(struct_size(edesc, pset, 1), GFP_ATOMIC);
+	edesc = kzalloc_flex(*edesc, pset, 1, GFP_ATOMIC);
 	if (!edesc)
 		return NULL;
 
@@ -1361,7 +1361,7 @@ static struct dma_async_tx_descriptor *edma_prep_dma_cyclic(
 		}
 	}
 
-	edesc = kzalloc(struct_size(edesc, pset, nslots), GFP_ATOMIC);
+	edesc = kzalloc_flex(*edesc, pset, nslots, GFP_ATOMIC);
 	if (!edesc)
 		return NULL;
 
@@ -2064,8 +2064,8 @@ static int edma_setup_from_hw(struct device *dev, struct edma_soc_info *pdata,
 	 * priority. So Q0 is the highest priority queue and the last queue has
 	 * the lowest priority.
 	 */
-	queue_priority_map = devm_kcalloc(dev, ecc->num_tc + 1, sizeof(s8),
-					  GFP_KERNEL);
+	queue_priority_map = devm_kcalloc(dev, ecc->num_tc + 1,
+					  sizeof(*queue_priority_map), GFP_KERNEL);
 	if (!queue_priority_map)
 		return -ENOMEM;
 

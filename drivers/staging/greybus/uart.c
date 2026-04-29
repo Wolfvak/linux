@@ -823,7 +823,7 @@ static int gb_uart_probe(struct gbphy_device *gbphy_dev,
 		goto exit_connection_destroy;
 	}
 
-	gb_tty = kzalloc(sizeof(*gb_tty), GFP_KERNEL);
+	gb_tty = kzalloc_obj(*gb_tty);
 	if (!gb_tty) {
 		retval = -ENOMEM;
 		goto exit_connection_destroy;
@@ -879,14 +879,18 @@ static int gb_uart_probe(struct gbphy_device *gbphy_dev,
 	if (retval)
 		goto exit_put_port;
 
-	send_control(gb_tty, gb_tty->ctrlout);
+	retval = send_control(gb_tty, gb_tty->ctrlout);
+	if (retval)
+		goto exit_connection_disable;
 
 	/* initialize the uart to be 9600n81 */
 	gb_tty->line_coding.rate = cpu_to_le32(9600);
 	gb_tty->line_coding.format = GB_SERIAL_1_STOP_BITS;
 	gb_tty->line_coding.parity = GB_SERIAL_NO_PARITY;
 	gb_tty->line_coding.data_bits = 8;
-	send_line_coding(gb_tty);
+	retval = send_line_coding(gb_tty);
+	if (retval)
+		goto exit_connection_disable;
 
 	retval = gb_connection_enable(connection);
 	if (retval)
@@ -916,7 +920,6 @@ static void gb_uart_remove(struct gbphy_device *gbphy_dev)
 {
 	struct gb_tty *gb_tty = gb_gbphy_get_data(gbphy_dev);
 	struct gb_connection *connection = gb_tty->connection;
-	struct tty_struct *tty;
 	int ret;
 
 	ret = gbphy_runtime_get_sync(gbphy_dev);
@@ -929,11 +932,7 @@ static void gb_uart_remove(struct gbphy_device *gbphy_dev)
 	wake_up_all(&gb_tty->wioctl);
 	mutex_unlock(&gb_tty->mutex);
 
-	tty = tty_port_tty_get(&gb_tty->port);
-	if (tty) {
-		tty_vhangup(tty);
-		tty_kref_put(tty);
-	}
+	tty_port_tty_vhangup(&gb_tty->port);
 
 	gb_connection_disable_rx(connection);
 	tty_unregister_device(gb_tty_driver, gb_tty->minor);

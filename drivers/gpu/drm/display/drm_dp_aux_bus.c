@@ -12,6 +12,7 @@
  * to perform transactions on that bus.
  */
 
+#include <linux/export.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -57,7 +58,7 @@ static int dp_aux_ep_probe(struct device *dev)
 		container_of(aux_ep, struct dp_aux_ep_device_with_data, aux_ep);
 	int ret;
 
-	ret = dev_pm_domain_attach(dev, true);
+	ret = dev_pm_domain_attach(dev, PD_FLAG_ATTACH_POWER_ON);
 	if (ret)
 		return dev_err_probe(dev, ret, "Failed to attach to PM Domain\n");
 
@@ -279,7 +280,7 @@ int of_dp_aux_populate_bus(struct drm_dp_aux *aux,
 		goto err_did_get_np;
 	}
 
-	aux_ep_with_data = kzalloc(sizeof(*aux_ep_with_data), GFP_KERNEL);
+	aux_ep_with_data = kzalloc_obj(*aux_ep_with_data);
 	if (!aux_ep_with_data) {
 		ret = -ENOMEM;
 		goto err_did_set_populated;

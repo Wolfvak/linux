@@ -22,11 +22,10 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/sysfs.h>
+#include <linux/topology.h>
 #include <linux/uuid.h>
 
 #include <uapi/asm-generic/errno-base.h>
-
-#include <asm/amd/node.h>
 
 #include "hsmp.h"
 
@@ -495,21 +494,21 @@ static int init_acpi(struct device *dev)
 	if (hsmp_pdev->proto_ver == HSMP_PROTO_VER6) {
 		ret = hsmp_get_tbl_dram_base(sock_ind);
 		if (ret)
-			dev_err(dev, "Failed to init metric table\n");
+			dev_info(dev, "Failed to init metric table\n");
 	}
 
 	ret = hsmp_create_sensor(dev, sock_ind);
 	if (ret)
-		dev_err(dev, "Failed to register HSMP sensors with hwmon\n");
+		dev_info(dev, "Failed to register HSMP sensors with hwmon\n");
 
 	dev_set_drvdata(dev, &hsmp_pdev->sock[sock_ind]);
 
-	return ret;
+	return 0;
 }
 
 static const struct bin_attribute  hsmp_metric_tbl_attr = {
 	.attr = { .name = HSMP_METRICS_TABLE_NAME, .mode = 0444},
-	.read_new = hsmp_metric_tbl_acpi_read,
+	.read = hsmp_metric_tbl_acpi_read,
 	.size = sizeof(struct hsmp_metric_table),
 };
 
@@ -560,7 +559,7 @@ static struct attribute *hsmp_dev_attr_list[] = {
 };
 
 static const struct attribute_group hsmp_attr_grp = {
-	.bin_attrs_new = hsmp_attr_list,
+	.bin_attrs = hsmp_attr_list,
 	.attrs = hsmp_dev_attr_list,
 	.is_bin_visible = hsmp_is_sock_attr_visible,
 	.is_visible = hsmp_is_sock_dev_attr_visible,
@@ -586,9 +585,11 @@ static int hsmp_acpi_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	if (!hsmp_pdev->is_probed) {
-		hsmp_pdev->num_sockets = amd_num_nodes();
-		if (hsmp_pdev->num_sockets == 0 || hsmp_pdev->num_sockets > MAX_AMD_NUM_NODES)
+		hsmp_pdev->num_sockets = topology_max_packages();
+		if (!hsmp_pdev->num_sockets) {
+			dev_err(&pdev->dev, "No CPU sockets detected\n");
 			return -ENODEV;
+		}
 
 		hsmp_pdev->sock = devm_kcalloc(&pdev->dev, hsmp_pdev->num_sockets,
 					       sizeof(*hsmp_pdev->sock),
@@ -605,9 +606,12 @@ static int hsmp_acpi_probe(struct platform_device *pdev)
 
 	if (!hsmp_pdev->is_probed) {
 		ret = hsmp_misc_register(&pdev->dev);
-		if (ret)
+		if (ret) {
+			dev_err(&pdev->dev, "Failed to register misc device\n");
 			return ret;
+		}
 		hsmp_pdev->is_probed = true;
+		dev_dbg(&pdev->dev, "AMD HSMP ACPI is probed successfully\n");
 	}
 
 	return 0;

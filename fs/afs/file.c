@@ -19,7 +19,7 @@
 #include <trace/events/netfs.h>
 #include "internal.h"
 
-static int afs_file_mmap(struct file *file, struct vm_area_struct *vma);
+static int afs_file_mmap_prepare(struct vm_area_desc *desc);
 
 static ssize_t afs_file_read_iter(struct kiocb *iocb, struct iov_iter *iter);
 static ssize_t afs_file_splice_read(struct file *in, loff_t *ppos,
@@ -35,7 +35,7 @@ const struct file_operations afs_file_operations = {
 	.llseek		= generic_file_llseek,
 	.read_iter	= afs_file_read_iter,
 	.write_iter	= netfs_file_write_iter,
-	.mmap		= afs_file_mmap,
+	.mmap_prepare	= afs_file_mmap_prepare,
 	.splice_read	= afs_file_splice_read,
 	.splice_write	= iter_file_splice_write,
 	.fsync		= afs_fsync,
@@ -86,7 +86,7 @@ int afs_cache_wb_key(struct afs_vnode *vnode, struct afs_file *af)
 {
 	struct afs_wb_key *wbk, *p;
 
-	wbk = kzalloc(sizeof(struct afs_wb_key), GFP_KERNEL);
+	wbk = kzalloc_obj(struct afs_wb_key);
 	if (!wbk)
 		return -ENOMEM;
 	refcount_set(&wbk->usage, 2);
@@ -130,7 +130,7 @@ int afs_open(struct inode *inode, struct file *file)
 		goto error;
 	}
 
-	af = kzalloc(sizeof(*af), GFP_KERNEL);
+	af = kzalloc_obj(*af);
 	if (!af) {
 		ret = -ENOMEM;
 		goto error_key;
@@ -492,16 +492,16 @@ static void afs_drop_open_mmap(struct afs_vnode *vnode)
 /*
  * Handle setting up a memory mapping on an AFS file.
  */
-static int afs_file_mmap(struct file *file, struct vm_area_struct *vma)
+static int afs_file_mmap_prepare(struct vm_area_desc *desc)
 {
-	struct afs_vnode *vnode = AFS_FS_I(file_inode(file));
+	struct afs_vnode *vnode = AFS_FS_I(file_inode(desc->file));
 	int ret;
 
 	afs_add_open_mmap(vnode);
 
-	ret = generic_file_mmap(file, vma);
+	ret = generic_file_mmap_prepare(desc);
 	if (ret == 0)
-		vma->vm_ops = &afs_vm_ops;
+		desc->vm_ops = &afs_vm_ops;
 	else
 		afs_drop_open_mmap(vnode);
 	return ret;

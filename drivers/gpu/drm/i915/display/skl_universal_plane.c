@@ -7,25 +7,29 @@
 #include <drm/drm_blend.h>
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_print.h>
 
-#include "i915_drv.h"
-#include "i915_reg.h"
-#include "intel_atomic_plane.h"
 #include "intel_bo.h"
+#include "intel_color.h"
+#include "intel_color_pipeline.h"
 #include "intel_de.h"
 #include "intel_display_irq.h"
+#include "intel_display_regs.h"
 #include "intel_display_types.h"
+#include "intel_display_utils.h"
 #include "intel_dpt.h"
 #include "intel_fb.h"
 #include "intel_fbc.h"
 #include "intel_frontbuffer.h"
+#include "intel_parent.h"
+#include "intel_plane.h"
 #include "intel_psr.h"
 #include "intel_psr_regs.h"
+#include "intel_step.h"
 #include "skl_scaler.h"
 #include "skl_universal_plane.h"
 #include "skl_universal_plane_regs.h"
 #include "skl_watermark.h"
-#include "pxp/intel_pxp.h"
 
 static const u32 skl_plane_formats[] = {
 	DRM_FORMAT_C8,
@@ -387,44 +391,19 @@ static int glk_plane_max_width(const struct drm_framebuffer *fb,
 	}
 }
 
+static int adl_plane_min_width(const struct drm_framebuffer *fb,
+			       int color_plane,
+			       unsigned int rotation)
+{
+	return 16 / fb->format->cpp[color_plane];
+}
+
 static int icl_plane_min_width(const struct drm_framebuffer *fb,
 			       int color_plane,
 			       unsigned int rotation)
 {
 	/* Wa_14011264657, Wa_14011050563: gen11+ */
-	switch (fb->format->format) {
-	case DRM_FORMAT_C8:
-		return 18;
-	case DRM_FORMAT_RGB565:
-		return 10;
-	case DRM_FORMAT_XRGB8888:
-	case DRM_FORMAT_XBGR8888:
-	case DRM_FORMAT_ARGB8888:
-	case DRM_FORMAT_ABGR8888:
-	case DRM_FORMAT_XRGB2101010:
-	case DRM_FORMAT_XBGR2101010:
-	case DRM_FORMAT_ARGB2101010:
-	case DRM_FORMAT_ABGR2101010:
-	case DRM_FORMAT_XVYU2101010:
-	case DRM_FORMAT_Y212:
-	case DRM_FORMAT_Y216:
-		return 6;
-	case DRM_FORMAT_NV12:
-		return 20;
-	case DRM_FORMAT_P010:
-	case DRM_FORMAT_P012:
-	case DRM_FORMAT_P016:
-		return 12;
-	case DRM_FORMAT_XRGB16161616F:
-	case DRM_FORMAT_XBGR16161616F:
-	case DRM_FORMAT_ARGB16161616F:
-	case DRM_FORMAT_ABGR16161616F:
-	case DRM_FORMAT_XVYU12_16161616:
-	case DRM_FORMAT_XVYU16161616:
-		return 4;
-	default:
-		return 1;
-	}
+	return 16 / fb->format->cpp[color_plane] + 2;
 }
 
 static int xe3_plane_max_width(const struct drm_framebuffer *fb,
@@ -461,6 +440,23 @@ static int skl_plane_max_height(const struct drm_framebuffer *fb,
 	return 4096;
 }
 
+static enum intel_fbc_id skl_fbc_id_for_pipe(enum pipe pipe)
+{
+	return pipe - PIPE_A + INTEL_FBC_A;
+}
+
+static bool skl_plane_has_fbc(struct intel_display *display,
+			      enum intel_fbc_id fbc_id, enum plane_id plane_id)
+{
+	if ((DISPLAY_RUNTIME_INFO(display)->fbc_mask & BIT(fbc_id)) == 0)
+		return false;
+
+	if (DISPLAY_VER(display) >= 20)
+		return icl_is_hdr_plane(display, plane_id);
+	else
+		return plane_id == PLANE_1;
+}
+
 static int icl_plane_max_height(const struct drm_framebuffer *fb,
 				int color_plane,
 				unsigned int rotation)
@@ -470,12 +466,11 @@ static int icl_plane_max_height(const struct drm_framebuffer *fb,
 
 static unsigned int
 plane_max_stride(struct intel_plane *plane,
-		 u32 pixel_format, u64 modifier,
-		 unsigned int rotation,
+		 const struct drm_format_info *info,
+		 u64 modifier, unsigned int rotation,
 		 unsigned int max_pixels,
 		 unsigned int max_bytes)
 {
-	const struct drm_format_info *info = drm_format_info(pixel_format);
 	int cpp = info->cpp[0];
 
 	if (drm_rotation_90_or_270(rotation))
@@ -486,26 +481,26 @@ plane_max_stride(struct intel_plane *plane,
 
 static unsigned int
 adl_plane_max_stride(struct intel_plane *plane,
-		     u32 pixel_format, u64 modifier,
-		     unsigned int rotation)
+		     const struct drm_format_info *info,
+		     u64 modifier, unsigned int rotation)
 {
 	unsigned int max_pixels = 65536; /* PLANE_OFFSET limit */
 	unsigned int max_bytes = 128 * 1024;
 
-	return plane_max_stride(plane, pixel_format,
+	return plane_max_stride(plane, info,
 				modifier, rotation,
 				max_pixels, max_bytes);
 }
 
 static unsigned int
 skl_plane_max_stride(struct intel_plane *plane,
-		     u32 pixel_format, u64 modifier,
-		     unsigned int rotation)
+		     const struct drm_format_info *info,
+		     u64 modifier, unsigned int rotation)
 {
 	unsigned int max_pixels = 8192; /* PLANE_OFFSET limit */
 	unsigned int max_bytes = 32 * 1024;
 
-	return plane_max_stride(plane, pixel_format,
+	return plane_max_stride(plane, info,
 				modifier, rotation,
 				max_pixels, max_bytes);
 }
@@ -601,7 +596,7 @@ static u32 tgl_plane_min_alignment(struct intel_plane *plane,
 	 * Figure out what's going on here...
 	 */
 	if (display->platform.alderlake_p &&
-	    intel_plane_can_async_flip(plane, fb->format->format, fb->modifier))
+	    intel_plane_can_async_flip(plane, fb->format, fb->modifier))
 		return mult * 16 * 1024;
 
 	switch (fb->modifier) {
@@ -896,6 +891,22 @@ static void icl_plane_disable_sel_fetch_arm(struct intel_dsb *dsb,
 	intel_de_write_dsb(display, dsb, SEL_FETCH_PLANE_CTL(pipe, plane->id), 0);
 }
 
+static bool plane_has_normalizer(struct intel_plane *plane)
+{
+	struct intel_display *display = to_intel_display(plane);
+
+	return HAS_PIXEL_NORMALIZER(display) && icl_is_hdr_plane(display, plane->id);
+}
+
+static u32 pixel_normalizer_value(const struct intel_plane_state *plane_state)
+{
+	if (!intel_fbc_need_pixel_normalizer(plane_state))
+		return 0;
+
+	return PLANE_PIXEL_NORMALIZE_ENABLE |
+	       PLANE_PIXEL_NORMALIZE_NORM_FACTOR(PLANE_PIXEL_NORMALIZE_NORM_FACTOR_1_0);
+}
+
 static void
 icl_plane_disable_arm(struct intel_dsb *dsb,
 		      struct intel_plane *plane,
@@ -911,6 +922,11 @@ icl_plane_disable_arm(struct intel_dsb *dsb,
 	skl_write_plane_wm(dsb, plane, crtc_state);
 
 	icl_plane_disable_sel_fetch_arm(dsb, plane, crtc_state);
+
+	if (plane_has_normalizer(plane))
+		intel_de_write_dsb(display, dsb,
+				   PLANE_PIXEL_NORMALIZE(plane->pipe, plane->id), 0);
+
 	intel_de_write_dsb(display, dsb, PLANE_CTL(pipe, plane_id), 0);
 	intel_de_write_dsb(display, dsb, PLANE_SURF(pipe, plane_id), 0);
 }
@@ -922,7 +938,7 @@ skl_plane_get_hw_state(struct intel_plane *plane,
 	struct intel_display *display = to_intel_display(plane);
 	enum intel_display_power_domain power_domain;
 	enum plane_id plane_id = plane->id;
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 	bool ret;
 
 	power_domain = POWER_DOMAIN_PIPE(plane->pipe);
@@ -1166,8 +1182,7 @@ static u32 skl_plane_ctl_crtc(const struct intel_crtc_state *crtc_state)
 	return plane_ctl;
 }
 
-static u32 skl_plane_ctl(const struct intel_crtc_state *crtc_state,
-			 const struct intel_plane_state *plane_state)
+static u32 skl_plane_ctl(const struct intel_plane_state *plane_state)
 {
 	struct intel_display *display = to_intel_display(plane_state);
 	const struct drm_framebuffer *fb = plane_state->hw.fb;
@@ -1225,8 +1240,7 @@ static u32 glk_plane_color_ctl_crtc(const struct intel_crtc_state *crtc_state)
 	return plane_color_ctl;
 }
 
-static u32 glk_plane_color_ctl(const struct intel_crtc_state *crtc_state,
-			       const struct intel_plane_state *plane_state)
+static u32 glk_plane_color_ctl(const struct intel_plane_state *plane_state)
 {
 	struct intel_display *display = to_intel_display(plane_state);
 	const struct drm_framebuffer *fb = plane_state->hw.fb;
@@ -1260,6 +1274,18 @@ static u32 glk_plane_color_ctl(const struct intel_crtc_state *crtc_state,
 	if (plane_state->force_black)
 		plane_color_ctl |= PLANE_COLOR_PLANE_CSC_ENABLE;
 
+	if (plane_state->hw.degamma_lut)
+		plane_color_ctl |= PLANE_COLOR_PRE_CSC_GAMMA_ENABLE;
+
+	if (plane_state->hw.ctm)
+		plane_color_ctl |= PLANE_COLOR_PLANE_CSC_ENABLE;
+
+	if (plane_state->hw.gamma_lut) {
+		plane_color_ctl &= ~PLANE_COLOR_PLANE_GAMMA_DISABLE;
+		if (drm_color_lut32_size(plane_state->hw.gamma_lut) != 32)
+			plane_color_ctl |= PLANE_COLOR_POST_CSC_GAMMA_MULTSEG_ENABLE;
+	}
+
 	return plane_color_ctl;
 }
 
@@ -1271,12 +1297,6 @@ static u32 skl_surf_address(const struct intel_plane_state *plane_state,
 	u32 offset = plane_state->view.color_plane[color_plane].offset;
 
 	if (intel_fb_uses_dpt(fb)) {
-		/*
-		 * The DPT object contains only one vma, so the VMA's offset
-		 * within the DPT is always 0.
-		 */
-		drm_WARN_ON(display->drm, plane_state->dpt_vma &&
-			    intel_dpt_offset(plane_state->dpt_vma));
 		drm_WARN_ON(display->drm, offset & 0x1fffff);
 		return offset >> 9;
 	} else {
@@ -1285,13 +1305,20 @@ static u32 skl_surf_address(const struct intel_plane_state *plane_state,
 	}
 }
 
-static u32 skl_plane_surf(const struct intel_plane_state *plane_state,
-			  int color_plane)
+static int icl_plane_color_plane(const struct intel_plane_state *plane_state)
 {
+	if (plane_state->planar_linked_plane && !plane_state->is_y_plane)
+		return 1;
+	else
+		return 0;
+}
+
+static u32 skl_plane_surf_offset(const struct intel_plane_state *plane_state)
+{
+	int color_plane = icl_plane_color_plane(plane_state);
 	u32 plane_surf;
 
-	plane_surf = intel_plane_ggtt_offset(plane_state) +
-		skl_surf_address(plane_state, color_plane);
+	plane_surf = skl_surf_address(plane_state, color_plane);
 
 	if (plane_state->decrypt)
 		plane_surf |= PLANE_SURF_DECRYPT;
@@ -1371,14 +1398,6 @@ static void icl_plane_csc_load_black(struct intel_dsb *dsb,
 	intel_de_write_dsb(display, dsb, PLANE_CSC_POSTOFF(pipe, plane_id, 0), 0);
 	intel_de_write_dsb(display, dsb, PLANE_CSC_POSTOFF(pipe, plane_id, 1), 0);
 	intel_de_write_dsb(display, dsb, PLANE_CSC_POSTOFF(pipe, plane_id, 2), 0);
-}
-
-static int icl_plane_color_plane(const struct intel_plane_state *plane_state)
-{
-	if (plane_state->planar_linked_plane && !plane_state->is_y_plane)
-		return 1;
-	else
-		return 0;
 }
 
 static void
@@ -1476,7 +1495,7 @@ skl_plane_update_arm(struct intel_dsb *dsb,
 	intel_de_write_dsb(display, dsb, PLANE_CTL(pipe, plane_id),
 			   plane_ctl);
 	intel_de_write_dsb(display, dsb, PLANE_SURF(pipe, plane_id),
-			   skl_plane_surf(plane_state, 0));
+			   plane_state->surf);
 }
 
 static void icl_plane_update_sel_fetch_noarm(struct intel_dsb *dsb,
@@ -1548,6 +1567,8 @@ icl_plane_update_noarm(struct intel_dsb *dsb,
 	plane_color_ctl = plane_state->color_ctl |
 		glk_plane_color_ctl_crtc(crtc_state);
 
+	intel_color_plane_program_pipeline(dsb, plane_state);
+
 	/* The scaler will handle the output position */
 	if (plane_state->scaler_id >= 0) {
 		crtc_x = 0;
@@ -1579,7 +1600,7 @@ icl_plane_update_noarm(struct intel_dsb *dsb,
 	}
 
 	/* FLAT CCS doesn't need to program AUX_DIST */
-	if (!HAS_FLAT_CCS(to_i915(display->drm)) && DISPLAY_VER(display) < 20)
+	if (HAS_AUX_DIST(display))
 		intel_de_write_dsb(display, dsb, PLANE_AUX_DIST(pipe, plane_id),
 				   skl_plane_aux_dist(plane_state, color_plane));
 
@@ -1632,7 +1653,6 @@ icl_plane_update_arm(struct intel_dsb *dsb,
 	struct intel_display *display = to_intel_display(plane);
 	enum plane_id plane_id = plane->id;
 	enum pipe pipe = plane->pipe;
-	int color_plane = icl_plane_color_plane(plane_state);
 	u32 plane_ctl;
 
 	plane_ctl = plane_state->ctl |
@@ -1650,6 +1670,18 @@ icl_plane_update_arm(struct intel_dsb *dsb,
 
 	icl_plane_update_sel_fetch_arm(dsb, plane, crtc_state, plane_state);
 
+	intel_color_plane_commit_arm(dsb, plane_state);
+
+	/*
+	 * In order to have FBC for fp16 formats pixel normalizer block must be
+	 * active. For FP16 formats, use normalization factor as 1.0 and enable
+	 * the block.
+	 */
+	if (plane_has_normalizer(plane))
+		intel_de_write_dsb(display, dsb,
+				   PLANE_PIXEL_NORMALIZE(plane->pipe, plane->id),
+				   pixel_normalizer_value(plane_state));
+
 	/*
 	 * The control register self-arms if the plane was previously
 	 * disabled. Try to make the plane enable atomic by writing
@@ -1658,7 +1690,7 @@ icl_plane_update_arm(struct intel_dsb *dsb,
 	intel_de_write_dsb(display, dsb, PLANE_CTL(pipe, plane_id),
 			   plane_ctl);
 	intel_de_write_dsb(display, dsb, PLANE_SURF(pipe, plane_id),
-			   skl_plane_surf(plane_state, color_plane));
+			   plane_state->surf);
 }
 
 static void skl_plane_capture_error(struct intel_crtc *crtc,
@@ -1682,10 +1714,10 @@ skl_plane_async_flip(struct intel_dsb *dsb,
 	struct intel_display *display = to_intel_display(plane);
 	enum plane_id plane_id = plane->id;
 	enum pipe pipe = plane->pipe;
-	u32 plane_ctl = plane_state->ctl, plane_surf;
+	u32 plane_ctl = plane_state->ctl;
+	u32 plane_surf = plane_state->surf;
 
 	plane_ctl |= skl_plane_ctl_crtc(crtc_state);
-	plane_surf = skl_plane_surf(plane_state, 0);
 
 	if (async_flip) {
 		if (DISPLAY_VER(display) >= 30)
@@ -1732,7 +1764,8 @@ static int skl_plane_check_fb(const struct intel_crtc_state *crtc_state,
 	}
 
 	if (rotation & DRM_MODE_REFLECT_X &&
-	    fb->modifier == DRM_FORMAT_MOD_LINEAR) {
+	    fb->modifier == DRM_FORMAT_MOD_LINEAR &&
+	    DISPLAY_VER(display) < 35) {
 		drm_dbg_kms(display->drm,
 			    "[PLANE:%d:%s] horizontal flip is not supported with linear surface formats\n",
 			    plane->base.base.id, plane->base.name);
@@ -1788,8 +1821,7 @@ static int skl_plane_check_fb(const struct intel_crtc_state *crtc_state,
 	}
 
 	/* Y-tiling is not supported in IF-ID Interlace mode */
-	if (crtc_state->hw.enable &&
-	    crtc_state->hw.adjusted_mode.flags & DRM_MODE_FLAG_INTERLACE &&
+	if (crtc_state->hw.adjusted_mode.flags & DRM_MODE_FLAG_INTERLACE &&
 	    fb->modifier != DRM_FORMAT_MOD_LINEAR &&
 	    fb->modifier != I915_FORMAT_MOD_X_TILED) {
 		drm_dbg_kms(display->drm,
@@ -1890,6 +1922,14 @@ static int intel_plane_min_width(struct intel_plane *plane,
 		return plane->min_width(fb, color_plane, rotation);
 	else
 		return 1;
+}
+
+static int intel_plane_min_height(struct intel_plane *plane,
+				  const struct drm_framebuffer *fb,
+				  int color_plane,
+				  unsigned int rotation)
+{
+	return 1;
 }
 
 static int intel_plane_max_width(struct intel_plane *plane,
@@ -2023,6 +2063,7 @@ static int skl_check_main_surface(struct intel_plane_state *plane_state)
 	int w = drm_rect_width(&plane_state->uapi.src) >> 16;
 	int h = drm_rect_height(&plane_state->uapi.src) >> 16;
 	int min_width = intel_plane_min_width(plane, fb, 0, rotation);
+	int min_height = intel_plane_min_height(plane, fb, 0, rotation);
 	int max_width = intel_plane_max_width(plane, fb, 0, rotation);
 	int max_height = intel_plane_max_height(plane, fb, 0, rotation);
 	unsigned int alignment = plane->min_alignment(plane, fb, 0);
@@ -2030,11 +2071,11 @@ static int skl_check_main_surface(struct intel_plane_state *plane_state)
 	u32 offset;
 	int ret;
 
-	if (w > max_width || w < min_width || h > max_height || h < 1) {
+	if (w > max_width || w < min_width || h > max_height || h < min_height) {
 		drm_dbg_kms(display->drm,
-			    "[PLANE:%d:%s] requested Y/RGB source size %dx%d outside limits (min: %dx1 max: %dx%d)\n",
+			    "[PLANE:%d:%s] requested Y/RGB source size %dx%d outside limits (min: %dx%d max: %dx%d)\n",
 			    plane->base.base.id, plane->base.name,
-			    w, h, min_width, max_width, max_height);
+			    w, h, min_width, min_height, max_width, max_height);
 		return -EINVAL;
 	}
 
@@ -2094,6 +2135,8 @@ static int skl_check_nv12_aux_surface(struct intel_plane_state *plane_state)
 	int uv_plane = 1;
 	int ccs_plane = intel_fb_is_ccs_modifier(fb->modifier) ?
 			skl_main_to_aux_plane(fb, uv_plane) : 0;
+	int min_width = intel_plane_min_width(plane, fb, uv_plane, rotation);
+	int min_height = intel_plane_min_height(plane, fb, uv_plane, rotation);
 	int max_width = intel_plane_max_width(plane, fb, uv_plane, rotation);
 	int max_height = intel_plane_max_height(plane, fb, uv_plane, rotation);
 	int x = plane_state->uapi.src.x1 >> 17;
@@ -2103,11 +2146,11 @@ static int skl_check_nv12_aux_surface(struct intel_plane_state *plane_state)
 	u32 offset;
 
 	/* FIXME not quite sure how/if these apply to the chroma plane */
-	if (w > max_width || h > max_height) {
+	if (w > max_width || w < min_width || h > max_height || h < min_height) {
 		drm_dbg_kms(display->drm,
-			    "[PLANE:%d:%s] CbCr source size %dx%d too big (limit %dx%d)\n",
+			    "[PLANE:%d:%s] requested CbCr source size %dx%d outside limits (min: %dx%d max: %dx%d)\n",
 			    plane->base.base.id, plane->base.name,
-			    w, h, max_width, max_height);
+			    w, h, min_width, min_height, max_width, max_height);
 		return -EINVAL;
 	}
 
@@ -2264,7 +2307,7 @@ static void check_protection(struct intel_plane_state *plane_state)
 	if (DISPLAY_VER(display) < 11)
 		return;
 
-	plane_state->decrypt = intel_pxp_key_check(obj, false) == 0;
+	plane_state->decrypt = intel_bo_key_check(obj) == 0;
 	plane_state->force_black = intel_bo_is_protected(obj) &&
 		!plane_state->decrypt;
 }
@@ -2327,8 +2370,8 @@ static int skl_plane_check(struct intel_crtc_state *crtc_state,
 		max_scale = skl_plane_max_scale(display, fb);
 	}
 
-	ret = intel_atomic_plane_check_clipping(plane_state, crtc_state,
-						min_scale, max_scale, true);
+	ret = intel_plane_check_clipping(plane_state, crtc_state,
+					 min_scale, max_scale, true);
 	if (ret)
 		return ret;
 
@@ -2363,11 +2406,10 @@ static int skl_plane_check(struct intel_crtc_state *crtc_state,
 		plane_state->damage = DRM_RECT_INIT(0, 0, 0, 0);
 	}
 
-	plane_state->ctl = skl_plane_ctl(crtc_state, plane_state);
+	plane_state->ctl = skl_plane_ctl(plane_state);
 
 	if (DISPLAY_VER(display) >= 10)
-		plane_state->color_ctl = glk_plane_color_ctl(crtc_state,
-							     plane_state);
+		plane_state->color_ctl = glk_plane_color_ctl(plane_state);
 
 	if (intel_format_info_is_yuv_semiplanar(fb->format, fb->modifier) &&
 	    icl_is_hdr_plane(display, plane->id))
@@ -2413,30 +2455,13 @@ void icl_link_nv12_planes(struct intel_plane_state *uv_plane_state,
 	}
 }
 
-static enum intel_fbc_id skl_fbc_id_for_pipe(enum pipe pipe)
-{
-	return pipe - PIPE_A + INTEL_FBC_A;
-}
-
-static bool skl_plane_has_fbc(struct intel_display *display,
-			      enum intel_fbc_id fbc_id, enum plane_id plane_id)
-{
-	if ((DISPLAY_RUNTIME_INFO(display)->fbc_mask & BIT(fbc_id)) == 0)
-		return false;
-
-	if (DISPLAY_VER(display) >= 20)
-		return icl_is_hdr_plane(display, plane_id);
-	else
-		return plane_id == PLANE_1;
-}
-
 static struct intel_fbc *skl_plane_fbc(struct intel_display *display,
 				       enum pipe pipe, enum plane_id plane_id)
 {
 	enum intel_fbc_id fbc_id = skl_fbc_id_for_pipe(pipe);
 
 	if (skl_plane_has_fbc(display, fbc_id, plane_id))
-		return display->fbc[fbc_id];
+		return display->fbc.instances[fbc_id];
 	else
 		return NULL;
 }
@@ -2448,13 +2473,10 @@ static bool skl_plane_has_planar(struct intel_display *display,
 	if (display->platform.skylake || display->platform.broxton)
 		return false;
 
-	if (DISPLAY_VER(display) == 9 && pipe == PIPE_C)
+	if (pipe == PIPE_C)
 		return false;
 
-	if (plane_id != PLANE_1 && plane_id != PLANE_2)
-		return false;
-
-	return true;
+	return plane_id == PLANE_1 || plane_id == PLANE_2;
 }
 
 static const u32 *skl_get_plane_formats(struct intel_display *display,
@@ -2470,11 +2492,17 @@ static const u32 *skl_get_plane_formats(struct intel_display *display,
 	}
 }
 
+static bool glk_plane_has_planar(struct intel_display *display,
+				 enum pipe pipe, enum plane_id plane_id)
+{
+	return plane_id == PLANE_1 || plane_id == PLANE_2;
+}
+
 static const u32 *glk_get_plane_formats(struct intel_display *display,
 					enum pipe pipe, enum plane_id plane_id,
 					int *num_formats)
 {
-	if (skl_plane_has_planar(display, pipe, plane_id)) {
+	if (glk_plane_has_planar(display, pipe, plane_id)) {
 		*num_formats = ARRAY_SIZE(glk_planar_formats);
 		return glk_planar_formats;
 	} else {
@@ -2714,8 +2742,10 @@ skl_plane_disable_flip_done(struct intel_plane *plane)
 static bool skl_plane_has_rc_ccs(struct intel_display *display,
 				 enum pipe pipe, enum plane_id plane_id)
 {
-	return pipe != PIPE_C &&
-		(plane_id == PLANE_1 || plane_id == PLANE_2);
+	if (pipe == PIPE_C)
+		return false;
+
+	return plane_id == PLANE_1 || plane_id == PLANE_2;
 }
 
 static u8 skl_plane_caps(struct intel_display *display,
@@ -2791,6 +2821,32 @@ static u8 tgl_plane_caps(struct intel_display *display,
 	return caps;
 }
 
+static void skl_disable_tiling(struct intel_plane *plane)
+{
+	struct intel_plane_state *state = to_intel_plane_state(plane->base.state);
+	struct intel_display *display = to_intel_display(plane);
+	const struct drm_framebuffer *fb = state->hw.fb;
+	u32 plane_ctl;
+
+	plane_ctl = intel_de_read(display, PLANE_CTL(plane->pipe, plane->id));
+
+	if (intel_fb_uses_dpt(fb)) {
+		/* if DPT is enabled, keep tiling, but disable compression */
+		plane_ctl &= ~PLANE_CTL_RENDER_DECOMPRESSION_ENABLE;
+	} else {
+		/* if DPT is not supported, disable tiling, and update stride */
+		u32 stride = state->view.color_plane[0].scanout_stride / 64;
+
+		plane_ctl &= ~PLANE_CTL_TILED_MASK;
+		intel_de_write_fw(display, PLANE_STRIDE(plane->pipe, plane->id),
+				  PLANE_STRIDE_(stride));
+	}
+	intel_de_write_fw(display, PLANE_CTL(plane->pipe, plane->id), plane_ctl);
+
+	intel_de_write_fw(display, PLANE_SURF(plane->pipe, plane->id),
+			  state->surf);
+}
+
 struct intel_plane *
 skl_universal_plane_create(struct intel_display *display,
 			   enum pipe pipe, enum plane_id plane_id)
@@ -2817,11 +2873,15 @@ skl_universal_plane_create(struct intel_display *display,
 	intel_fbc_add_plane(skl_plane_fbc(display, pipe, plane_id), plane);
 
 	if (DISPLAY_VER(display) >= 30) {
+		plane->min_width = adl_plane_min_width;
 		plane->max_width = xe3_plane_max_width;
 		plane->max_height = icl_plane_max_height;
 		plane->min_cdclk = icl_plane_min_cdclk;
 	} else if (DISPLAY_VER(display) >= 11) {
-		plane->min_width = icl_plane_min_width;
+		if (DISPLAY_VER(display) >= 14 || display->platform.alderlake_p)
+			plane->min_width = adl_plane_min_width;
+		else
+			plane->min_width = icl_plane_min_width;
 		if (icl_is_hdr_plane(display, plane_id))
 			plane->max_width = icl_hdr_plane_max_width;
 		else
@@ -2837,6 +2897,9 @@ skl_universal_plane_create(struct intel_display *display,
 		plane->max_height = skl_plane_max_height;
 		plane->min_cdclk = skl_plane_min_cdclk;
 	}
+	plane->disable_tiling = skl_disable_tiling;
+
+	plane->surf_offset = skl_plane_surf_offset;
 
 	if (DISPLAY_VER(display) >= 13)
 		plane->max_stride = adl_plane_max_stride;
@@ -2909,12 +2972,6 @@ skl_universal_plane_create(struct intel_display *display,
 	else
 		caps = skl_plane_caps(display, pipe, plane_id);
 
-	/* FIXME: xe has problems with AUX */
-	if (!IS_ENABLED(I915) && !HAS_FLAT_CCS(to_i915(display->drm)))
-		caps &= ~(INTEL_PLANE_CAP_CCS_RC |
-			  INTEL_PLANE_CAP_CCS_RC_CC |
-			  INTEL_PLANE_CAP_CCS_MC);
-
 	modifiers = intel_fb_plane_get_modifiers(display, caps);
 
 	ret = drm_universal_plane_init(display->drm, &plane->base,
@@ -2954,6 +3011,9 @@ skl_universal_plane_create(struct intel_display *display,
 					  BIT(DRM_COLOR_YCBCR_FULL_RANGE),
 					  DRM_COLOR_YCBCR_BT709,
 					  DRM_COLOR_YCBCR_LIMITED_RANGE);
+
+	if (DISPLAY_VER(display) >= 12)
+		intel_color_pipeline_plane_init(&plane->base, pipe);
 
 	drm_plane_create_alpha_property(&plane->base);
 	drm_plane_create_blend_mode_property(&plane->base,
@@ -3009,7 +3069,7 @@ skl_get_initial_plane_config(struct intel_crtc *crtc,
 		return;
 	}
 
-	intel_fb = kzalloc(sizeof(*intel_fb), GFP_KERNEL);
+	intel_fb = intel_framebuffer_alloc();
 	if (!intel_fb) {
 		drm_dbg_kms(display->drm, "failed to alloc fb\n");
 		return;
@@ -3037,7 +3097,6 @@ skl_get_initial_plane_config(struct intel_crtc *crtc,
 
 	fourcc = skl_format_to_fourcc(pixel_format,
 				      val & PLANE_CTL_ORDER_RGBX, alpha);
-	fb->format = drm_format_info(fourcc);
 
 	tiling = val & PLANE_CTL_TILED_MASK;
 	switch (tiling) {
@@ -3045,11 +3104,9 @@ skl_get_initial_plane_config(struct intel_crtc *crtc,
 		fb->modifier = DRM_FORMAT_MOD_LINEAR;
 		break;
 	case PLANE_CTL_TILED_X:
-		plane_config->tiling = I915_TILING_X;
 		fb->modifier = I915_FORMAT_MOD_X_TILED;
 		break;
 	case PLANE_CTL_TILED_Y:
-		plane_config->tiling = I915_TILING_Y;
 		if (val & PLANE_CTL_RENDER_DECOMPRESSION_ENABLE)
 			if (DISPLAY_VER(display) >= 14)
 				fb->modifier = I915_FORMAT_MOD_4_TILED_MTL_RC_CCS;
@@ -3089,6 +3146,8 @@ skl_get_initial_plane_config(struct intel_crtc *crtc,
 		MISSING_CASE(tiling);
 		goto error;
 	}
+
+	fb->format = drm_get_format_info(display->drm, fourcc, fb->modifier);
 
 	if (!display->params.enable_dpt &&
 	    intel_fb_modifier_uses_dpt(display, fb->modifier)) {
@@ -3164,21 +3223,18 @@ bool skl_fixup_initial_plane_config(struct intel_crtc *crtc,
 		to_intel_plane_state(plane->base.state);
 	enum plane_id plane_id = plane->id;
 	enum pipe pipe = crtc->pipe;
-	u32 base;
 
 	if (!plane_state->uapi.visible)
 		return false;
-
-	base = intel_plane_ggtt_offset(plane_state);
 
 	/*
 	 * We may have moved the surface to a different
 	 * part of ggtt, make the plane aware of that.
 	 */
-	if (plane_config->base == base)
+	if (plane_config->base == plane_state->surf)
 		return false;
 
-	intel_de_write(display, PLANE_SURF(pipe, plane_id), base);
+	intel_de_write(display, PLANE_SURF(pipe, plane_id), plane_state->surf);
 
 	return true;
 }

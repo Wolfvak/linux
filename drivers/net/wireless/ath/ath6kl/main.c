@@ -485,7 +485,7 @@ void ath6kl_connect_ap_mode_sta(struct ath6kl_vif *vif, u16 aid, u8 *mac_addr,
 			   keymgmt, ucipher, auth, apsd_info);
 
 	/* send event to application */
-	sinfo = kzalloc(sizeof(*sinfo), GFP_KERNEL);
+	sinfo = kzalloc_obj(*sinfo);
 	if (!sinfo)
 		return;
 
@@ -583,7 +583,7 @@ static int ath6kl_commit_ch_switch(struct ath6kl_vif *vif, u16 channel)
 	switch (vif->nw_type) {
 	case AP_NETWORK:
 		/*
-		 * reconfigure any saved RSN IE capabilites in the beacon /
+		 * reconfigure any saved RSN IE capabilities in the beacon /
 		 * probe response to stay in sync with the supplicant.
 		 */
 		if (vif->rsn_capab &&
@@ -1249,8 +1249,8 @@ static void ath6kl_set_multicast_list(struct net_device *ndev)
 		}
 
 		if (!found) {
-			mc_filter = kzalloc(sizeof(struct ath6kl_mc_filter),
-					    GFP_ATOMIC);
+			mc_filter = kzalloc_obj(struct ath6kl_mc_filter,
+						GFP_ATOMIC);
 			if (!mc_filter) {
 				WARN_ON(1);
 				goto out;

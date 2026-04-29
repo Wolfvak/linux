@@ -321,8 +321,8 @@ static void pata_parport_drain_fifo(struct ata_queued_cmd *qc)
 static struct ata_port_operations pata_parport_port_ops = {
 	.inherits		= &ata_sff_port_ops,
 
-	.softreset		= pata_parport_softreset,
-	.hardreset		= NULL,
+	.reset.softreset	= pata_parport_softreset,
+	.reset.hardreset	= NULL,
 
 	.sff_dev_select		= pata_parport_dev_select,
 	.sff_set_devctl		= pata_parport_set_devctl,
@@ -511,7 +511,7 @@ static struct pi_adapter *pi_init_one(struct parport *parport,
 	if (id < 0)
 		return NULL;
 
-	pi = kzalloc(sizeof(struct pi_adapter), GFP_KERNEL);
+	pi = kzalloc_obj(struct pi_adapter);
 	if (!pi) {
 		ida_free(&pata_parport_bus_dev_ids, id);
 		return NULL;

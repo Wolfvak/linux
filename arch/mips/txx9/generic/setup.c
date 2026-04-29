@@ -200,7 +200,7 @@ static void __init preprocess_cmdline(void)
 	static char cmdline[COMMAND_LINE_SIZE] __initdata;
 	char *s;
 
-	strcpy(cmdline, arcs_cmdline);
+	strscpy(cmdline, arcs_cmdline);
 	s = cmdline;
 	arcs_cmdline[0] = '\0';
 	while (s && *s) {
@@ -270,7 +270,7 @@ void __init prom_init(void)
 	preprocess_cmdline();
 	select_board();
 
-	strcpy(txx9_system_type, txx9_board_vec->system);
+	strscpy(txx9_system_type, txx9_board_vec->system);
 
 	txx9_board_vec->prom_init();
 }
@@ -648,14 +648,14 @@ void __init txx9_iocled_init(unsigned long baseaddr,
 
 	if (!deftriggers)
 		deftriggers = default_triggers;
-	iocled = kzalloc(sizeof(*iocled), GFP_KERNEL);
+	iocled = kzalloc_obj(*iocled);
 	if (!iocled)
 		return;
 	iocled->mmioaddr = ioremap(baseaddr, 1);
 	if (!iocled->mmioaddr)
 		goto out_free;
 	iocled->chip.get = txx9_iocled_get;
-	iocled->chip.set_rv = txx9_iocled_set;
+	iocled->chip.set = txx9_iocled_set;
 	iocled->chip.direction_input = txx9_iocled_dir_in;
 	iocled->chip.direction_output = txx9_iocled_dir_out;
 	iocled->chip.label = "iocled";
@@ -776,7 +776,7 @@ struct txx9_sramc_dev {
 };
 
 static ssize_t txx9_sram_read(struct file *filp, struct kobject *kobj,
-			      struct bin_attribute *bin_attr,
+			      const struct bin_attribute *bin_attr,
 			      char *buf, loff_t pos, size_t size)
 {
 	struct txx9_sramc_dev *dev = bin_attr->private;
@@ -791,7 +791,7 @@ static ssize_t txx9_sram_read(struct file *filp, struct kobject *kobj,
 }
 
 static ssize_t txx9_sram_write(struct file *filp, struct kobject *kobj,
-			       struct bin_attribute *bin_attr,
+			       const struct bin_attribute *bin_attr,
 			       char *buf, loff_t pos, size_t size)
 {
 	struct txx9_sramc_dev *dev = bin_attr->private;
@@ -822,7 +822,7 @@ void __init txx9_sramc_init(struct resource *r)
 	err = subsys_system_register(&txx9_sramc_subsys, NULL);
 	if (err)
 		return;
-	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+	dev = kzalloc_obj(*dev);
 	if (!dev)
 		return;
 	size = resource_size(r);

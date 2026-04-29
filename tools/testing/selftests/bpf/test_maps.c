@@ -535,7 +535,7 @@ static void test_devmap_hash(unsigned int task, void *data)
 static void test_queuemap(unsigned int task, void *data)
 {
 	const int MAP_SIZE = 32;
-	__u32 vals[MAP_SIZE + MAP_SIZE/2], val;
+	__u32 vals[MAP_SIZE + MAP_SIZE/2], val = 0;
 	int fd, i;
 
 	/* Fill test values to be used */
@@ -591,7 +591,7 @@ static void test_queuemap(unsigned int task, void *data)
 static void test_stackmap(unsigned int task, void *data)
 {
 	const int MAP_SIZE = 32;
-	__u32 vals[MAP_SIZE + MAP_SIZE/2], val;
+	__u32 vals[MAP_SIZE + MAP_SIZE/2], val = 0;
 	int fd, i;
 
 	/* Fill test values to be used */
@@ -1399,7 +1399,8 @@ static void test_map_stress(void)
 static bool can_retry(int err)
 {
 	return (err == EAGAIN || err == EBUSY ||
-		(err == ENOMEM && map_opts.map_flags == BPF_F_NO_PREALLOC));
+		((err == ENOMEM || err == E2BIG) &&
+		 map_opts.map_flags == BPF_F_NO_PREALLOC));
 }
 
 int map_update_retriable(int map_fd, const void *key, const void *value, int flags, int attempts,

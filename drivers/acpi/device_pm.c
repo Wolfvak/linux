@@ -586,8 +586,7 @@ acpi_status acpi_add_pm_notifier(struct acpi_device *adev, struct device *dev,
 		goto out;
 
 	mutex_lock(&acpi_pm_notifier_lock);
-	adev->wakeup.ws = wakeup_source_register(&adev->dev,
-						 dev_name(&adev->dev));
+	adev->wakeup.ws = wakeup_source_register(dev, dev_name(&adev->dev));
 	adev->wakeup.context.dev = dev;
 	adev->wakeup.context.func = func;
 	adev->wakeup.flags.notifier_present = true;
@@ -1119,6 +1118,8 @@ int acpi_subsys_prepare(struct device *dev)
 {
 	struct acpi_device *adev = ACPI_COMPANION(dev);
 
+	dev_pm_set_strict_midlayer(dev, true);
+
 	if (dev->driver && dev->driver->pm && dev->driver->pm->prepare) {
 		int ret = dev->driver->pm->prepare(dev);
 
@@ -1147,6 +1148,8 @@ void acpi_subsys_complete(struct device *dev)
 	 */
 	if (pm_runtime_suspended(dev) && pm_resume_via_firmware())
 		pm_request_resume(dev);
+
+	dev_pm_set_strict_midlayer(dev, false);
 }
 EXPORT_SYMBOL_GPL(acpi_subsys_complete);
 
@@ -1248,7 +1251,7 @@ static int acpi_subsys_resume_early(struct device *dev)
 		return 0;
 
 	if (pm && !pm->resume_early) {
-		dev_dbg(dev, "postponing D0 transition to normal resume stage\n");
+		dev_dbg(dev, "Postponing ACPI PM to normal resume stage\n");
 		return 0;
 	}
 
@@ -1270,7 +1273,7 @@ static int acpi_subsys_resume(struct device *dev)
 	int ret = 0;
 
 	if (!dev_pm_skip_resume(dev) && pm && !pm->resume_early) {
-		dev_dbg(dev, "executing postponed D0 transition\n");
+		dev_dbg(dev, "Applying postponed ACPI PM\n");
 		ret = acpi_dev_resume(dev);
 	}
 
@@ -1362,6 +1365,8 @@ static int acpi_subsys_poweroff_noirq(struct device *dev)
 }
 #endif /* CONFIG_PM_SLEEP */
 
+static void acpi_dev_pm_detach(struct device *dev, bool power_off);
+
 static struct dev_pm_domain acpi_general_pm_domain = {
 	.ops = {
 		.runtime_suspend = acpi_subsys_runtime_suspend,
@@ -1382,6 +1387,7 @@ static struct dev_pm_domain acpi_general_pm_domain = {
 		.restore_early = acpi_subsys_restore_early,
 #endif
 	},
+	.detach = acpi_dev_pm_detach,
 };
 
 /**
@@ -1465,7 +1471,6 @@ int acpi_dev_pm_attach(struct device *dev, bool power_on)
 		acpi_device_wakeup_disable(adev);
 	}
 
-	dev->pm_domain->detach = acpi_dev_pm_detach;
 	return 1;
 }
 EXPORT_SYMBOL_GPL(acpi_dev_pm_attach);

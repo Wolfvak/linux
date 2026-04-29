@@ -104,7 +104,7 @@ struct vmci_ctx *vmci_ctx_create(u32 cid, u32 priv_flags,
 		goto err_out;
 	}
 
-	context = kzalloc(sizeof(*context), GFP_KERNEL);
+	context = kzalloc_obj(*context);
 	if (!context) {
 		pr_warn("Failed to allocate memory for VMCI context\n");
 		error = -ENOMEM;
@@ -251,6 +251,8 @@ static int ctx_fire_notification(u32 context_id, u32 priv_flags)
 		ev.msg.hdr.src = vmci_make_handle(VMCI_HYPERVISOR_CONTEXT_ID,
 						  VMCI_CONTEXT_RESOURCE_ID);
 		ev.msg.hdr.payload_size = sizeof(ev) - sizeof(ev.msg.hdr);
+		memset((char*)&ev + sizeof(ev.msg.hdr), 0,
+			ev.msg.hdr.payload_size);
 		ev.msg.event_data.event = VMCI_EVENT_CTX_REMOVED;
 		ev.payload.context_id = context_id;
 
@@ -264,28 +266,6 @@ static int ctx_fire_notification(u32 context_id, u32 priv_flags)
 		}
 	}
 	vmci_handle_arr_destroy(subscriber_array);
-
-	return VMCI_SUCCESS;
-}
-
-/*
- * Returns the current number of pending datagrams. The call may
- * also serve as a synchronization point for the datagram queue,
- * as no enqueue operations can occur concurrently.
- */
-int vmci_ctx_pending_datagrams(u32 cid, u32 *pending)
-{
-	struct vmci_ctx *context;
-
-	context = vmci_ctx_get(cid);
-	if (context == NULL)
-		return VMCI_ERROR_INVALID_ARGS;
-
-	spin_lock(&context->lock);
-	if (pending)
-		*pending = context->pending_datagrams;
-	spin_unlock(&context->lock);
-	vmci_ctx_put(context);
 
 	return VMCI_SUCCESS;
 }
@@ -314,7 +294,7 @@ int vmci_ctx_enqueue_datagram(u32 cid, struct vmci_datagram *dg)
 	}
 
 	/* Allocate guest call entry and add it to the target VM's queue. */
-	dq_entry = kmalloc(sizeof(*dq_entry), GFP_KERNEL);
+	dq_entry = kmalloc_obj(*dq_entry);
 	if (dq_entry == NULL) {
 		pr_warn("Failed to allocate memory for datagram\n");
 		vmci_ctx_put(context);
@@ -618,7 +598,7 @@ int vmci_ctx_add_notification(u32 context_id, u32 remote_cid)
 		goto out;
 	}
 
-	notifier = kmalloc(sizeof(struct vmci_handle_list), GFP_KERNEL);
+	notifier = kmalloc_obj(struct vmci_handle_list);
 	if (!notifier) {
 		result = VMCI_ERROR_NO_MEM;
 		goto out;
@@ -989,38 +969,6 @@ int vmci_ctx_dbell_destroy(u32 context_id, struct vmci_handle handle)
 
 	return vmci_handle_is_invalid(removed_handle) ?
 	    VMCI_ERROR_NOT_FOUND : VMCI_SUCCESS;
-}
-
-/*
- * Unregisters all doorbell handles that were previously
- * registered with vmci_ctx_dbell_create.
- */
-int vmci_ctx_dbell_destroy_all(u32 context_id)
-{
-	struct vmci_ctx *context;
-	struct vmci_handle handle;
-
-	if (context_id == VMCI_INVALID_ID)
-		return VMCI_ERROR_INVALID_ARGS;
-
-	context = vmci_ctx_get(context_id);
-	if (context == NULL)
-		return VMCI_ERROR_NOT_FOUND;
-
-	spin_lock(&context->lock);
-	do {
-		struct vmci_handle_arr *arr = context->doorbell_array;
-		handle = vmci_handle_arr_remove_tail(arr);
-	} while (!vmci_handle_is_invalid(handle));
-	do {
-		struct vmci_handle_arr *arr = context->pending_doorbell_array;
-		handle = vmci_handle_arr_remove_tail(arr);
-	} while (!vmci_handle_is_invalid(handle));
-	spin_unlock(&context->lock);
-
-	vmci_ctx_put(context);
-
-	return VMCI_SUCCESS;
 }
 
 /*

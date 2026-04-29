@@ -5,7 +5,7 @@
 #define ARCH_SUPPORTS_FTRACE_OPS 1
 #define MCOUNT_INSN_SIZE	6
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 #include <asm/stacktrace.h>
 
 static __always_inline unsigned long return_address(unsigned int n)
@@ -105,28 +105,11 @@ static inline void arch_ftrace_set_direct_caller(struct ftrace_regs *fregs, unsi
 }
 #endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS */
 
-/*
- * Even though the system call numbers are identical for s390/s390x a
- * different system call table is used for compat tasks. This may lead
- * to e.g. incorrect or missing trace event sysfs files.
- * Therefore simply do not trace compat system calls at all.
- * See kernel/trace/trace_syscalls.c.
- */
-#define ARCH_TRACE_IGNORE_COMPAT_SYSCALLS
-static inline bool arch_trace_is_compat_syscall(struct pt_regs *regs)
-{
-	return is_compat_task();
-}
-
 #define ARCH_HAS_SYSCALL_MATCH_SYM_NAME
 static inline bool arch_syscall_match_sym_name(const char *sym,
 					       const char *name)
 {
-	/*
-	 * Skip __s390_ and __s390x_ prefix - due to compat wrappers
-	 * and aliasing some symbols of 64 bit system call functions
-	 * may get the __s390_ prefix instead of the __s390x_ prefix.
-	 */
+	/* Skip the __s390x_ prefix. */
 	return !strcmp(sym + 7, name) || !strcmp(sym + 8, name);
 }
 
@@ -134,7 +117,7 @@ void ftrace_graph_func(unsigned long ip, unsigned long parent_ip,
 		       struct ftrace_ops *op, struct ftrace_regs *fregs);
 #define ftrace_graph_func ftrace_graph_func
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #ifdef CONFIG_FUNCTION_TRACER
 

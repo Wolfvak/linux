@@ -144,6 +144,12 @@ static u32 rtw_sdio_to_io_address(struct rtw_dev *rtwdev, u32 addr,
 
 static bool rtw_sdio_use_direct_io(struct rtw_dev *rtwdev, u32 addr)
 {
+	bool might_indirect_under_power_off = rtwdev->chip->id == RTW_CHIP_TYPE_8822C;
+
+	if (!test_bit(RTW_FLAG_POWERON, rtwdev->flags) &&
+	    !rtw_sdio_is_bus_addr(addr) && might_indirect_under_power_off)
+		return false;
+
 	return !rtw_sdio_is_sdio30_supported(rtwdev) ||
 		rtw_sdio_is_bus_addr(addr);
 }
@@ -547,7 +553,7 @@ static int rtw_sdio_check_free_txpg(struct rtw_dev *rtwdev, u8 queue,
 {
 	unsigned int pages_free, pages_needed;
 
-	if (rtw_chip_wcpu_11n(rtwdev)) {
+	if (rtw_chip_wcpu_8051(rtwdev)) {
 		u32 free_txpg;
 
 		free_txpg = rtw_sdio_read32(rtwdev, REG_SDIO_FREE_TXPG);
@@ -1030,7 +1036,7 @@ static void rtw_sdio_rx_isr(struct rtw_dev *rtwdev)
 	u32 rx_len, hisr, total_rx_bytes = 0;
 
 	do {
-		if (rtw_chip_wcpu_11n(rtwdev))
+		if (rtw_chip_wcpu_8051(rtwdev))
 			rx_len = rtw_read16(rtwdev, REG_SDIO_RX0_REQ_LEN);
 		else
 			rx_len = rtw_read32(rtwdev, REG_SDIO_RX0_REQ_LEN);
@@ -1042,7 +1048,7 @@ static void rtw_sdio_rx_isr(struct rtw_dev *rtwdev)
 
 		total_rx_bytes += rx_len;
 
-		if (rtw_chip_wcpu_11n(rtwdev)) {
+		if (rtw_chip_wcpu_8051(rtwdev)) {
 			/* Stop if no more RX requests are pending, even if
 			 * rx_len could be greater than zero in the next
 			 * iteration. This is needed because the RX buffer may
@@ -1054,7 +1060,7 @@ static void rtw_sdio_rx_isr(struct rtw_dev *rtwdev)
 			 */
 			hisr = rtw_read32(rtwdev, REG_SDIO_HISR);
 		} else {
-			/* RTW_WCPU_11AC chips have improved hardware or
+			/* RTW_WCPU_3081 chips have improved hardware or
 			 * firmware and can use rx_len unconditionally.
 			 */
 			hisr = REG_SDIO_HISR_RX_REQUEST;
@@ -1284,8 +1290,7 @@ static int rtw_sdio_init_tx(struct rtw_dev *rtwdev)
 
 	for (i = 0; i < RTK_MAX_TX_QUEUE_NUM; i++)
 		skb_queue_head_init(&rtwsdio->tx_queue[i]);
-	rtwsdio->tx_handler_data = kmalloc(sizeof(*rtwsdio->tx_handler_data),
-					   GFP_KERNEL);
+	rtwsdio->tx_handler_data = kmalloc_obj(*rtwsdio->tx_handler_data);
 	if (!rtwsdio->tx_handler_data)
 		goto err_destroy_wq;
 
@@ -1408,9 +1413,8 @@ void rtw_sdio_remove(struct sdio_func *sdio_func)
 }
 EXPORT_SYMBOL(rtw_sdio_remove);
 
-void rtw_sdio_shutdown(struct device *dev)
+void rtw_sdio_shutdown(struct sdio_func *sdio_func)
 {
-	struct sdio_func *sdio_func = dev_to_sdio_func(dev);
 	const struct rtw_chip_info *chip;
 	struct ieee80211_hw *hw;
 	struct rtw_dev *rtwdev;

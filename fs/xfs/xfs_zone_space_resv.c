@@ -3,13 +3,14 @@
  * Copyright (c) 2023-2025 Christoph Hellwig.
  * Copyright (c) 2024-2025, Western Digital Corporation or its affiliates.
  */
-#include "xfs.h"
+#include "xfs_platform.h"
 #include "xfs_shared.h"
 #include "xfs_format.h"
 #include "xfs_trans_resv.h"
 #include "xfs_mount.h"
 #include "xfs_inode.h"
 #include "xfs_rtbitmap.h"
+#include "xfs_icache.h"
 #include "xfs_zone_alloc.h"
 #include "xfs_zone_priv.h"
 #include "xfs_zones.h"
@@ -53,12 +54,10 @@ xfs_zoned_default_resblks(
 {
 	switch (ctr) {
 	case XC_FREE_RTEXTENTS:
-		return (uint64_t)XFS_RESERVED_ZONES *
-			mp->m_groups[XG_TYPE_RTG].blocks +
-			mp->m_sb.sb_rtreserved;
+		return xfs_rtgs_to_rfsbs(mp, XFS_RESERVED_ZONES) +
+				mp->m_sb.sb_rtreserved;
 	case XC_FREE_RTAVAILABLE:
-		return (uint64_t)XFS_GC_ZONES *
-			mp->m_groups[XG_TYPE_RTG].blocks;
+		return xfs_rtgs_to_rfsbs(mp, XFS_GC_ZONES);
 	default:
 		ASSERT(0);
 		return 0;
@@ -117,11 +116,10 @@ xfs_zoned_space_wait_error(
 
 static int
 xfs_zoned_reserve_available(
-	struct xfs_inode		*ip,
+	struct xfs_mount		*mp,
 	xfs_filblks_t			count_fsb,
 	unsigned int			flags)
 {
-	struct xfs_mount		*mp = ip->i_mount;
 	struct xfs_zone_info		*zi = mp->m_zone_info;
 	struct xfs_zone_reservation	reservation = {
 		.task		= current,
@@ -174,7 +172,7 @@ xfs_zoned_reserve_available(
 		 * processing a pending GC request give up as we're fully out
 		 * of space.
 		 */
-		if (!xfs_group_marked(mp, XG_TYPE_RTG, XFS_RTG_RECLAIMABLE) &&
+		if (!xfs_zoned_have_reclaimable(mp->m_zone_info) &&
 		    !xfs_is_zonegc_running(mp))
 			break;
 
@@ -198,11 +196,10 @@ xfs_zoned_reserve_available(
  */
 static int
 xfs_zoned_reserve_extents_greedy(
-	struct xfs_inode		*ip,
+	struct xfs_mount		*mp,
 	xfs_filblks_t			*count_fsb,
 	unsigned int			flags)
 {
-	struct xfs_mount		*mp = ip->i_mount;
 	struct xfs_zone_info		*zi = mp->m_zone_info;
 	s64				len = *count_fsb;
 	int				error = -ENOSPC;
@@ -220,12 +217,11 @@ xfs_zoned_reserve_extents_greedy(
 
 int
 xfs_zoned_space_reserve(
-	struct xfs_inode		*ip,
+	struct xfs_mount		*mp,
 	xfs_filblks_t			count_fsb,
 	unsigned int			flags,
 	struct xfs_zone_alloc_ctx	*ac)
 {
-	struct xfs_mount		*mp = ip->i_mount;
 	int				error;
 
 	ASSERT(ac->reserved_blocks == 0);
@@ -233,12 +229,17 @@ xfs_zoned_space_reserve(
 
 	error = xfs_dec_freecounter(mp, XC_FREE_RTEXTENTS, count_fsb,
 			flags & XFS_ZR_RESERVED);
+	if (error == -ENOSPC && !(flags & XFS_ZR_NOWAIT)) {
+		xfs_inodegc_flush(mp);
+		error = xfs_dec_freecounter(mp, XC_FREE_RTEXTENTS, count_fsb,
+				flags & XFS_ZR_RESERVED);
+	}
 	if (error == -ENOSPC && (flags & XFS_ZR_GREEDY) && count_fsb > 1)
-		error = xfs_zoned_reserve_extents_greedy(ip, &count_fsb, flags);
+		error = xfs_zoned_reserve_extents_greedy(mp, &count_fsb, flags);
 	if (error)
 		return error;
 
-	error = xfs_zoned_reserve_available(ip, count_fsb, flags);
+	error = xfs_zoned_reserve_available(mp, count_fsb, flags);
 	if (error) {
 		xfs_add_freecounter(mp, XC_FREE_RTEXTENTS, count_fsb);
 		return error;
@@ -249,12 +250,10 @@ xfs_zoned_space_reserve(
 
 void
 xfs_zoned_space_unreserve(
-	struct xfs_inode		*ip,
+	struct xfs_mount		*mp,
 	struct xfs_zone_alloc_ctx	*ac)
 {
 	if (ac->reserved_blocks > 0) {
-		struct xfs_mount	*mp = ip->i_mount;
-
 		xfs_zoned_add_available(mp, ac->reserved_blocks);
 		xfs_add_freecounter(mp, XC_FREE_RTEXTENTS, ac->reserved_blocks);
 	}

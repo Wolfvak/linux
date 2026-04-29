@@ -25,6 +25,7 @@
 
 #include <drm/drm_drv.h>
 #include <drm/drm_managed.h>
+#include <drm/drm_print.h>
 #include <uapi/drm/v3d_drm.h>
 
 #include "v3d_drv.h"
@@ -46,6 +47,7 @@ MODULE_PARM_DESC(super_pages, "Enable/Disable Super Pages support.");
 static int v3d_get_param_ioctl(struct drm_device *dev, void *data,
 			       struct drm_file *file_priv)
 {
+	struct v3d_file_priv *v3d_priv = file_priv->driver_priv;
 	struct v3d_dev *v3d = to_v3d_dev(dev);
 	struct drm_v3d_get_param *args = data;
 	static const u32 reg_map[] = {
@@ -105,10 +107,20 @@ static int v3d_get_param_ioctl(struct drm_device *dev, void *data,
 		args->value = v3d->perfmon_info.max_counters;
 		return 0;
 	case DRM_V3D_PARAM_SUPPORTS_SUPER_PAGES:
-		args->value = !!v3d->gemfs;
+		args->value = !!drm_gem_get_huge_mnt(dev);
+		return 0;
+	case DRM_V3D_PARAM_GLOBAL_RESET_COUNTER:
+		mutex_lock(&v3d->reset_lock);
+		args->value = v3d->reset_counter;
+		mutex_unlock(&v3d->reset_lock);
+		return 0;
+	case DRM_V3D_PARAM_CONTEXT_RESET_COUNTER:
+		mutex_lock(&v3d->reset_lock);
+		args->value = v3d_priv->reset_counter;
+		mutex_unlock(&v3d->reset_lock);
 		return 0;
 	default:
-		DRM_DEBUG("Unknown parameter %d\n", args->param);
+		drm_dbg(dev, "Unknown parameter %d\n", args->param);
 		return -EINVAL;
 	}
 }
@@ -121,7 +133,7 @@ v3d_open(struct drm_device *dev, struct drm_file *file)
 	struct drm_gpu_scheduler *sched;
 	int i;
 
-	v3d_priv = kzalloc(sizeof(*v3d_priv), GFP_KERNEL);
+	v3d_priv = kzalloc_obj(*v3d_priv);
 	if (!v3d_priv)
 		return -ENOMEM;
 
@@ -146,11 +158,23 @@ v3d_open(struct drm_device *dev, struct drm_file *file)
 static void
 v3d_postclose(struct drm_device *dev, struct drm_file *file)
 {
+	struct v3d_dev *v3d = to_v3d_dev(dev);
 	struct v3d_file_priv *v3d_priv = file->driver_priv;
+	unsigned long irqflags;
 	enum v3d_queue q;
 
-	for (q = 0; q < V3D_MAX_QUEUES; q++)
+	for (q = 0; q < V3D_MAX_QUEUES; q++) {
+		struct v3d_queue_state *queue = &v3d->queue[q];
+		struct v3d_job *job = queue->active_job;
+
 		drm_sched_entity_destroy(&v3d_priv->sched_entity[q]);
+
+		if (job && job->base.entity == &v3d_priv->sched_entity[q]) {
+			spin_lock_irqsave(&queue->queue_lock, irqflags);
+			job->file_priv = NULL;
+			spin_unlock_irqrestore(&queue->queue_lock, irqflags);
+		}
+	}
 
 	v3d_perfmon_close_file(v3d_priv);
 	kfree(v3d_priv);
@@ -273,7 +297,7 @@ v3d_idle_sms(struct v3d_dev *v3d)
 
 	if (wait_for((V3D_GET_FIELD(V3D_SMS_READ(V3D_SMS_TEE_CS),
 				    V3D_SMS_STATE) == V3D_SMS_IDLE), 100)) {
-		DRM_ERROR("Failed to power up SMS\n");
+		drm_err(&v3d->drm, "Failed to power up SMS\n");
 	}
 
 	v3d_reset_sms(v3d);
@@ -289,7 +313,7 @@ v3d_power_off_sms(struct v3d_dev *v3d)
 
 	if (wait_for((V3D_GET_FIELD(V3D_SMS_READ(V3D_SMS_TEE_CS),
 				    V3D_SMS_STATE) == V3D_SMS_POWER_OFF_STATE), 100)) {
-		DRM_ERROR("Failed to power off SMS\n");
+		drm_err(&v3d->drm, "Failed to power off SMS\n");
 	}
 }
 
@@ -353,6 +377,8 @@ static int v3d_platform_drm_probe(struct platform_device *pdev)
 	ret = dma_set_mask_and_coherent(dev, mask);
 	if (ret)
 		goto clk_disable;
+
+	dma_set_max_seg_size(&pdev->dev, UINT_MAX);
 
 	v3d->va_width = 30 + V3D_GET_FIELD(mmu_debug, V3D_MMU_VA_WIDTH);
 

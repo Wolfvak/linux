@@ -8,6 +8,7 @@
 
 #include <crypto/sha2.h>
 #include <linux/fscrypt.h>
+#include <linux/base64.h>
 
 #define CEPH_FSCRYPT_BLOCK_SHIFT   12
 #define CEPH_FSCRYPT_BLOCK_SIZE    (_AC(1, UL) << CEPH_FSCRYPT_BLOCK_SHIFT)
@@ -89,11 +90,6 @@ static inline u32 ceph_fscrypt_auth_len(struct ceph_fscrypt_auth *fa)
  */
 #define CEPH_NOHASH_NAME_MAX (180 - SHA256_DIGEST_SIZE)
 
-#define CEPH_BASE64_CHARS(nbytes) DIV_ROUND_UP((nbytes) * 4, 3)
-
-int ceph_base64_encode(const u8 *src, int srclen, char *dst);
-int ceph_base64_decode(const char *src, int srclen, u8 *dst);
-
 void ceph_fscrypt_set_ops(struct super_block *sb);
 
 void ceph_fscrypt_free_dummy_policy(struct ceph_fs_client *fsc);
@@ -102,10 +98,7 @@ int ceph_fscrypt_prepare_context(struct inode *dir, struct inode *inode,
 				 struct ceph_acl_sec_ctx *as);
 void ceph_fscrypt_as_ctx_to_req(struct ceph_mds_request *req,
 				struct ceph_acl_sec_ctx *as);
-int ceph_encode_encrypted_dname(struct inode *parent, struct qstr *d_name,
-				char *buf);
-int ceph_encode_encrypted_fname(struct inode *parent, struct dentry *dentry,
-				char *buf);
+int ceph_encode_encrypted_dname(struct inode *parent, char *buf, int len);
 
 static inline int ceph_fname_alloc_buffer(struct inode *parent,
 					  struct fscrypt_str *fname)
@@ -155,15 +148,14 @@ int ceph_fscrypt_decrypt_block_inplace(const struct inode *inode,
 				  unsigned int offs, u64 lblk_num);
 int ceph_fscrypt_encrypt_block_inplace(const struct inode *inode,
 				  struct page *page, unsigned int len,
-				  unsigned int offs, u64 lblk_num,
-				  gfp_t gfp_flags);
+				  unsigned int offs, u64 lblk_num);
 int ceph_fscrypt_decrypt_pages(struct inode *inode, struct page **page,
 			       u64 off, int len);
 int ceph_fscrypt_decrypt_extents(struct inode *inode, struct page **page,
 				 u64 off, struct ceph_sparse_extent *map,
 				 u32 ext_cnt);
 int ceph_fscrypt_encrypt_pages(struct inode *inode, struct page **page, u64 off,
-			       int len, gfp_t gfp);
+			       int len);
 
 static inline struct page *ceph_fscrypt_pagecache_page(struct page *page)
 {
@@ -194,17 +186,10 @@ static inline void ceph_fscrypt_as_ctx_to_req(struct ceph_mds_request *req,
 {
 }
 
-static inline int ceph_encode_encrypted_dname(struct inode *parent,
-					      struct qstr *d_name, char *buf)
+static inline int ceph_encode_encrypted_dname(struct inode *parent, char *buf,
+					      int len)
 {
-	memcpy(buf, d_name->name, d_name->len);
-	return d_name->len;
-}
-
-static inline int ceph_encode_encrypted_fname(struct inode *parent,
-					      struct dentry *dentry, char *buf)
-{
-	return -EOPNOTSUPP;
+	return len;
 }
 
 static inline int ceph_fname_alloc_buffer(struct inode *parent,
@@ -246,8 +231,7 @@ static inline int ceph_fscrypt_decrypt_block_inplace(const struct inode *inode,
 
 static inline int ceph_fscrypt_encrypt_block_inplace(const struct inode *inode,
 					  struct page *page, unsigned int len,
-					  unsigned int offs, u64 lblk_num,
-					  gfp_t gfp_flags)
+					  unsigned int offs, u64 lblk_num)
 {
 	return 0;
 }
@@ -269,7 +253,7 @@ static inline int ceph_fscrypt_decrypt_extents(struct inode *inode,
 
 static inline int ceph_fscrypt_encrypt_pages(struct inode *inode,
 					     struct page **page, u64 off,
-					     int len, gfp_t gfp)
+					     int len)
 {
 	return 0;
 }

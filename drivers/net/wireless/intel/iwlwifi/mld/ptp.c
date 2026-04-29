@@ -121,6 +121,12 @@ static int iwl_mld_ptp_gettime(struct ptp_clock_info *ptp,
 	return 0;
 }
 
+static int iwl_mld_ptp_settime(struct ptp_clock_info *ptp,
+			       const struct timespec64 *ts)
+{
+	return -EOPNOTSUPP;
+}
+
 static int iwl_mld_ptp_adjtime(struct ptp_clock_info *ptp, s64 delta)
 {
 	struct iwl_mld *mld = container_of(ptp, struct iwl_mld,
@@ -279,6 +285,7 @@ void iwl_mld_ptp_init(struct iwl_mld *mld)
 
 	mld->ptp_data.ptp_clock_info.owner = THIS_MODULE;
 	mld->ptp_data.ptp_clock_info.gettime64 = iwl_mld_ptp_gettime;
+	mld->ptp_data.ptp_clock_info.settime64 = iwl_mld_ptp_settime;
 	mld->ptp_data.ptp_clock_info.max_adj = 0x7fffffff;
 	mld->ptp_data.ptp_clock_info.adjtime = iwl_mld_ptp_adjtime;
 	mld->ptp_data.ptp_clock_info.adjfine = iwl_mld_ptp_adjfine;
@@ -299,18 +306,18 @@ void iwl_mld_ptp_init(struct iwl_mld *mld)
 			PTR_ERR(mld->ptp_data.ptp_clock));
 		mld->ptp_data.ptp_clock = NULL;
 	} else {
-		IWL_INFO(mld, "Registered PHC clock: %s, with index: %d\n",
-			 mld->ptp_data.ptp_clock_info.name,
-			 ptp_clock_index(mld->ptp_data.ptp_clock));
+		IWL_DEBUG_INFO(mld, "Registered PHC clock: %s, with index: %d\n",
+			       mld->ptp_data.ptp_clock_info.name,
+			       ptp_clock_index(mld->ptp_data.ptp_clock));
 	}
 }
 
 void iwl_mld_ptp_remove(struct iwl_mld *mld)
 {
 	if (mld->ptp_data.ptp_clock) {
-		IWL_INFO(mld, "Unregistering PHC clock: %s, with index: %d\n",
-			 mld->ptp_data.ptp_clock_info.name,
-			 ptp_clock_index(mld->ptp_data.ptp_clock));
+		IWL_DEBUG_INFO(mld, "Unregistering PHC clock: %s, with index: %d\n",
+			       mld->ptp_data.ptp_clock_info.name,
+			       ptp_clock_index(mld->ptp_data.ptp_clock));
 
 		ptp_clock_unregister(mld->ptp_data.ptp_clock);
 		mld->ptp_data.ptp_clock = NULL;

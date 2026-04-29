@@ -24,17 +24,20 @@
 #include <linux/debugfs.h>
 #include <linux/kernel.h>
 
+#include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 
-#include "i915_drv.h"
-#include "i915_irq.h"
 #include "intel_connector.h"
+#include "intel_display_core.h"
 #include "intel_display_power.h"
 #include "intel_display_rpm.h"
 #include "intel_display_types.h"
+#include "intel_display_utils.h"
+#include "intel_dp.h"
 #include "intel_hdcp.h"
 #include "intel_hotplug.h"
 #include "intel_hotplug_irq.h"
+#include "intel_parent.h"
 
 /**
  * DOC: Hotplug
@@ -191,40 +194,34 @@ static bool detection_work_enabled(struct intel_display *display)
 static bool
 mod_delayed_detection_work(struct intel_display *display, struct delayed_work *work, int delay)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
-
 	lockdep_assert_held(&display->irq.lock);
 
 	if (!detection_work_enabled(display))
 		return false;
 
-	return mod_delayed_work(i915->unordered_wq, work, delay);
+	return mod_delayed_work(display->wq.unordered, work, delay);
 }
 
 static bool
 queue_delayed_detection_work(struct intel_display *display, struct delayed_work *work, int delay)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
-
 	lockdep_assert_held(&display->irq.lock);
 
 	if (!detection_work_enabled(display))
 		return false;
 
-	return queue_delayed_work(i915->unordered_wq, work, delay);
+	return queue_delayed_work(display->wq.unordered, work, delay);
 }
 
 static bool
 queue_detection_work(struct intel_display *display, struct work_struct *work)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
-
 	lockdep_assert_held(&display->irq.lock);
 
 	if (!detection_work_enabled(display))
 		return false;
 
-	return queue_work(i915->unordered_wq, work);
+	return queue_work(display->wq.unordered, work);
 }
 
 static void
@@ -788,7 +785,7 @@ static void i915_hpd_poll_init_work(struct work_struct *work)
 		container_of(work, typeof(*display), hotplug.poll_init_work);
 	struct drm_connector_list_iter conn_iter;
 	struct intel_connector *connector;
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 	bool enabled;
 
 	mutex_lock(&display->drm->mode_config.mutex);
@@ -905,8 +902,13 @@ void intel_hpd_poll_enable(struct intel_display *display)
  */
 void intel_hpd_poll_disable(struct intel_display *display)
 {
+	struct intel_encoder *encoder;
+
 	if (!HAS_DISPLAY(display))
 		return;
+
+	for_each_intel_dp(display->drm, encoder)
+		intel_dp_dpcd_set_probe(enc_to_intel_dp(encoder), true);
 
 	WRITE_ONCE(display->hotplug.poll_enabled, false);
 
@@ -969,8 +971,6 @@ void intel_hpd_cancel_work(struct intel_display *display)
 		return;
 
 	spin_lock_irq(&display->irq.lock);
-
-	drm_WARN_ON(display->drm, get_blocked_hpd_pin_mask(display));
 
 	display->hotplug.long_hpd_pin_mask = 0;
 	display->hotplug.short_hpd_pin_mask = 0;
@@ -1176,13 +1176,12 @@ bool intel_hpd_schedule_detection(struct intel_display *display)
 static int i915_hpd_storm_ctl_show(struct seq_file *m, void *data)
 {
 	struct intel_display *display = m->private;
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
 	struct intel_hotplug *hotplug = &display->hotplug;
 
 	/* Synchronize with everything first in case there's been an HPD
 	 * storm, but we haven't finished handling it in the kernel yet
 	 */
-	intel_synchronize_irq(dev_priv);
+	intel_parent_irq_synchronize(display);
 	flush_work(&display->hotplug.dig_port_work);
 	flush_delayed_work(&display->hotplug.hotplug_work);
 
@@ -1332,12 +1331,12 @@ static const struct file_operations i915_hpd_short_storm_ctl_fops = {
 
 void intel_hpd_debugfs_register(struct intel_display *display)
 {
-	struct drm_minor *minor = display->drm->primary;
+	struct dentry *debugfs_root = display->drm->debugfs_root;
 
-	debugfs_create_file("i915_hpd_storm_ctl", 0644, minor->debugfs_root,
+	debugfs_create_file("i915_hpd_storm_ctl", 0644, debugfs_root,
 			    display, &i915_hpd_storm_ctl_fops);
-	debugfs_create_file("i915_hpd_short_storm_ctl", 0644, minor->debugfs_root,
+	debugfs_create_file("i915_hpd_short_storm_ctl", 0644, debugfs_root,
 			    display, &i915_hpd_short_storm_ctl_fops);
-	debugfs_create_bool("i915_ignore_long_hpd", 0644, minor->debugfs_root,
+	debugfs_create_bool("i915_ignore_long_hpd", 0644, debugfs_root,
 			    &display->hotplug.ignore_long_hpd);
 }

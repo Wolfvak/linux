@@ -72,7 +72,6 @@ Documentation for filesystem implementations.
    afs
    autofs
    autofs-mount-control
-   bcachefs/index
    befs
    bfs
    btrfs
@@ -90,16 +89,11 @@ Documentation for filesystem implementations.
    ext3
    ext4/index
    f2fs
-   gfs2
-   gfs2-uevents
-   gfs2-glocks
+   gfs2/index
    hfs
    hfsplus
    hpfs
-   fuse
-   fuse-io
-   fuse-io-uring
-   fuse-passthrough
+   fuse/index
    inotify
    isofs
    nilfs2

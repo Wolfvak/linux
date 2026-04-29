@@ -71,40 +71,17 @@ void iwl_mld_get_bios_tables(struct iwl_mld *mld)
 static int iwl_mld_geo_sar_init(struct iwl_mld *mld)
 {
 	u32 cmd_id = WIDE_ID(PHY_OPS_GROUP, PER_CHAIN_LIMIT_OFFSET_CMD);
-	union iwl_geo_tx_power_profiles_cmd cmd;
-	u16 len;
-	u32 n_bands;
-	__le32 sk = cpu_to_le32(0);
-	int ret;
-	u8 cmd_ver = iwl_fw_lookup_cmd_ver(mld->fw, cmd_id,
-					   IWL_FW_CMD_VER_UNKNOWN);
-
-	BUILD_BUG_ON(offsetof(struct iwl_geo_tx_power_profiles_cmd_v4, ops) !=
-		     offsetof(struct iwl_geo_tx_power_profiles_cmd_v5, ops));
-
-	cmd.v4.ops = cpu_to_le32(IWL_PER_CHAIN_OFFSET_SET_TABLES);
-
 	/* Only set to South Korea if the table revision is 1 */
-	if (mld->fwrt.geo_rev == 1)
-		sk = cpu_to_le32(1);
+	__le32 sk = cpu_to_le32(mld->fwrt.geo_rev == 1 ? 1 : 0);
+	union iwl_geo_tx_power_profiles_cmd cmd = {
+		.v5.ops = cpu_to_le32(IWL_PER_CHAIN_OFFSET_SET_TABLES),
+		.v5.table_revision = sk,
+	};
+	int ret;
 
-	if (cmd_ver == 5) {
-		len = sizeof(cmd.v5);
-		n_bands = ARRAY_SIZE(cmd.v5.table[0]);
-		cmd.v5.table_revision = sk;
-	} else if (cmd_ver == 4) {
-		len = sizeof(cmd.v4);
-		n_bands = ARRAY_SIZE(cmd.v4.table[0]);
-		cmd.v4.table_revision = sk;
-	} else {
-		return -EOPNOTSUPP;
-	}
-
-	BUILD_BUG_ON(offsetof(struct iwl_geo_tx_power_profiles_cmd_v4, table) !=
-		     offsetof(struct iwl_geo_tx_power_profiles_cmd_v5, table));
-	/* the table is at the same position for all versions, so set use v4 */
-	ret = iwl_sar_geo_fill_table(&mld->fwrt, &cmd.v4.table[0][0],
-				     n_bands, BIOS_GEO_MAX_PROFILE_NUM);
+	ret = iwl_sar_geo_fill_table(&mld->fwrt, &cmd.v5.table[0][0],
+				     ARRAY_SIZE(cmd.v5.table[0]),
+				     BIOS_GEO_MAX_PROFILE_NUM);
 
 	/* It is a valid scenario to not support SAR, or miss wgds table,
 	 * but in that case there is no need to send the command.
@@ -112,7 +89,7 @@ static int iwl_mld_geo_sar_init(struct iwl_mld *mld)
 	if (ret)
 		return 0;
 
-	return iwl_mld_send_cmd_pdu(mld, cmd_id, &cmd, len);
+	return iwl_mld_send_cmd_pdu(mld, cmd_id, &cmd, sizeof(cmd.v5));
 }
 
 int iwl_mld_config_sar_profile(struct iwl_mld *mld, int prof_a, int prof_b)
@@ -120,37 +97,20 @@ int iwl_mld_config_sar_profile(struct iwl_mld *mld, int prof_a, int prof_b)
 	u32 cmd_id = REDUCE_TX_POWER_CMD;
 	struct iwl_dev_tx_power_cmd cmd = {
 		.common.set_mode = cpu_to_le32(IWL_TX_POWER_MODE_SET_CHAINS),
+		.v10.flags = cpu_to_le32(mld->fwrt.reduced_power_flags),
 	};
-	__le16 *per_chain;
 	int ret;
-	u16 len = sizeof(cmd.common);
-	u32 n_subbands;
-	u8 cmd_ver = iwl_fw_lookup_cmd_ver(mld->fw, cmd_id,
-					   IWL_FW_CMD_VER_UNKNOWN);
-
-	if (cmd_ver == 10) {
-		len += sizeof(cmd.v10);
-		n_subbands = IWL_NUM_SUB_BANDS_V2;
-		per_chain = &cmd.v10.per_chain[0][0][0];
-		cmd.v10.flags =
-			cpu_to_le32(mld->fwrt.reduced_power_flags);
-	} else if (cmd_ver == 9) {
-		len += sizeof(cmd.v9);
-		n_subbands = IWL_NUM_SUB_BANDS_V1;
-		per_chain = &cmd.v9.per_chain[0][0];
-	} else {
-		return -EOPNOTSUPP;
-	}
 
 	/* TODO: CDB - support IWL_NUM_CHAIN_TABLES_V2 */
-	ret = iwl_sar_fill_profile(&mld->fwrt, per_chain,
-				   IWL_NUM_CHAIN_TABLES,
-				   n_subbands, prof_a, prof_b);
+	ret = iwl_sar_fill_profile(&mld->fwrt, &cmd.v10.per_chain[0][0][0],
+				   IWL_NUM_CHAIN_TABLES, IWL_NUM_SUB_BANDS_V2,
+				   prof_a, prof_b);
 	/* return on error or if the profile is disabled (positive number) */
 	if (ret)
 		return ret;
 
-	return iwl_mld_send_cmd_pdu(mld, cmd_id, &cmd, len);
+	return iwl_mld_send_cmd_pdu(mld, cmd_id, &cmd,
+				    sizeof(cmd.common) + sizeof(cmd.v10));
 }
 
 int iwl_mld_init_sar(struct iwl_mld *mld)
@@ -203,18 +163,32 @@ int iwl_mld_init_sgom(struct iwl_mld *mld)
 
 static int iwl_mld_ppag_send_cmd(struct iwl_mld *mld)
 {
-	union iwl_ppag_table_cmd cmd = {};
-	int ret, len;
+	struct iwl_fw_runtime *fwrt = &mld->fwrt;
+	union iwl_ppag_table_cmd cmd = {
+		.v7.ppag_config_info.hdr.table_source = fwrt->ppag_bios_source,
+		.v7.ppag_config_info.hdr.table_revision = fwrt->ppag_bios_rev,
+		.v7.ppag_config_info.value = cpu_to_le32(fwrt->ppag_flags),
+	};
+	int ret;
 
-	ret = iwl_fill_ppag_table(&mld->fwrt, &cmd, &len);
-	/* Not supporting PPAG table is a valid scenario */
-	if (ret < 0)
-		return 0;
+	IWL_DEBUG_RADIO(fwrt,
+			"PPAG MODE bits going to be sent: %d\n",
+			fwrt->ppag_flags);
+
+	for (int chain = 0; chain < IWL_NUM_CHAIN_LIMITS; chain++) {
+		for (int subband = 0; subband < IWL_NUM_SUB_BANDS_V2; subband++) {
+			cmd.v7.gain[chain][subband] =
+				fwrt->ppag_chains[chain].subbands[subband];
+			IWL_DEBUG_RADIO(fwrt,
+					"PPAG table: chain[%d] band[%d]: gain = %d\n",
+					chain, subband, cmd.v7.gain[chain][subband]);
+		}
+	}
 
 	IWL_DEBUG_RADIO(mld, "Sending PER_PLATFORM_ANT_GAIN_CMD\n");
 	ret = iwl_mld_send_cmd_pdu(mld, WIDE_ID(PHY_OPS_GROUP,
 						PER_PLATFORM_ANT_GAIN_CMD),
-				   &cmd, len);
+				   &cmd, sizeof(cmd.v7));
 	if (ret < 0)
 		IWL_ERR(mld, "failed to send PER_PLATFORM_ANT_GAIN_CMD (%d)\n",
 			ret);
@@ -232,27 +206,51 @@ int iwl_mld_init_ppag(struct iwl_mld *mld)
 	return iwl_mld_ppag_send_cmd(mld);
 }
 
+static __le32 iwl_mld_get_lari_config_bitmap(struct iwl_fw_runtime *fwrt)
+{
+	int ret;
+	u32 val;
+
+	ret = iwl_bios_get_dsm(fwrt, DSM_FUNC_DISABLE_SRD, &val);
+	if (!ret) {
+		if (val == DSM_VALUE_SRD_PASSIVE)
+			return cpu_to_le32(LARI_CONFIG_CHANGE_ETSI_TO_PASSIVE_MSK);
+		else if (val == DSM_VALUE_SRD_DISABLE)
+			return cpu_to_le32(LARI_CONFIG_CHANGE_ETSI_TO_DISABLED_MSK);
+	}
+
+	return 0;
+}
+
 void iwl_mld_configure_lari(struct iwl_mld *mld)
 {
 	struct iwl_fw_runtime *fwrt = &mld->fwrt;
 	struct iwl_lari_config_change_cmd cmd = {
-		.config_bitmap = iwl_get_lari_config_bitmap(fwrt),
+		.config_bitmap = iwl_mld_get_lari_config_bitmap(fwrt),
 	};
+	bool has_raw_dsm_capa = fw_has_capa(&fwrt->fw->ucode_capa,
+					    IWL_UCODE_TLV_CAPA_FW_ACCEPTS_RAW_DSM_TABLE);
 	int ret;
 	u32 value;
 
 	ret = iwl_bios_get_dsm(fwrt, DSM_FUNC_11AX_ENABLEMENT, &value);
-	if (!ret)
+	if (!ret) {
+		if (!has_raw_dsm_capa)
+			value &= DSM_11AX_ALLOW_BITMAP;
 		cmd.oem_11ax_allow_bitmap = cpu_to_le32(value);
+	}
 
 	ret = iwl_bios_get_dsm(fwrt, DSM_FUNC_ENABLE_UNII4_CHAN, &value);
-	if (!ret)
-		cmd.oem_unii4_allow_bitmap =
-			cpu_to_le32(value &= DSM_UNII4_ALLOW_BITMAP);
+	if (!ret) {
+		if (!has_raw_dsm_capa)
+			value &= DSM_UNII4_ALLOW_BITMAP;
+		cmd.oem_unii4_allow_bitmap = cpu_to_le32(value);
+	}
 
 	ret = iwl_bios_get_dsm(fwrt, DSM_FUNC_ACTIVATE_CHANNEL, &value);
 	if (!ret) {
-		value &= CHAN_STATE_ACTIVE_BITMAP_CMD_V12;
+		if (!has_raw_dsm_capa)
+			value &= CHAN_STATE_ACTIVE_BITMAP_CMD_V12;
 		cmd.chan_state_active_bitmap = cpu_to_le32(value);
 	}
 
@@ -261,13 +259,19 @@ void iwl_mld_configure_lari(struct iwl_mld *mld)
 		cmd.oem_uhb_allow_bitmap = cpu_to_le32(value);
 
 	ret = iwl_bios_get_dsm(fwrt, DSM_FUNC_FORCE_DISABLE_CHANNELS, &value);
-	if (!ret)
+	if (!ret) {
+		if (!has_raw_dsm_capa)
+			value &= DSM_FORCE_DISABLE_CHANNELS_ALLOWED_BITMAP;
 		cmd.force_disable_channels_bitmap = cpu_to_le32(value);
+	}
 
 	ret = iwl_bios_get_dsm(fwrt, DSM_FUNC_ENERGY_DETECTION_THRESHOLD,
 			       &value);
-	if (!ret)
+	if (!ret) {
+		if (!has_raw_dsm_capa)
+			value &= DSM_EDT_ALLOWED_BITMAP;
 		cmd.edt_bitmap = cpu_to_le32(value);
+	}
 
 	ret = iwl_bios_get_wbem(fwrt, &value);
 	if (!ret)
@@ -277,6 +281,14 @@ void iwl_mld_configure_lari(struct iwl_mld *mld)
 	if (!ret)
 		cmd.oem_11be_allow_bitmap = cpu_to_le32(value);
 
+	ret = iwl_bios_get_dsm(fwrt, DSM_FUNC_ENABLE_11BN, &value);
+	if (!ret)
+		cmd.oem_11bn_allow_bitmap = cpu_to_le32(value);
+
+	ret = iwl_bios_get_dsm(fwrt, DSM_FUNC_ENABLE_UNII_9, &value);
+	if (!ret)
+		cmd.oem_unii9_enable = cpu_to_le32(value);
+
 	if (!cmd.config_bitmap &&
 	    !cmd.oem_uhb_allow_bitmap &&
 	    !cmd.oem_11ax_allow_bitmap &&
@@ -285,8 +297,13 @@ void iwl_mld_configure_lari(struct iwl_mld *mld)
 	    !cmd.force_disable_channels_bitmap &&
 	    !cmd.edt_bitmap &&
 	    !cmd.oem_320mhz_allow_bitmap &&
-	    !cmd.oem_11be_allow_bitmap)
+	    !cmd.oem_11be_allow_bitmap &&
+	    !cmd.oem_11bn_allow_bitmap &&
+	    !cmd.oem_unii9_enable)
 		return;
+
+	cmd.bios_hdr.table_source = fwrt->dsm_source;
+	cmd.bios_hdr.table_revision = fwrt->dsm_revision;
 
 	IWL_DEBUG_RADIO(mld,
 			"sending LARI_CONFIG_CHANGE, config_bitmap=0x%x, oem_11ax_allow_bitmap=0x%x\n",
@@ -307,9 +324,28 @@ void iwl_mld_configure_lari(struct iwl_mld *mld)
 	IWL_DEBUG_RADIO(mld,
 			"sending LARI_CONFIG_CHANGE, oem_11be_allow_bitmap=0x%x\n",
 			le32_to_cpu(cmd.oem_11be_allow_bitmap));
+	IWL_DEBUG_RADIO(mld,
+			"sending LARI_CONFIG_CHANGE, oem_11bn_allow_bitmap=0x%x\n",
+			le32_to_cpu(cmd.oem_11bn_allow_bitmap));
+	IWL_DEBUG_RADIO(mld,
+			"sending LARI_CONFIG_CHANGE, oem_unii9_enable=0x%x\n",
+			le32_to_cpu(cmd.oem_unii9_enable));
 
-	ret = iwl_mld_send_cmd_pdu(mld, WIDE_ID(REGULATORY_AND_NVM_GROUP,
-						LARI_CONFIG_CHANGE), &cmd);
+	if (iwl_fw_lookup_cmd_ver(mld->fw,
+				  WIDE_ID(REGULATORY_AND_NVM_GROUP,
+					  LARI_CONFIG_CHANGE), 12) == 12) {
+		int cmd_size = offsetof(typeof(cmd), oem_11bn_allow_bitmap);
+
+		ret = iwl_mld_send_cmd_pdu(mld,
+					   WIDE_ID(REGULATORY_AND_NVM_GROUP,
+						   LARI_CONFIG_CHANGE),
+					   &cmd, cmd_size);
+	} else {
+		ret = iwl_mld_send_cmd_pdu(mld,
+					   WIDE_ID(REGULATORY_AND_NVM_GROUP,
+						   LARI_CONFIG_CHANGE),
+					   &cmd);
+	}
 	if (ret)
 		IWL_DEBUG_RADIO(mld,
 				"Failed to send LARI_CONFIG_CHANGE (%d)\n",
@@ -385,8 +421,8 @@ void iwl_mld_init_tas(struct iwl_mld *mld)
 	for (u8 i = 0; i < data.block_list_size; i++)
 		cmd.block_list_array[i] =
 			cpu_to_le16(data.block_list_array[i]);
-	cmd.tas_config_info.table_source = data.table_source;
-	cmd.tas_config_info.table_revision = data.table_revision;
+	cmd.tas_config_info.hdr.table_source = data.table_source;
+	cmd.tas_config_info.hdr.table_revision = data.table_revision;
 	cmd.tas_config_info.value = cpu_to_le32(data.tas_selection);
 
 	ret = iwl_mld_send_cmd_pdu(mld, cmd_id, &cmd);

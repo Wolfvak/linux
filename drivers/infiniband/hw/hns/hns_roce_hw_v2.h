@@ -35,6 +35,7 @@
 
 #include <linux/bitops.h>
 #include "hnae3.h"
+#include "hns_roce_bond.h"
 
 #define HNS_ROCE_V2_MAX_RC_INL_INN_SZ		32
 #define HNS_ROCE_V2_MTT_ENTRY_SZ		64
@@ -228,6 +229,9 @@ enum hns_roce_opcode_type {
 	HNS_ROCE_OPC_CFG_GMV_BT				= 0x8510,
 	HNS_ROCE_QUERY_RAM_ECC				= 0x8513,
 	HNS_SWITCH_PARAMETER_CFG			= 0x1033,
+	HNS_ROCE_OPC_SET_BOND_INFO                      = 0x8601,
+	HNS_ROCE_OPC_CLEAR_BOND_INFO                    = 0x8602,
+	HNS_ROCE_OPC_CHANGE_ACTIVE_PORT                 = 0x8603,
 };
 
 #define HNS_ROCE_OPC_POST_MB_TIMEOUT 35000
@@ -814,23 +818,15 @@ struct hns_roce_v2_mpt_entry {
 
 #define V2_MPT_BYTE_8_LW_EN_S 7
 
-#define V2_MPT_BYTE_8_MW_CNT_S 8
-#define V2_MPT_BYTE_8_MW_CNT_M GENMASK(31, 8)
-
 #define V2_MPT_BYTE_12_FRE_S 0
 
 #define V2_MPT_BYTE_12_PA_S 1
-
-#define V2_MPT_BYTE_12_MR_MW_S 4
 
 #define V2_MPT_BYTE_12_BPD_S 5
 
 #define V2_MPT_BYTE_12_BQP_S 6
 
 #define V2_MPT_BYTE_12_INNER_PA_VLD_S 7
-
-#define V2_MPT_BYTE_12_MW_BIND_QPN_S 8
-#define V2_MPT_BYTE_12_MW_BIND_QPN_M GENMASK(31, 8)
 
 #define V2_MPT_BYTE_48_PBL_BA_H_S 0
 #define V2_MPT_BYTE_48_PBL_BA_H_M GENMASK(28, 0)
@@ -1168,7 +1164,8 @@ struct hns_roce_cfg_gmv_tb_b {
 #define GMV_TB_B_SMAC_H GMV_TB_B_FIELD_LOC(47, 32)
 #define GMV_TB_B_SGID_IDX GMV_TB_B_FIELD_LOC(71, 64)
 
-#define HNS_ROCE_QUERY_PF_CAPS_CMD_NUM 5
+#define HNS_ROCE_QUERY_PF_CAPS_CMD_NUM_HIP08 5
+#define HNS_ROCE_QUERY_PF_CAPS_CMD_NUM 6
 struct hns_roce_query_pf_caps_a {
 	u8 number_ports;
 	u8 local_ca_ack_delay;
@@ -1278,6 +1275,11 @@ struct hns_roce_query_pf_caps_e {
 	__le16 ceq_period;
 	__le16 aeq_max_cnt;
 	__le16 aeq_period;
+};
+
+struct hns_roce_query_pf_caps_f {
+	__le32 max_ack_req_msg_len;
+	__le32 rsv[5];
 };
 
 #define PF_CAPS_E_FIELD_LOC(h, l) \
@@ -1467,7 +1469,23 @@ struct hns_roce_sccc_clr_done {
 	__le32 rsv[5];
 };
 
+struct hns_roce_bond_info {
+	__le32 bond_id;
+	__le32 bond_mode;
+	__le32 active_slave_cnt;
+	__le32 active_slave_mask;
+	__le32 slave_mask;
+	__le32 hash_policy;
+};
+
+struct hns_roce_dev
+	*hns_roce_bond_init_client(struct hns_roce_bond_group *bond_grp,
+				   int func_idx);
+void hns_roce_bond_uninit_client(struct hns_roce_bond_group *bond_grp,
+				 int func_idx);
 int hns_roce_v2_destroy_qp(struct ib_qp *ibqp, struct ib_udata *udata);
+int hns_roce_cmd_bond(struct hns_roce_bond_group *bond_grp,
+		      enum hns_roce_bond_cmd_type bond_type);
 
 static inline void hns_roce_write64(struct hns_roce_dev *hr_dev, __le32 val[2],
 				    void __iomem *dest)

@@ -43,7 +43,9 @@
  * cares about its entry, so it's OK if another processor is modifying its
  * entry.
  */
-struct task_struct *cpu_tasks[NR_CPUS];
+struct task_struct *cpu_tasks[NR_CPUS] = {
+	[0 ... NR_CPUS - 1] = &init_task,
+};
 EXPORT_SYMBOL(cpu_tasks);
 
 void free_stack(unsigned long stack, int order)
@@ -82,14 +84,18 @@ struct task_struct *__switch_to(struct task_struct *from, struct task_struct *to
 void interrupt_end(void)
 {
 	struct pt_regs *regs = &current->thread.regs;
+	unsigned long thread_flags;
 
-	if (need_resched())
-		schedule();
-	if (test_thread_flag(TIF_SIGPENDING) ||
-	    test_thread_flag(TIF_NOTIFY_SIGNAL))
-		do_signal(regs);
-	if (test_thread_flag(TIF_NOTIFY_RESUME))
-		resume_user_mode_work(regs);
+	thread_flags = read_thread_flags();
+	while (thread_flags & _TIF_WORK_MASK) {
+		if (thread_flags & _TIF_NEED_RESCHED)
+			schedule();
+		if (thread_flags & (_TIF_SIGPENDING | _TIF_NOTIFY_SIGNAL))
+			do_signal(regs);
+		if (thread_flags & _TIF_NOTIFY_RESUME)
+			resume_user_mode_work(regs);
+		thread_flags = read_thread_flags();
+	}
 }
 
 int get_current_pid(void)
@@ -139,7 +145,7 @@ static void fork_handler(void)
 
 int copy_thread(struct task_struct * p, const struct kernel_clone_args *args)
 {
-	unsigned long clone_flags = args->flags;
+	u64 clone_flags = args->flags;
 	unsigned long sp = args->stack;
 	unsigned long tls = args->tls;
 	void (*handler)(void);
@@ -181,11 +187,7 @@ int copy_thread(struct task_struct * p, const struct kernel_clone_args *args)
 
 void initial_thread_cb(void (*proc)(void *), void *arg)
 {
-	int save_kmalloc_ok = kmalloc_ok;
-
-	kmalloc_ok = 0;
 	initial_thread_cb_skas(proc, arg);
-	kmalloc_ok = save_kmalloc_ok;
 }
 
 int arch_dup_task_struct(struct task_struct *dst,
@@ -216,9 +218,19 @@ void arch_cpu_idle(void)
 	um_idle_sleep();
 }
 
+void arch_cpu_idle_prepare(void)
+{
+	os_idle_prepare();
+}
+
 int __uml_cant_sleep(void) {
 	return in_atomic() || irqs_disabled() || in_interrupt();
 	/* Is in_interrupt() really needed? */
+}
+
+int uml_need_resched(void)
+{
+	return need_resched();
 }
 
 extern exitcall_t __uml_exitcall_begin, __uml_exitcall_end;

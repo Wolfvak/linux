@@ -21,6 +21,7 @@
 #include <linux/completion.h>	/* for struct completion */
 #include <linux/sched.h>	/* for current && schedule_timeout */
 #include <linux/mutex.h>	/* for struct mutex */
+#include <linux/spinlock.h>	/* for spinlock_t */
 #include <linux/pm_runtime.h>	/* for runtime PM */
 
 struct usb_device;
@@ -636,6 +637,9 @@ struct usb3_lpm_parameters {
  * @do_remote_wakeup:  remote wakeup should be enabled
  * @reset_resume: needs reset instead of resume
  * @port_is_suspended: the upstream port is suspended (L2 or U3)
+ * @offload_pm_locked: prevents offload_usage changes during PM transitions.
+ * @offload_usage: number of offload activities happening on this usb device.
+ * @offload_lock: protects offload_usage and offload_pm_locked
  * @slot_id: Slot ID assigned by xHCI
  * @l1_params: best effor service latency for USB2 L1 LPM state, and L1 timeout.
  * @u1_params: exit latencies for USB3 U1 LPM state, and hub-initiated timeout.
@@ -724,6 +728,9 @@ struct usb_device {
 	unsigned do_remote_wakeup:1;
 	unsigned reset_resume:1;
 	unsigned port_is_suspended:1;
+	unsigned offload_pm_locked:1;
+	int offload_usage;
+	spinlock_t offload_lock;
 	enum usb_link_tunnel_mode tunnel_mode;
 	struct device_link *usb4_link;
 
@@ -838,6 +845,23 @@ static inline void usb_autopm_put_interface_no_suspend(
 		struct usb_interface *intf)
 { }
 static inline void usb_mark_last_busy(struct usb_device *udev)
+{ }
+#endif
+
+#if IS_ENABLED(CONFIG_USB_XHCI_SIDEBAND)
+int usb_offload_get(struct usb_device *udev);
+int usb_offload_put(struct usb_device *udev);
+bool usb_offload_check(struct usb_device *udev);
+void usb_offload_set_pm_locked(struct usb_device *udev, bool locked);
+#else
+
+static inline int usb_offload_get(struct usb_device *udev)
+{ return 0; }
+static inline int usb_offload_put(struct usb_device *udev)
+{ return 0; }
+static inline bool usb_offload_check(struct usb_device *udev)
+{ return false; }
+static inline void usb_offload_set_pm_locked(struct usb_device *udev, bool locked)
 { }
 #endif
 
@@ -1277,8 +1301,7 @@ struct usb_driver {
  *	resume and suspend functions will be called in addition to the driver's
  *	own, so this part of the setup does not need to be replicated.
  *
- * USB drivers must provide all the fields listed above except driver,
- * match, and id_table.
+ * USB device drivers must provide a name, other driver fields are optional.
  */
 struct usb_device_driver {
 	const char *name;
@@ -1455,6 +1478,10 @@ typedef void (*usb_complete_t)(struct urb *);
  * @sg: scatter gather buffer list, the buffer size of each element in
  * 	the list (except the last) must be divisible by the endpoint's
  * 	max packet size if no_sg_constraint isn't set in 'struct usb_bus'
+ * @sgt: used to hold a scatter gather table returned by usb_alloc_noncoherent(),
+ *      which describes the allocated non-coherent and possibly non-contiguous
+ *      memory and is guaranteed to have 1 single DMA mapped segment. The
+ *      allocated memory needs to be freed by usb_free_noncoherent().
  * @num_mapped_sgs: (internal) number of mapped sg entries
  * @num_sgs: number of entries in the sg list
  * @transfer_buffer_length: How big is transfer_buffer.  The transfer may
@@ -1621,6 +1648,7 @@ struct urb {
 	void *transfer_buffer;		/* (in) associated data buffer */
 	dma_addr_t transfer_dma;	/* (in) dma addr for transfer_buffer */
 	struct scatterlist *sg;		/* (in) scatter gather buffer list */
+	struct sg_table *sgt;		/* (in) scatter gather table for noncoherent buffer */
 	int num_mapped_sgs;		/* (internal) mapped sg entries */
 	int num_sgs;			/* (in) number of entries in the sg list */
 	u32 transfer_buffer_length;	/* (in) data buffer length */
@@ -1782,7 +1810,6 @@ extern void usb_block_urb(struct urb *urb);
 extern void usb_kill_anchored_urbs(struct usb_anchor *anchor);
 extern void usb_poison_anchored_urbs(struct usb_anchor *anchor);
 extern void usb_unpoison_anchored_urbs(struct usb_anchor *anchor);
-extern void usb_unlink_anchored_urbs(struct usb_anchor *anchor);
 extern void usb_anchor_suspend_wakeups(struct usb_anchor *anchor);
 extern void usb_anchor_resume_wakeups(struct usb_anchor *anchor);
 extern void usb_anchor_urb(struct urb *urb, struct usb_anchor *anchor);
@@ -1827,9 +1854,22 @@ void *usb_alloc_coherent(struct usb_device *dev, size_t size,
 void usb_free_coherent(struct usb_device *dev, size_t size,
 	void *addr, dma_addr_t dma);
 
+enum dma_data_direction;
+
+void *usb_alloc_noncoherent(struct usb_device *dev, size_t size,
+			    gfp_t mem_flags, dma_addr_t *dma,
+			    enum dma_data_direction dir,
+			    struct sg_table **table);
+void usb_free_noncoherent(struct usb_device *dev, size_t size,
+			  void *addr, enum dma_data_direction dir,
+			  struct sg_table *table);
+
 /*-------------------------------------------------------------------*
  *                         SYNCHRONOUS CALL SUPPORT                  *
  *-------------------------------------------------------------------*/
+
+/* Maximum value allowed for timeout in synchronous routines below */
+#define USB_MAX_SYNCHRONOUS_TIMEOUT		60000	/* ms */
 
 extern int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 	__u8 request, __u8 requesttype, __u16 value, __u16 index,
@@ -1837,8 +1877,9 @@ extern int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 extern int usb_interrupt_msg(struct usb_device *usb_dev, unsigned int pipe,
 	void *data, int len, int *actual_length, int timeout);
 extern int usb_bulk_msg(struct usb_device *usb_dev, unsigned int pipe,
-	void *data, int len, int *actual_length,
-	int timeout);
+	void *data, int len, int *actual_length, int timeout);
+extern int usb_bulk_msg_killable(struct usb_device *usb_dev, unsigned int pipe,
+	void *data, int len, int *actual_length, int timeout);
 
 /* wrappers around usb_control_msg() for the most common standard requests */
 int usb_control_msg_send(struct usb_device *dev, __u8 endpoint, __u8 request,
@@ -2024,6 +2065,12 @@ static inline u16 usb_maxpacket(struct usb_device *udev, int pipe)
 	/* NOTE:  only 0x07ff bits are for packet size... */
 	return usb_endpoint_maxp(&ep->desc);
 }
+
+u32 usb_endpoint_max_periodic_payload(struct usb_device *udev,
+				      const struct usb_host_endpoint *ep);
+
+bool usb_endpoint_is_hs_isoc_double(struct usb_device *udev,
+				    const struct usb_host_endpoint *ep);
 
 /* translate USB error codes to codes user space understands */
 static inline int usb_translate_errors(int error_code)

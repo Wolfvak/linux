@@ -9,6 +9,7 @@
 
 #include <linux/stringify.h>
 #include <asm/csr.h>
+#include <asm/vdso/processor.h>
 #include "kvm_util.h"
 
 #define INSN_OPCODE_MASK	0x007c
@@ -190,5 +191,7 @@ static inline void local_irq_disable(void)
 {
 	csr_clear(CSR_SSTATUS, SR_SIE);
 }
+
+unsigned long riscv64_get_satp_mode(void);
 
 #endif /* SELFTEST_KVM_PROCESSOR_H */

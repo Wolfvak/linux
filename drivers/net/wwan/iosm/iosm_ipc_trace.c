@@ -51,8 +51,7 @@ static int ipc_trace_remove_buf_file_handler(struct dentry *dentry)
 }
 
 static int ipc_trace_subbuf_start_handler(struct rchan_buf *buf, void *subbuf,
-					  void *prev_subbuf,
-					  size_t prev_padding)
+					  void *prev_subbuf)
 {
 	if (relay_buf_full(buf)) {
 		pr_err_ratelimited("Relay_buf full dropping traces");
@@ -141,7 +140,7 @@ struct iosm_trace *ipc_trace_init(struct iosm_imem *ipc_imem)
 	ipc_imem_channel_init(ipc_imem, IPC_CTYPE_CTRL, chnl_cfg,
 			      IRQ_MOD_OFF);
 
-	ipc_trace = kzalloc(sizeof(*ipc_trace), GFP_KERNEL);
+	ipc_trace = kzalloc_obj(*ipc_trace);
 	if (!ipc_trace)
 		return NULL;
 

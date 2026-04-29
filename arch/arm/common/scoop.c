@@ -185,7 +185,7 @@ static int scoop_probe(struct platform_device *pdev)
 	if (!mem)
 		return -EINVAL;
 
-	devptr = kzalloc(sizeof(struct scoop_dev), GFP_KERNEL);
+	devptr = kzalloc_obj(struct scoop_dev);
 	if (!devptr)
 		return -ENOMEM;
 
@@ -218,7 +218,7 @@ static int scoop_probe(struct platform_device *pdev)
 		devptr->gpio.label = dev_name(&pdev->dev);
 		devptr->gpio.base = inf->gpio_base;
 		devptr->gpio.ngpio = 12; /* PA11 = 0, PA12 = 1, etc. up to PA22 = 11 */
-		devptr->gpio.set_rv = scoop_gpio_set;
+		devptr->gpio.set = scoop_gpio_set;
 		devptr->gpio.get = scoop_gpio_get;
 		devptr->gpio.direction_input = scoop_gpio_direction_input;
 		devptr->gpio.direction_output = scoop_gpio_direction_output;

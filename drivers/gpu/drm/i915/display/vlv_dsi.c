@@ -30,16 +30,18 @@
 #include <drm/drm_crtc.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_mipi_dsi.h>
+#include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 
-#include "i915_drv.h"
 #include "i915_reg.h"
 #include "intel_atomic.h"
 #include "intel_backlight.h"
 #include "intel_connector.h"
 #include "intel_crtc.h"
 #include "intel_de.h"
+#include "intel_display_regs.h"
 #include "intel_display_types.h"
+#include "intel_display_utils.h"
 #include "intel_dsi.h"
 #include "intel_dsi_vbt.h"
 #include "intel_fifo_underrun.h"
@@ -92,8 +94,8 @@ void vlv_dsi_wait_for_fifo_empty(struct intel_dsi *intel_dsi, enum port port)
 	mask = LP_CTRL_FIFO_EMPTY | HS_CTRL_FIFO_EMPTY |
 		LP_DATA_FIFO_EMPTY | HS_DATA_FIFO_EMPTY;
 
-	if (intel_de_wait_for_set(display, MIPI_GEN_FIFO_STAT(display, port),
-				  mask, 100))
+	if (intel_de_wait_for_set_ms(display, MIPI_GEN_FIFO_STAT(display, port),
+				     mask, 100))
 		drm_err(display->drm, "DPI FIFOs are not empty\n");
 }
 
@@ -160,8 +162,8 @@ static ssize_t intel_dsi_host_transfer(struct mipi_dsi_host *host,
 
 	/* note: this is never true for reads */
 	if (packet.payload_length) {
-		if (intel_de_wait_for_clear(display, MIPI_GEN_FIFO_STAT(display, port),
-					    data_mask, 50))
+		if (intel_de_wait_for_clear_ms(display, MIPI_GEN_FIFO_STAT(display, port),
+					       data_mask, 50))
 			drm_err(display->drm,
 				"Timeout waiting for HS/LP DATA FIFO !full\n");
 
@@ -174,8 +176,8 @@ static ssize_t intel_dsi_host_transfer(struct mipi_dsi_host *host,
 			       GEN_READ_DATA_AVAIL);
 	}
 
-	if (intel_de_wait_for_clear(display, MIPI_GEN_FIFO_STAT(display, port),
-				    ctrl_mask, 50)) {
+	if (intel_de_wait_for_clear_ms(display, MIPI_GEN_FIFO_STAT(display, port),
+				       ctrl_mask, 50)) {
 		drm_err(display->drm,
 			"Timeout waiting for HS/LP CTRL FIFO !full\n");
 	}
@@ -186,8 +188,8 @@ static ssize_t intel_dsi_host_transfer(struct mipi_dsi_host *host,
 	/* ->rx_len is set only for reads */
 	if (msg->rx_len) {
 		data_mask = GEN_READ_DATA_AVAIL;
-		if (intel_de_wait_for_set(display, MIPI_INTR_STAT(display, port),
-					  data_mask, 50))
+		if (intel_de_wait_for_set_ms(display, MIPI_INTR_STAT(display, port),
+					     data_mask, 50))
 			drm_err(display->drm,
 				"Timeout waiting for read data.\n");
 
@@ -244,7 +246,7 @@ static int dpi_send_cmd(struct intel_dsi *intel_dsi, u32 cmd, bool hs,
 	intel_de_write(display, MIPI_DPI_CONTROL(display, port), cmd);
 
 	mask = SPL_PKT_SENT_INTERRUPT;
-	if (intel_de_wait_for_set(display, MIPI_INTR_STAT(display, port), mask, 100))
+	if (intel_de_wait_for_set_ms(display, MIPI_INTR_STAT(display, port), mask, 100))
 		drm_err(display->drm,
 			"Video mode command 0x%08x send failed.\n", cmd);
 
@@ -253,18 +255,16 @@ static int dpi_send_cmd(struct intel_dsi *intel_dsi, u32 cmd, bool hs,
 
 static void band_gap_reset(struct intel_display *display)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
+	vlv_flisdsi_get(display->drm);
 
-	vlv_flisdsi_get(dev_priv);
-
-	vlv_flisdsi_write(dev_priv, 0x08, 0x0001);
-	vlv_flisdsi_write(dev_priv, 0x0F, 0x0005);
-	vlv_flisdsi_write(dev_priv, 0x0F, 0x0025);
+	vlv_flisdsi_write(display->drm, 0x08, 0x0001);
+	vlv_flisdsi_write(display->drm, 0x0F, 0x0005);
+	vlv_flisdsi_write(display->drm, 0x0F, 0x0025);
 	udelay(150);
-	vlv_flisdsi_write(dev_priv, 0x0F, 0x0000);
-	vlv_flisdsi_write(dev_priv, 0x08, 0x0000);
+	vlv_flisdsi_write(display->drm, 0x0F, 0x0000);
+	vlv_flisdsi_write(display->drm, 0x08, 0x0000);
 
-	vlv_flisdsi_put(dev_priv);
+	vlv_flisdsi_put(display->drm);
 }
 
 static int intel_dsi_compute_config(struct intel_encoder *encoder,
@@ -352,8 +352,8 @@ static bool glk_dsi_enable_io(struct intel_encoder *encoder)
 
 	/* Wait for Pwr ACK */
 	for_each_dsi_port(port, intel_dsi->ports) {
-		if (intel_de_wait_for_set(display, MIPI_CTRL(display, port),
-					  GLK_MIPIIO_PORT_POWERED, 20))
+		if (intel_de_wait_for_set_ms(display, MIPI_CTRL(display, port),
+					     GLK_MIPIIO_PORT_POWERED, 20))
 			drm_err(display->drm, "MIPIO port is powergated\n");
 	}
 
@@ -374,8 +374,8 @@ static void glk_dsi_device_ready(struct intel_encoder *encoder)
 
 	/* Wait for MIPI PHY status bit to set */
 	for_each_dsi_port(port, intel_dsi->ports) {
-		if (intel_de_wait_for_set(display, MIPI_CTRL(display, port),
-					  GLK_PHY_STATUS_PORT_READY, 20))
+		if (intel_de_wait_for_set_ms(display, MIPI_CTRL(display, port),
+					     GLK_PHY_STATUS_PORT_READY, 20))
 			drm_err(display->drm, "PHY is not ON\n");
 	}
 
@@ -394,8 +394,8 @@ static void glk_dsi_device_ready(struct intel_encoder *encoder)
 				     ULPS_STATE_MASK, ULPS_STATE_ENTER | DEVICE_READY);
 
 			/* Wait for ULPS active */
-			if (intel_de_wait_for_clear(display, MIPI_CTRL(display, port),
-						    GLK_ULPS_NOT_ACTIVE, 20))
+			if (intel_de_wait_for_clear_ms(display, MIPI_CTRL(display, port),
+						       GLK_ULPS_NOT_ACTIVE, 20))
 				drm_err(display->drm, "ULPS not active\n");
 
 			/* Exit ULPS */
@@ -413,16 +413,16 @@ static void glk_dsi_device_ready(struct intel_encoder *encoder)
 
 	/* Wait for Stop state */
 	for_each_dsi_port(port, intel_dsi->ports) {
-		if (intel_de_wait_for_set(display, MIPI_CTRL(display, port),
-					  GLK_DATA_LANE_STOP_STATE, 20))
+		if (intel_de_wait_for_set_ms(display, MIPI_CTRL(display, port),
+					     GLK_DATA_LANE_STOP_STATE, 20))
 			drm_err(display->drm,
 				"Date lane not in STOP state\n");
 	}
 
 	/* Wait for AFE LATCH */
 	for_each_dsi_port(port, intel_dsi->ports) {
-		if (intel_de_wait_for_set(display, BXT_MIPI_PORT_CTRL(port),
-					  AFE_LATCHOUT, 20))
+		if (intel_de_wait_for_set_ms(display, BXT_MIPI_PORT_CTRL(port),
+					     AFE_LATCHOUT, 20))
 			drm_err(display->drm,
 				"D-PHY not entering LP-11 state\n");
 	}
@@ -457,17 +457,16 @@ static void bxt_dsi_device_ready(struct intel_encoder *encoder)
 static void vlv_dsi_device_ready(struct intel_encoder *encoder)
 {
 	struct intel_display *display = to_intel_display(encoder);
-	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	struct intel_dsi *intel_dsi = enc_to_intel_dsi(encoder);
 	enum port port;
 
 	drm_dbg_kms(display->drm, "\n");
 
-	vlv_flisdsi_get(dev_priv);
+	vlv_flisdsi_get(display->drm);
 	/* program rcomp for compliance, reduce from 50 ohms to 45 ohms
 	 * needed everytime after power gate */
-	vlv_flisdsi_write(dev_priv, 0x04, 0x0004);
-	vlv_flisdsi_put(dev_priv);
+	vlv_flisdsi_write(display->drm, 0x04, 0x0004);
+	vlv_flisdsi_put(display->drm);
 
 	/* bandgap reset is needed after everytime we do power gate */
 	band_gap_reset(display);
@@ -520,15 +519,15 @@ static void glk_dsi_enter_low_power_mode(struct intel_encoder *encoder)
 
 	/* Wait for MIPI PHY status bit to unset */
 	for_each_dsi_port(port, intel_dsi->ports) {
-		if (intel_de_wait_for_clear(display, MIPI_CTRL(display, port),
-					    GLK_PHY_STATUS_PORT_READY, 20))
+		if (intel_de_wait_for_clear_ms(display, MIPI_CTRL(display, port),
+					       GLK_PHY_STATUS_PORT_READY, 20))
 			drm_err(display->drm, "PHY is not turning OFF\n");
 	}
 
 	/* Wait for Pwr ACK bit to unset */
 	for_each_dsi_port(port, intel_dsi->ports) {
-		if (intel_de_wait_for_clear(display, MIPI_CTRL(display, port),
-					    GLK_MIPIIO_PORT_POWERED, 20))
+		if (intel_de_wait_for_clear_ms(display, MIPI_CTRL(display, port),
+					       GLK_MIPIIO_PORT_POWERED, 20))
 			drm_err(display->drm,
 				"MIPI IO Port is not powergated\n");
 	}
@@ -545,8 +544,8 @@ static void glk_dsi_disable_mipi_io(struct intel_encoder *encoder)
 
 	/* Wait for MIPI PHY status bit to unset */
 	for_each_dsi_port(port, intel_dsi->ports) {
-		if (intel_de_wait_for_clear(display, MIPI_CTRL(display, port),
-					    GLK_PHY_STATUS_PORT_READY, 20))
+		if (intel_de_wait_for_clear_ms(display, MIPI_CTRL(display, port),
+					       GLK_PHY_STATUS_PORT_READY, 20))
 			drm_err(display->drm, "PHY is not turning OFF\n");
 	}
 
@@ -596,8 +595,8 @@ static void vlv_dsi_clear_device_ready(struct intel_encoder *encoder)
 		 * Port A only. MIPI Port C has no similar bit for checking.
 		 */
 		if ((display->platform.broxton || port == PORT_A) &&
-		    intel_de_wait_for_clear(display, port_ctrl,
-					    AFE_LATCHOUT, 30))
+		    intel_de_wait_for_clear_ms(display, port_ctrl,
+					       AFE_LATCHOUT, 30))
 			drm_err(display->drm, "DSI LP not going Low\n");
 
 		/* Disable MIPI PHY transparent latch */
@@ -762,7 +761,7 @@ static void intel_dsi_pre_enable(struct intel_atomic_state *state,
 
 	if (display->platform.valleyview || display->platform.cherryview) {
 		/* Disable DPOunit clock gating, can stall pipe */
-		intel_de_rmw(display, DSPCLK_GATE_D(display),
+		intel_de_rmw(display, VLV_DSPCLK_GATE_D,
 			     0, DPOUNIT_CLOCK_GATE_DISABLE);
 	}
 
@@ -919,7 +918,7 @@ static void intel_dsi_post_disable(struct intel_atomic_state *state,
 	} else {
 		vlv_dsi_pll_disable(encoder);
 
-		intel_de_rmw(display, DSPCLK_GATE_D(display),
+		intel_de_rmw(display, VLV_DSPCLK_GATE_D,
 			     DPOUNIT_CLOCK_GATE_DISABLE, 0);
 	}
 
@@ -937,7 +936,7 @@ static bool intel_dsi_get_hw_state(struct intel_encoder *encoder,
 {
 	struct intel_display *display = to_intel_display(encoder);
 	struct intel_dsi *intel_dsi = enc_to_intel_dsi(encoder);
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 	enum port port;
 	bool active = false;
 
@@ -1020,7 +1019,7 @@ static void bxt_dsi_get_pipe_config(struct intel_encoder *encoder,
 	unsigned int lane_count = intel_dsi->lane_count;
 	unsigned int bpp, fmt;
 	enum port port;
-	u16 hactive, hfp, hsync, hbp, vfp, vsync;
+	u16 hactive, hfp, hsync, hbp, vfp, vsync, vbp;
 	u16 hfp_sw, hsync_sw, hbp_sw;
 	u16 crtc_htotal_sw, crtc_hsync_start_sw, crtc_hsync_end_sw,
 				crtc_hblank_start_sw, crtc_hblank_end_sw;
@@ -1084,6 +1083,7 @@ static void bxt_dsi_get_pipe_config(struct intel_encoder *encoder,
 
 	/* vertical values are in terms of lines */
 	vfp = intel_de_read(display, MIPI_VFP_COUNT(display, port));
+	vbp = intel_de_read(display, MIPI_VBP_COUNT(display, port));
 	vsync = intel_de_read(display, MIPI_VSYNC_PADDING_COUNT(display, port));
 
 	adjusted_mode->crtc_htotal = hactive + hfp + hsync + hbp;
@@ -1092,6 +1092,8 @@ static void bxt_dsi_get_pipe_config(struct intel_encoder *encoder,
 	adjusted_mode->crtc_hblank_start = adjusted_mode->crtc_hdisplay;
 	adjusted_mode->crtc_hblank_end = adjusted_mode->crtc_htotal;
 
+	drm_WARN_ON(display->drm, adjusted_mode->crtc_vdisplay +
+		    vfp + vsync + vbp != adjusted_mode->crtc_vtotal);
 	adjusted_mode->crtc_vsync_start = vfp + adjusted_mode->crtc_vdisplay;
 	adjusted_mode->crtc_vsync_end = vsync + adjusted_mode->crtc_vsync_start;
 	adjusted_mode->crtc_vblank_start = adjusted_mode->crtc_vdisplay;
@@ -1917,7 +1919,7 @@ void vlv_dsi_init(struct intel_display *display)
 	else
 		display->dsi.mmio_base = VLV_MIPI_BASE;
 
-	intel_dsi = kzalloc(sizeof(*intel_dsi), GFP_KERNEL);
+	intel_dsi = kzalloc_obj(*intel_dsi);
 	if (!intel_dsi)
 		return;
 

@@ -63,6 +63,7 @@ struct codec_priv {
  * @sysclk_freq: SYSCLK rates for set_sysclk()
  * @sysclk_dir: SYSCLK directions for set_sysclk()
  * @sysclk_id: SYSCLK ids for set_sysclk()
+ * @sysclk_ratio: SYSCLK ratio on sample rate
  * @slot_width: Slot width of each frame
  * @slot_num: Number of slots of each frame
  *
@@ -72,6 +73,7 @@ struct cpu_priv {
 	unsigned long sysclk_freq[2];
 	u32 sysclk_dir[2];
 	u32 sysclk_id[2];
+	u32 sysclk_ratio[2];
 	u32 slot_width;
 	u32 slot_num;
 };
@@ -176,7 +178,7 @@ static int fsl_asoc_card_hw_params(struct snd_pcm_substream *substream,
 	struct snd_soc_dai *codec_dai;
 	struct cpu_priv *cpu_priv = &priv->cpu_priv;
 	struct device *dev = rtd->card->dev;
-	unsigned int pll_out;
+	unsigned int pll_out, sysclk_freq;
 	int codec_idx;
 	int ret;
 
@@ -187,9 +189,14 @@ static int fsl_asoc_card_hw_params(struct snd_pcm_substream *substream,
 	if (fsl_asoc_card_is_ac97(priv))
 		return 0;
 
+	if (!cpu_priv->sysclk_freq[tx] && cpu_priv->sysclk_ratio[tx])
+		sysclk_freq = priv->sample_rate * cpu_priv->sysclk_ratio[tx];
+	else
+		sysclk_freq = cpu_priv->sysclk_freq[tx];
+
 	/* Specific configurations of DAIs starts from here */
 	ret = snd_soc_dai_set_sysclk(snd_soc_rtd_to_cpu(rtd, 0), cpu_priv->sysclk_id[tx],
-				     cpu_priv->sysclk_freq[tx],
+				     sysclk_freq,
 				     cpu_priv->sysclk_dir[tx]);
 	if (ret && ret != -ENOTSUPP) {
 		dev_err(dev, "failed to set sysclk for cpu dai\n");
@@ -529,7 +536,7 @@ static int hp_jack_event(struct notifier_block *nb, unsigned long event,
 			 void *data)
 {
 	struct snd_soc_jack *jack = (struct snd_soc_jack *)data;
-	struct snd_soc_dapm_context *dapm = &jack->card->dapm;
+	struct snd_soc_dapm_context *dapm = snd_soc_card_to_dapm(jack->card);
 
 	if (event & SND_JACK_HEADPHONE)
 		/* Disable speaker if headphone is plugged in */
@@ -546,7 +553,7 @@ static int mic_jack_event(struct notifier_block *nb, unsigned long event,
 			  void *data)
 {
 	struct snd_soc_jack *jack = (struct snd_soc_jack *)data;
-	struct snd_soc_dapm_context *dapm = &jack->card->dapm;
+	struct snd_soc_dapm_context *dapm = snd_soc_card_to_dapm(jack->card);
 
 	if (event & SND_JACK_MICROPHONE)
 		/* Disable dmic if microphone is plugged in */
@@ -799,6 +806,8 @@ static int fsl_asoc_card_probe(struct platform_device *pdev)
 		priv->cpu_priv.slot_width = 32;
 		priv->card.dapm_routes = audio_map_tx;
 		priv->card.num_dapm_routes = ARRAY_SIZE(audio_map_tx);
+		priv->cpu_priv.sysclk_dir[TX] = SND_SOC_CLOCK_OUT;
+		priv->cpu_priv.sysclk_ratio[TX] = 256;
 	} else if (of_device_is_compatible(np, "fsl,imx-audio-si476x")) {
 		codec_dai_name[0] = "si476x-codec";
 		priv->dai_fmt |= SND_SOC_DAIFMT_CBC_CFC;
@@ -1036,8 +1045,8 @@ static int fsl_asoc_card_probe(struct platform_device *pdev)
 	 * The notifier is initialized in snd_soc_card_jack_new(), then
 	 * snd_soc_jack_notifier_register can be called.
 	 */
-	if (of_property_read_bool(np, "hp-det-gpios") ||
-	    of_property_read_bool(np, "hp-det-gpio") /* deprecated */) {
+	if (of_property_present(np, "hp-det-gpios") ||
+	    of_property_present(np, "hp-det-gpio") /* deprecated */) {
 		ret = simple_util_init_jack(&priv->card, &priv->hp_jack,
 					    1, NULL, "Headphone Jack");
 		if (ret)
@@ -1046,8 +1055,8 @@ static int fsl_asoc_card_probe(struct platform_device *pdev)
 		snd_soc_jack_notifier_register(&priv->hp_jack.jack, &hp_jack_nb);
 	}
 
-	if (of_property_read_bool(np, "mic-det-gpios") ||
-	    of_property_read_bool(np, "mic-det-gpio") /* deprecated */) {
+	if (of_property_present(np, "mic-det-gpios") ||
+	    of_property_present(np, "mic-det-gpio") /* deprecated */) {
 		ret = simple_util_init_jack(&priv->card, &priv->mic_jack,
 					    0, NULL, "Mic Jack");
 		if (ret)

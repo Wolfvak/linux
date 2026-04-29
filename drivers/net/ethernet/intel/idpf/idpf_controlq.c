@@ -36,19 +36,19 @@ static void idpf_ctlq_init_regs(struct idpf_hw *hw, struct idpf_ctlq_info *cq,
 {
 	/* Update tail to post pre-allocated buffers for rx queues */
 	if (is_rxq)
-		wr32(hw, cq->reg.tail, (u32)(cq->ring_size - 1));
+		idpf_mbx_wr32(hw, cq->reg.tail, (u32)(cq->ring_size - 1));
 
 	/* For non-Mailbox control queues only TAIL need to be set */
 	if (cq->q_id != -1)
 		return;
 
 	/* Clear Head for both send or receive */
-	wr32(hw, cq->reg.head, 0);
+	idpf_mbx_wr32(hw, cq->reg.head, 0);
 
 	/* set starting point */
-	wr32(hw, cq->reg.bal, lower_32_bits(cq->desc_ring.pa));
-	wr32(hw, cq->reg.bah, upper_32_bits(cq->desc_ring.pa));
-	wr32(hw, cq->reg.len, (cq->ring_size | cq->reg.len_ena_mask));
+	idpf_mbx_wr32(hw, cq->reg.bal, lower_32_bits(cq->desc_ring.pa));
+	idpf_mbx_wr32(hw, cq->reg.bah, upper_32_bits(cq->desc_ring.pa));
+	idpf_mbx_wr32(hw, cq->reg.len, (cq->ring_size | cq->reg.len_ena_mask));
 }
 
 /**
@@ -127,7 +127,7 @@ int idpf_ctlq_add(struct idpf_hw *hw,
 	bool is_rxq = false;
 	int err;
 
-	cq = kzalloc(sizeof(*cq), GFP_KERNEL);
+	cq = kzalloc_obj(*cq);
 	if (!cq)
 		return -ENOMEM;
 
@@ -159,9 +159,7 @@ int idpf_ctlq_add(struct idpf_hw *hw,
 		idpf_ctlq_init_rxq_bufs(cq);
 	} else {
 		/* Allocate the array of msg pointers for TX queues */
-		cq->bi.tx_msg = kcalloc(qinfo->len,
-					sizeof(struct idpf_ctlq_msg *),
-					GFP_KERNEL);
+		cq->bi.tx_msg = kzalloc_objs(struct idpf_ctlq_msg *, qinfo->len);
 		if (!cq->bi.tx_msg) {
 			err = -ENOMEM;
 			goto init_dealloc_q_mem;
@@ -328,7 +326,7 @@ int idpf_ctlq_send(struct idpf_hw *hw, struct idpf_ctlq_info *cq,
 	 */
 	dma_wmb();
 
-	wr32(hw, cq->reg.tail, cq->next_to_use);
+	idpf_mbx_wr32(hw, cq->reg.tail, cq->next_to_use);
 
 err_unlock:
 	spin_unlock(&cq->cq_lock);
@@ -520,7 +518,7 @@ post_buffs_out:
 
 		dma_wmb();
 
-		wr32(hw, cq->reg.tail, cq->next_to_post);
+		idpf_mbx_wr32(hw, cq->reg.tail, cq->next_to_post);
 	}
 
 	spin_unlock(&cq->cq_lock);

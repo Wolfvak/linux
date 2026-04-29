@@ -11,7 +11,7 @@
 
 #include "xe_device.h"
 #include "xe_exec_queue.h"
-#include "xe_gt.h"
+#include "xe_gt_types.h"
 #include "xe_hw_engine_types.h"
 #include "xe_hw_fence.h"
 #include "xe_lrc.h"
@@ -110,10 +110,12 @@ struct xe_sched_job *xe_sched_job_create(struct xe_exec_queue *q,
 		return ERR_PTR(-ENOMEM);
 
 	job->q = q;
+	job->sample_timestamp = U64_MAX;
 	kref_init(&job->refcount);
 	xe_exec_queue_get(job->q);
 
-	err = drm_sched_job_init(&job->drm, q->entity, 1, NULL);
+	err = drm_sched_job_init(&job->drm, q->entity, 1, NULL,
+				 q->xef ? q->xef->drm->client_id : 0);
 	if (err)
 		goto err_free;
 
@@ -145,6 +147,7 @@ struct xe_sched_job *xe_sched_job_create(struct xe_exec_queue *q,
 	for (i = 0; i < width; ++i)
 		job->ptrs[i].batch_addr = batch_addr[i];
 
+	atomic_inc(&q->job_cnt);
 	xe_pm_runtime_get_noresume(job_to_xe(job));
 	trace_xe_sched_job_create(job);
 	return job;
@@ -159,11 +162,11 @@ err_free:
 }
 
 /**
- * xe_sched_job_destroy - Destroy XE schedule job
- * @ref: reference to XE schedule job
+ * xe_sched_job_destroy - Destroy Xe schedule job
+ * @ref: reference to Xe schedule job
  *
  * Called when ref == 0, drop a reference to job's xe_engine + fence, cleanup
- * base DRM schedule job, and free memory for XE schedule job.
+ * base DRM schedule job, and free memory for Xe schedule job.
  */
 void xe_sched_job_destroy(struct kref *ref)
 {
@@ -176,6 +179,7 @@ void xe_sched_job_destroy(struct kref *ref)
 	dma_fence_put(job->fence);
 	drm_sched_job_cleanup(&job->drm);
 	job_free(job);
+	atomic_dec(&q->job_cnt);
 	xe_exec_queue_put(q);
 	xe_pm_runtime_put(xe);
 }
@@ -216,15 +220,17 @@ void xe_sched_job_set_error(struct xe_sched_job *job, int error)
 
 bool xe_sched_job_started(struct xe_sched_job *job)
 {
+	struct dma_fence *fence = dma_fence_chain_contained(job->fence);
 	struct xe_lrc *lrc = job->q->lrc[0];
 
-	return !__dma_fence_is_later(xe_sched_job_lrc_seqno(job),
-				     xe_lrc_start_seqno(lrc),
-				     dma_fence_chain_contained(job->fence)->ops);
+	return !__dma_fence_is_later(fence,
+				     xe_sched_job_lrc_seqno(job),
+				     xe_lrc_start_seqno(lrc));
 }
 
 bool xe_sched_job_completed(struct xe_sched_job *job)
 {
+	struct dma_fence *fence = dma_fence_chain_contained(job->fence);
 	struct xe_lrc *lrc = job->q->lrc[0];
 
 	/*
@@ -232,9 +238,9 @@ bool xe_sched_job_completed(struct xe_sched_job *job)
 	 * parallel handshake is done.
 	 */
 
-	return !__dma_fence_is_later(xe_sched_job_lrc_seqno(job),
-				     xe_lrc_seqno(lrc),
-				     dma_fence_chain_contained(job->fence)->ops);
+	return !__dma_fence_is_later(fence,
+				     xe_sched_job_lrc_seqno(job),
+				     xe_lrc_seqno(lrc));
 }
 
 void xe_sched_job_arm(struct xe_sched_job *job)
@@ -290,23 +296,6 @@ void xe_sched_job_push(struct xe_sched_job *job)
 	trace_xe_sched_job_exec(job);
 	drm_sched_entity_push_job(&job->drm);
 	xe_sched_job_put(job);
-}
-
-/**
- * xe_sched_job_last_fence_add_dep - Add last fence dependency to job
- * @job:job to add the last fence dependency to
- * @vm: virtual memory job belongs to
- *
- * Returns:
- * 0 on success, or an error on failing to expand the array.
- */
-int xe_sched_job_last_fence_add_dep(struct xe_sched_job *job, struct xe_vm *vm)
-{
-	struct dma_fence *fence;
-
-	fence = xe_exec_queue_last_fence_get(job->q, vm);
-
-	return drm_sched_job_add_dependency(&job->drm, fence);
 }
 
 /**

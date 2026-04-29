@@ -39,19 +39,19 @@
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 
-#include "i915_reg.h"
 #include "intel_atomic.h"
 #include "intel_audio.h"
 #include "intel_connector.h"
 #include "intel_crtc.h"
 #include "intel_de.h"
 #include "intel_display_driver.h"
+#include "intel_display_regs.h"
 #include "intel_display_types.h"
-#include "intel_fdi.h"
 #include "intel_fifo_underrun.h"
 #include "intel_gmbus.h"
 #include "intel_hdmi.h"
 #include "intel_hotplug.h"
+#include "intel_link_bw.h"
 #include "intel_panel.h"
 #include "intel_sdvo.h"
 #include "intel_sdvo_regs.h"
@@ -474,7 +474,7 @@ static bool __intel_sdvo_write_cmd(struct intel_sdvo *intel_sdvo, u8 cmd,
 	if (!buf)
 		return false;
 
-	msgs = kcalloc(args_len + 3, sizeof(*msgs), GFP_KERNEL);
+	msgs = kzalloc_objs(*msgs, args_len + 3);
 	if (!msgs) {
 		kfree(buf);
 		return false;
@@ -1367,7 +1367,7 @@ static int intel_sdvo_compute_config(struct intel_encoder *encoder,
 
 	if (HAS_PCH_SPLIT(display)) {
 		pipe_config->has_pch_encoder = true;
-		if (!intel_fdi_compute_pipe_bpp(pipe_config))
+		if (!intel_link_bw_compute_pipe_bpp(pipe_config))
 			return -EINVAL;
 	}
 
@@ -2052,8 +2052,10 @@ static void intel_sdvo_enable_hotplug(struct intel_encoder *encoder)
 {
 	struct intel_sdvo *intel_sdvo = to_sdvo(encoder);
 
-	intel_sdvo_write_cmd(intel_sdvo, SDVO_CMD_SET_ACTIVE_HOT_PLUG,
-			     &intel_sdvo->hotplug_active, 2);
+	if (!intel_sdvo_write_cmd(intel_sdvo, SDVO_CMD_SET_ACTIVE_HOT_PLUG,
+				  &intel_sdvo->hotplug_active, 2))
+		drm_warn(intel_sdvo->base.base.dev,
+			 "Failed to enable hotplug on SDVO encoder\n");
 }
 
 static enum intel_hotplug_state
@@ -2772,11 +2774,11 @@ static struct intel_sdvo_connector *intel_sdvo_connector_alloc(void)
 	struct intel_sdvo_connector *sdvo_connector;
 	struct intel_sdvo_connector_state *conn_state;
 
-	sdvo_connector = kzalloc(sizeof(*sdvo_connector), GFP_KERNEL);
+	sdvo_connector = kzalloc_obj(*sdvo_connector);
 	if (!sdvo_connector)
 		return NULL;
 
-	conn_state = kzalloc(sizeof(*conn_state), GFP_KERNEL);
+	conn_state = kzalloc_obj(*conn_state);
 	if (!conn_state) {
 		kfree(sdvo_connector);
 		return NULL;
@@ -3387,7 +3389,7 @@ bool intel_sdvo_init(struct intel_display *display,
 	if (!assert_sdvo_port_valid(display, port))
 		return false;
 
-	intel_sdvo = kzalloc(sizeof(*intel_sdvo), GFP_KERNEL);
+	intel_sdvo = kzalloc_obj(*intel_sdvo);
 	if (!intel_sdvo)
 		return false;
 

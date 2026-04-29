@@ -904,7 +904,7 @@ static void active_engine(struct kthread_work *work)
 			arg->result = PTR_ERR(ce[count]);
 			pr_err("[%s] Create context #%ld failed: %d!\n",
 			       engine->name, count, arg->result);
-			while (--count)
+			while (count--)
 				intel_context_put(ce[count]);
 			return;
 		}
@@ -986,7 +986,7 @@ static int __igt_reset_engines(struct intel_gt *gt,
 			h.ctx->sched.priority = 1024;
 	}
 
-	threads = kmalloc_array(I915_NUM_ENGINES, sizeof(*threads), GFP_KERNEL);
+	threads = kmalloc_objs(*threads, I915_NUM_ENGINES);
 	if (!threads)
 		return -ENOMEM;
 

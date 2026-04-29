@@ -229,6 +229,8 @@ static const struct regmap_range axp717_writeable_ranges[] = {
 	regmap_reg_range(AXP717_DCDC_OUTPUT_CONTROL, AXP717_CPUSLDO_CONTROL),
 	regmap_reg_range(AXP717_ADC_CH_EN_CONTROL, AXP717_ADC_CH_EN_CONTROL),
 	regmap_reg_range(AXP717_ADC_DATA_SEL, AXP717_ADC_DATA_SEL),
+	regmap_reg_range(AXP717_TYPEC_CC_AA_EN, AXP717_TYPEC_CC_AA_EN),
+	regmap_reg_range(AXP717_TYPEC_CC_MODE_CONTROL, AXP717_TYPEC_CC_MODE_CONTROL),
 };
 
 static const struct regmap_range axp717_volatile_ranges[] = {
@@ -237,6 +239,7 @@ static const struct regmap_range axp717_volatile_ranges[] = {
 	regmap_reg_range(AXP717_BATT_PERCENT_DATA, AXP717_BATT_PERCENT_DATA),
 	regmap_reg_range(AXP717_BATT_V_H, AXP717_BATT_CHRG_I_L),
 	regmap_reg_range(AXP717_ADC_DATA_H, AXP717_ADC_DATA_L),
+	regmap_reg_range(AXP717_TYPEC_CC_STATUS, AXP717_TYPEC_CC_STATUS),
 };
 
 static const struct regmap_access_table axp717_writeable_table = {
@@ -458,7 +461,7 @@ static const struct regmap_config axp717_regmap_config = {
 	.val_bits = 8,
 	.wr_table = &axp717_writeable_table,
 	.volatile_table = &axp717_volatile_table,
-	.max_register = AXP717_ADC_DATA_L,
+	.max_register = AXP717_TYPEC_CC_STATUS,
 	.cache_type = REGCACHE_MAPLE,
 };
 
@@ -1053,7 +1056,8 @@ static const struct mfd_cell axp152_cells[] = {
 };
 
 static struct mfd_cell axp313a_cells[] = {
-	MFD_CELL_NAME("axp20x-regulator"),
+	/* AXP323 is sometimes paired with AXP717 as sub-PMIC */
+	MFD_CELL_BASIC("axp20x-regulator", NULL, NULL, 0, 1),
 	MFD_CELL_RES("axp313a-pek", axp313a_pek_resources),
 };
 
@@ -1230,9 +1234,8 @@ static const struct mfd_cell axp15060_cells[] = {
 
 /* For boards that don't have IRQ line connected to SOC. */
 static const struct mfd_cell axp_regulator_only_cells[] = {
-	{
-		.name		= "axp20x-regulator",
-	},
+	/* PMIC without IRQ line may be secondary PMIC */
+	MFD_CELL_BASIC("axp20x-regulator", NULL, NULL, 0, 1),
 };
 
 static int axp20x_power_off(struct sys_off_data *data)

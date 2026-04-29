@@ -16,15 +16,34 @@
 #include <linux/pse-pd/pse.h>
 
 #define TPS23881_MAX_CHANS 8
+#define TPS23881_MAX_IRQ_RETRIES 10
 
+#define TPS23881_REG_IT		0x0
+#define TPS23881_REG_IT_MASK	0x1
+#define TPS23881_REG_IT_DISF	BIT(2)
+#define TPS23881_REG_IT_DETC	BIT(3)
+#define TPS23881_REG_IT_CLASC	BIT(4)
+#define TPS23881_REG_IT_IFAULT	BIT(5)
+#define TPS23881_REG_IT_SUPF	BIT(7)
+#define TPS23881_REG_DET_EVENT	0x5
+#define TPS23881_REG_FAULT	0x7
+#define TPS23881_REG_SUPF_EVENT	0xb
+#define TPS23881_REG_TSD	BIT(7)
+#define TPS23881_REG_DISC	0xc
 #define TPS23881_REG_PW_STATUS	0x10
 #define TPS23881_REG_OP_MODE	0x12
+#define TPS23881_REG_DISC_EN	0x13
 #define TPS23881_OP_MODE_SEMIAUTO	0xaaaa
 #define TPS23881_REG_DIS_EN	0x13
 #define TPS23881_REG_DET_CLA_EN	0x14
 #define TPS23881_REG_GEN_MASK	0x17
+#define TPS23881_REG_CLCHE	BIT(2)
+#define TPS23881_REG_DECHE	BIT(3)
 #define TPS23881_REG_NBITACC	BIT(5)
+#define TPS23881_REG_INTEN	BIT(7)
 #define TPS23881_REG_PW_EN	0x19
+#define TPS23881_REG_RESET	0x1a
+#define TPS23881_REG_CLRAIN	BIT(7)
 #define TPS23881_REG_2PAIR_POL1	0x1e
 #define TPS23881_REG_PORT_MAP	0x26
 #define TPS23881_REG_PORT_POWER	0x29
@@ -36,14 +55,12 @@
 #define TPS23881_REG_TPON	BIT(0)
 #define TPS23881_REG_FWREV	0x41
 #define TPS23881_REG_DEVID	0x43
-#define TPS23881_REG_DEVID_MASK	0xF0
-#define TPS23881_DEVICE_ID	0x02
 #define TPS23881_REG_CHAN1_CLASS	0x4c
 #define TPS23881_REG_SRAM_CTRL	0x60
 #define TPS23881_REG_SRAM_DATA	0x61
 
 #define TPS23881_UV_STEP	3662
-#define TPS23881_NA_STEP	70190
+#define TPS23881_NA_STEP	89500
 #define TPS23881_MW_STEP	500
 #define TPS23881_MIN_PI_PW_LIMIT_MW	2000
 
@@ -51,6 +68,7 @@ struct tps23881_port_desc {
 	u8 chan[2];
 	bool is_4p;
 	int pw_pol;
+	bool exist;
 };
 
 struct tps23881_priv {
@@ -168,6 +186,7 @@ static int tps23881_pi_enable(struct pse_controller_dev *pcdev, int id)
 	struct i2c_client *client = priv->client;
 	u8 chan;
 	u16 val;
+	int ret;
 
 	if (id >= TPS23881_MAX_CHANS)
 		return -ERANGE;
@@ -181,7 +200,22 @@ static int tps23881_pi_enable(struct pse_controller_dev *pcdev, int id)
 				       BIT(chan % 4));
 	}
 
-	return i2c_smbus_write_word_data(client, TPS23881_REG_PW_EN, val);
+	ret = i2c_smbus_write_word_data(client, TPS23881_REG_PW_EN, val);
+	if (ret)
+		return ret;
+
+	/* Enable DC disconnect*/
+	chan = priv->port[id].chan[0];
+	ret = i2c_smbus_read_word_data(client, TPS23881_REG_DISC_EN);
+	if (ret < 0)
+		return ret;
+
+	val = tps23881_set_val(ret, chan, 0, BIT(chan % 4), BIT(chan % 4));
+	ret = i2c_smbus_write_word_data(client, TPS23881_REG_DISC_EN, val);
+	if (ret)
+		return ret;
+
+	return 0;
 }
 
 static int tps23881_pi_disable(struct pse_controller_dev *pcdev, int id)
@@ -213,6 +247,17 @@ static int tps23881_pi_disable(struct pse_controller_dev *pcdev, int id)
 	 * of 5ms after PWOFFn command for all register values to be updated"
 	 */
 	mdelay(5);
+
+	/* Disable DC disconnect*/
+	chan = priv->port[id].chan[0];
+	ret = i2c_smbus_read_word_data(client, TPS23881_REG_DISC_EN);
+	if (ret < 0)
+		return ret;
+
+	val = tps23881_set_val(ret, chan, 0, 0, BIT(chan % 4));
+	ret = i2c_smbus_write_word_data(client, TPS23881_REG_DISC_EN, val);
+	if (ret)
+		return ret;
 
 	/* Enable detection and classification */
 	ret = i2c_smbus_read_word_data(client, TPS23881_REG_DET_CLA_EN);
@@ -478,8 +523,7 @@ tps23881_pi_get_pw_limit_ranges(struct pse_controller_dev *pcdev, int id,
 {
 	struct ethtool_c33_pse_pw_limit_range *c33_pw_limit_ranges;
 
-	c33_pw_limit_ranges = kzalloc(sizeof(*c33_pw_limit_ranges),
-				      GFP_KERNEL);
+	c33_pw_limit_ranges = kzalloc_obj(*c33_pw_limit_ranges);
 	if (!c33_pw_limit_ranges)
 		return -ENOMEM;
 
@@ -782,8 +826,10 @@ tps23881_write_port_matrix(struct tps23881_priv *priv,
 		hw_chan = port_matrix[i].hw_chan[0] % 4;
 
 		/* Set software port matrix for existing ports */
-		if (port_matrix[i].exist)
+		if (port_matrix[i].exist) {
 			priv->port[pi_id].chan[0] = lgcl_chan;
+			priv->port[pi_id].exist = true;
+		}
 
 		/* Initialize power policy internal value */
 		priv->port[pi_id].pw_pol = -1;
@@ -907,6 +953,47 @@ static int tps23881_setup_pi_matrix(struct pse_controller_dev *pcdev)
 	return ret;
 }
 
+static int tps23881_power_class_table[] = {
+	-ERANGE,
+	4000,
+	7000,
+	15500,
+	30000,
+	15500,
+	15500,
+	-ERANGE,
+	45000,
+	60000,
+	75000,
+	90000,
+	15500,
+	45000,
+	-ERANGE,
+	-ERANGE,
+};
+
+static int tps23881_pi_get_pw_req(struct pse_controller_dev *pcdev, int id)
+{
+	struct tps23881_priv *priv = to_tps23881_priv(pcdev);
+	struct i2c_client *client = priv->client;
+	u8 reg, chan;
+	int ret;
+	u16 val;
+
+	/* For a 4-pair the classification need 5ms to be completed */
+	if (priv->port[id].is_4p)
+		mdelay(5);
+
+	chan = priv->port[id].chan[0];
+	reg = TPS23881_REG_DISC + (chan % 4);
+	ret = i2c_smbus_read_word_data(client, reg);
+	if (ret < 0)
+		return ret;
+
+	val = tps23881_calc_val(ret, chan, 4, 0xf);
+	return tps23881_power_class_table[val];
+}
+
 static const struct pse_controller_ops tps23881_ops = {
 	.setup_pi_matrix = tps23881_setup_pi_matrix,
 	.pi_enable = tps23881_pi_enable,
@@ -919,10 +1006,31 @@ static const struct pse_controller_ops tps23881_ops = {
 	.pi_get_pw_limit = tps23881_pi_get_pw_limit,
 	.pi_set_pw_limit = tps23881_pi_set_pw_limit,
 	.pi_get_pw_limit_ranges = tps23881_pi_get_pw_limit_ranges,
+	.pi_get_pw_req = tps23881_pi_get_pw_req,
 };
 
-static const char fw_parity_name[] = "ti/tps23881/tps23881-parity-14.bin";
-static const char fw_sram_name[] = "ti/tps23881/tps23881-sram-14.bin";
+struct tps23881_info {
+	u8 dev_id;	/* device ID and silicon revision */
+	const char *fw_parity_name;	/* parity code firmware file name */
+	const char *fw_sram_name;	/* SRAM code firmware file name */
+};
+
+enum tps23881_model {
+	TPS23881,
+	TPS23881B,
+};
+
+static const struct tps23881_info tps23881_info[] = {
+	[TPS23881] = {
+		.dev_id = 0x22,
+		.fw_parity_name = "ti/tps23881/tps23881-parity-14.bin",
+		.fw_sram_name = "ti/tps23881/tps23881-sram-14.bin",
+	},
+	[TPS23881B] = {
+		.dev_id = 0x24,
+		/* skip SRAM load, ROM provides Clause 145 hardware-level support */
+	},
+};
 
 struct tps23881_fw_conf {
 	u8 reg;
@@ -994,16 +1102,17 @@ out:
 	return ret;
 }
 
-static int tps23881_flash_sram_fw(struct i2c_client *client)
+static int tps23881_flash_sram_fw(struct i2c_client *client,
+				  const struct tps23881_info *info)
 {
 	int ret;
 
-	ret = tps23881_flash_sram_fw_part(client, fw_parity_name,
+	ret = tps23881_flash_sram_fw_part(client, info->fw_parity_name,
 					  tps23881_fw_parity_conf);
 	if (ret)
 		return ret;
 
-	ret = tps23881_flash_sram_fw_part(client, fw_sram_name,
+	ret = tps23881_flash_sram_fw_part(client, info->fw_sram_name,
 					  tps23881_fw_sram_conf);
 	if (ret)
 		return ret;
@@ -1017,9 +1126,311 @@ static int tps23881_flash_sram_fw(struct i2c_client *client)
 	return 0;
 }
 
+/* Convert interrupt events to 0xff to be aligned with the chan
+ * number.
+ */
+static u8 tps23881_irq_export_chans_helper(u16 reg_val, u8 field_offset)
+{
+	u8 val;
+
+	val = (reg_val >> (4 + field_offset) & 0xf0) |
+	      (reg_val >> field_offset & 0x0f);
+
+	return val;
+}
+
+/* Convert chan number to port number */
+static void tps23881_set_notifs_helper(struct tps23881_priv *priv,
+				       u8 chans,
+				       unsigned long *notifs,
+				       unsigned long *notifs_mask,
+				       enum ethtool_pse_event event)
+{
+	u8 chan;
+	int i;
+
+	if (!chans)
+		return;
+
+	for (i = 0; i < TPS23881_MAX_CHANS; i++) {
+		if (!priv->port[i].exist)
+			continue;
+		/* No need to look at the 2nd channel in case of PoE4 as
+		 * both registers are set.
+		 */
+		chan = priv->port[i].chan[0];
+
+		if (BIT(chan) & chans) {
+			*notifs_mask |= BIT(i);
+			notifs[i] |= event;
+		}
+	}
+}
+
+static void tps23881_irq_event_over_temp(struct tps23881_priv *priv,
+					 u16 reg_val,
+					 unsigned long *notifs,
+					 unsigned long *notifs_mask)
+{
+	int i;
+
+	if (reg_val & TPS23881_REG_TSD) {
+		for (i = 0; i < TPS23881_MAX_CHANS; i++) {
+			if (!priv->port[i].exist)
+				continue;
+
+			*notifs_mask |= BIT(i);
+			notifs[i] |= ETHTOOL_PSE_EVENT_OVER_TEMP;
+		}
+	}
+}
+
+static int tps23881_irq_event_over_current(struct tps23881_priv *priv,
+					   u16 reg_val,
+					   unsigned long *notifs,
+					   unsigned long *notifs_mask)
+{
+	int i, ret;
+	u8 chans;
+
+	chans = tps23881_irq_export_chans_helper(reg_val, 0);
+	if (!chans)
+		return 0;
+
+	tps23881_set_notifs_helper(priv, chans, notifs, notifs_mask,
+				   ETHTOOL_PSE_EVENT_OVER_CURRENT |
+				   ETHTOOL_C33_PSE_EVENT_DISCONNECTION);
+
+	/* Over Current event resets the power limit registers so we need
+	 * to configured it again.
+	 */
+	for_each_set_bit(i, notifs_mask, priv->pcdev.nr_lines) {
+		if (priv->port[i].pw_pol < 0)
+			continue;
+
+		ret = tps23881_pi_enable_manual_pol(priv, i);
+		if (ret < 0)
+			return ret;
+
+		/* Set power policy */
+		ret = tps23881_pi_set_pw_pol_limit(priv, i,
+						   priv->port[i].pw_pol,
+						   priv->port[i].is_4p);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
+static void tps23881_irq_event_disconnection(struct tps23881_priv *priv,
+					     u16 reg_val,
+					     unsigned long *notifs,
+					     unsigned long *notifs_mask)
+{
+	u8 chans;
+
+	chans = tps23881_irq_export_chans_helper(reg_val, 4);
+	if (chans)
+		tps23881_set_notifs_helper(priv, chans, notifs, notifs_mask,
+					   ETHTOOL_C33_PSE_EVENT_DISCONNECTION);
+}
+
+static int tps23881_irq_event_detection(struct tps23881_priv *priv,
+					u16 reg_val,
+					unsigned long *notifs,
+					unsigned long *notifs_mask)
+{
+	enum ethtool_pse_event event;
+	int reg, ret, i, val;
+	unsigned long chans;
+
+	chans = tps23881_irq_export_chans_helper(reg_val, 0);
+	for_each_set_bit(i, &chans, TPS23881_MAX_CHANS) {
+		reg = TPS23881_REG_DISC + (i % 4);
+		ret = i2c_smbus_read_word_data(priv->client, reg);
+		if (ret < 0)
+			return ret;
+
+		val = tps23881_calc_val(ret, i, 0, 0xf);
+		/* If detection valid */
+		if (val == 0x4)
+			event = ETHTOOL_C33_PSE_EVENT_DETECTION;
+		else
+			event = ETHTOOL_C33_PSE_EVENT_DISCONNECTION;
+
+		tps23881_set_notifs_helper(priv, BIT(i), notifs,
+					   notifs_mask, event);
+	}
+
+	return 0;
+}
+
+static int tps23881_irq_event_classification(struct tps23881_priv *priv,
+					     u16 reg_val,
+					     unsigned long *notifs,
+					     unsigned long *notifs_mask)
+{
+	int reg, ret, val, i;
+	unsigned long chans;
+
+	chans = tps23881_irq_export_chans_helper(reg_val, 4);
+	for_each_set_bit(i, &chans, TPS23881_MAX_CHANS) {
+		reg = TPS23881_REG_DISC + (i % 4);
+		ret = i2c_smbus_read_word_data(priv->client, reg);
+		if (ret < 0)
+			return ret;
+
+		val = tps23881_calc_val(ret, i, 4, 0xf);
+		/* Do not report classification event for unknown class */
+		if (!val || val == 0x8 || val == 0xf)
+			continue;
+
+		tps23881_set_notifs_helper(priv, BIT(i), notifs,
+					   notifs_mask,
+					   ETHTOOL_C33_PSE_EVENT_CLASSIFICATION);
+	}
+
+	return 0;
+}
+
+static int tps23881_irq_event_handler(struct tps23881_priv *priv, u16 reg,
+				      unsigned long *notifs,
+				      unsigned long *notifs_mask)
+{
+	struct i2c_client *client = priv->client;
+	int ret, val;
+
+	/* The Supply event bit is repeated twice so we only need to read
+	 * the one from the first byte.
+	 */
+	if (reg & TPS23881_REG_IT_SUPF) {
+		ret = i2c_smbus_read_word_data(client, TPS23881_REG_SUPF_EVENT);
+		if (ret < 0)
+			return ret;
+		tps23881_irq_event_over_temp(priv, ret, notifs, notifs_mask);
+	}
+
+	if (reg & (TPS23881_REG_IT_IFAULT | TPS23881_REG_IT_IFAULT << 8 |
+		   TPS23881_REG_IT_DISF | TPS23881_REG_IT_DISF << 8)) {
+		ret = i2c_smbus_read_word_data(client, TPS23881_REG_FAULT);
+		if (ret < 0)
+			return ret;
+		ret = tps23881_irq_event_over_current(priv, ret, notifs,
+						      notifs_mask);
+		if (ret)
+			return ret;
+
+		tps23881_irq_event_disconnection(priv, ret, notifs, notifs_mask);
+	}
+
+	if (reg & (TPS23881_REG_IT_DETC | TPS23881_REG_IT_DETC << 8 |
+		   TPS23881_REG_IT_CLASC | TPS23881_REG_IT_CLASC << 8)) {
+		ret = i2c_smbus_read_word_data(client, TPS23881_REG_DET_EVENT);
+		if (ret < 0)
+			return ret;
+
+		val = ret;
+		ret = tps23881_irq_event_detection(priv, val, notifs,
+						   notifs_mask);
+		if (ret)
+			return ret;
+
+		ret = tps23881_irq_event_classification(priv, val, notifs,
+							notifs_mask);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
+static int tps23881_irq_handler(int irq, struct pse_controller_dev *pcdev,
+				unsigned long *notifs,
+				unsigned long *notifs_mask)
+{
+	struct tps23881_priv *priv = to_tps23881_priv(pcdev);
+	struct i2c_client *client = priv->client;
+	int ret, it_mask, retry;
+
+	/* Get interruption mask */
+	ret = i2c_smbus_read_word_data(client, TPS23881_REG_IT_MASK);
+	if (ret < 0)
+		return ret;
+	it_mask = ret;
+
+	/* Read interrupt register until it frees the interruption pin. */
+	retry = 0;
+	while (true) {
+		if (retry > TPS23881_MAX_IRQ_RETRIES) {
+			dev_err(&client->dev, "interrupt never freed");
+			return -ETIMEDOUT;
+		}
+
+		ret = i2c_smbus_read_word_data(client, TPS23881_REG_IT);
+		if (ret < 0)
+			return ret;
+
+		/* No more relevant interruption */
+		if (!(ret & it_mask))
+			return 0;
+
+		ret = tps23881_irq_event_handler(priv, (u16)ret, notifs,
+						 notifs_mask);
+		if (ret)
+			return ret;
+
+		retry++;
+	}
+	return 0;
+}
+
+static int tps23881_setup_irq(struct tps23881_priv *priv, int irq)
+{
+	struct i2c_client *client = priv->client;
+	struct pse_irq_desc irq_desc = {
+		.name = "tps23881-irq",
+		.map_event = tps23881_irq_handler,
+	};
+	int ret;
+	u16 val;
+
+	if (!irq) {
+		dev_err(&client->dev, "interrupt is missing");
+		return -EINVAL;
+	}
+
+	val = TPS23881_REG_IT_IFAULT | TPS23881_REG_IT_SUPF |
+	      TPS23881_REG_IT_DETC | TPS23881_REG_IT_CLASC |
+	      TPS23881_REG_IT_DISF;
+	val |= val << 8;
+	ret = i2c_smbus_write_word_data(client, TPS23881_REG_IT_MASK, val);
+	if (ret)
+		return ret;
+
+	ret = i2c_smbus_read_word_data(client, TPS23881_REG_GEN_MASK);
+	if (ret < 0)
+		return ret;
+
+	val = TPS23881_REG_INTEN | TPS23881_REG_CLCHE | TPS23881_REG_DECHE;
+	val |= val << 8;
+	val |= (u16)ret;
+	ret = i2c_smbus_write_word_data(client, TPS23881_REG_GEN_MASK, val);
+	if (ret < 0)
+		return ret;
+
+	/* Reset interrupts registers */
+	ret = i2c_smbus_write_word_data(client, TPS23881_REG_RESET,
+					TPS23881_REG_CLRAIN);
+	if (ret < 0)
+		return ret;
+
+	return devm_pse_irq_helper(&priv->pcdev, irq, 0, &irq_desc);
+}
+
 static int tps23881_i2c_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
+	const struct tps23881_info *info;
 	struct tps23881_priv *priv;
 	struct gpio_desc *reset;
 	int ret;
@@ -1029,6 +1440,10 @@ static int tps23881_i2c_probe(struct i2c_client *client)
 		dev_err(dev, "i2c check functionality failed\n");
 		return -ENXIO;
 	}
+
+	info = i2c_get_match_data(client);
+	if (!info)
+		return -EINVAL;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -1048,7 +1463,7 @@ static int tps23881_i2c_probe(struct i2c_client *client)
 		 * to Load TPS2388x SRAM and Parity Code over I2C" (Rev E))
 		 * indicates we should delay that programming by at least 50ms. So
 		 * we'll wait the entire 50ms here to ensure we're safe to go to the
-		 * SRAM loading proceedure.
+		 * SRAM loading procedure.
 		 */
 		msleep(50);
 	}
@@ -1057,20 +1472,27 @@ static int tps23881_i2c_probe(struct i2c_client *client)
 	if (ret < 0)
 		return ret;
 
-	if (FIELD_GET(TPS23881_REG_DEVID_MASK, ret) != TPS23881_DEVICE_ID) {
+	if (ret != info->dev_id) {
 		dev_err(dev, "Wrong device ID\n");
 		return -ENXIO;
 	}
 
-	ret = tps23881_flash_sram_fw(client);
-	if (ret < 0)
-		return ret;
+	if (info->fw_sram_name) {
+		ret = tps23881_flash_sram_fw(client, info);
+		if (ret < 0)
+			return ret;
+	}
 
 	ret = i2c_smbus_read_byte_data(client, TPS23881_REG_FWREV);
 	if (ret < 0)
 		return ret;
 
-	dev_info(&client->dev, "Firmware revision 0x%x\n", ret);
+	if (ret == 0xFF) {
+		dev_err(&client->dev, "Device entered safe mode\n");
+		return -ENXIO;
+	}
+	dev_info(&client->dev, "Firmware revision 0x%x%s\n", ret,
+		 ret == 0x00 ? " (ROM firmware)" : "");
 
 	/* Set configuration B, 16 bit access on a single device address */
 	ret = i2c_smbus_read_byte_data(client, TPS23881_REG_GEN_MASK);
@@ -1091,23 +1513,36 @@ static int tps23881_i2c_probe(struct i2c_client *client)
 	priv->pcdev.dev = dev;
 	priv->pcdev.types = ETHTOOL_PSE_C33;
 	priv->pcdev.nr_lines = TPS23881_MAX_CHANS;
+	priv->pcdev.supp_budget_eval_strategies = PSE_BUDGET_EVAL_STRAT_STATIC;
 	ret = devm_pse_controller_register(dev, &priv->pcdev);
 	if (ret) {
 		return dev_err_probe(dev, ret,
 				     "failed to register PSE controller\n");
 	}
 
+	ret = tps23881_setup_irq(priv, client->irq);
+	if (ret)
+		return ret;
+
 	return ret;
 }
 
 static const struct i2c_device_id tps23881_id[] = {
-	{ "tps23881" },
+	{ "tps23881", .driver_data = (kernel_ulong_t)&tps23881_info[TPS23881] },
+	{ "tps23881b", .driver_data = (kernel_ulong_t)&tps23881_info[TPS23881B] },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, tps23881_id);
 
 static const struct of_device_id tps23881_of_match[] = {
-	{ .compatible = "ti,tps23881", },
+	{
+		.compatible = "ti,tps23881",
+		.data = &tps23881_info[TPS23881]
+	},
+	{
+		.compatible = "ti,tps23881b",
+		.data = &tps23881_info[TPS23881B]
+	},
 	{ },
 };
 MODULE_DEVICE_TABLE(of, tps23881_of_match);

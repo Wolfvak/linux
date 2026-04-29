@@ -267,7 +267,7 @@ static void get_skas_faultinfo(int pid, struct faultinfo *fi)
 	memcpy(fi, (void *)current_stub_stack(), sizeof(*fi));
 }
 
-static void handle_trap(int pid, struct uml_pt_regs *regs)
+static void handle_trap(struct uml_pt_regs *regs)
 {
 	if ((UPT_IP(regs) >= STUB_START) && (UPT_IP(regs) < STUB_END))
 		fatal_sigsegv();
@@ -298,7 +298,6 @@ static int userspace_tramp(void *data)
 		.seccomp = using_seccomp,
 		.stub_start = STUB_START,
 	};
-	struct iomem_region *iomem;
 	int ret;
 
 	if (using_seccomp) {
@@ -331,12 +330,6 @@ static int userspace_tramp(void *data)
 	syscall(__NR_close_range, 0, ~0U, CLOSE_RANGE_CLOEXEC);
 
 	fcntl(init_data.stub_data_fd, F_SETFD, 0);
-
-	/* In SECCOMP mode, these FDs are passed when needed */
-	if (!using_seccomp) {
-		for (iomem = iomem_regions; iomem; iomem = iomem->next)
-			fcntl(iomem->fd, F_SETFD, 0);
-	}
 
 	/* dup2 signaling FD/socket to STDIN */
 	if (dup2(tramp_data->sockpair[0], 0) < 0)
@@ -434,7 +427,6 @@ static int __init init_stub_exe_fd(void)
 __initcall(init_stub_exe_fd);
 
 int using_seccomp;
-int userspace_pid[NR_CPUS];
 
 /**
  * start_userspace() - prepare a new userspace process
@@ -548,13 +540,13 @@ out_close:
 	return err;
 }
 
-int unscheduled_userspace_iterations;
+static int unscheduled_userspace_iterations;
 extern unsigned long tt_extra_sched_jiffies;
 
 void userspace(struct uml_pt_regs *regs)
 {
-	int err, status, op, pid = userspace_pid[0];
-	siginfo_t si_ptrace;
+	int err, status, op;
+	siginfo_t si_local;
 	siginfo_t *si;
 	int sig;
 
@@ -562,6 +554,15 @@ void userspace(struct uml_pt_regs *regs)
 	interrupt_end();
 
 	while (1) {
+		struct mm_id *mm_id = current_mm_id();
+
+		/*
+		 * At any given time, only one CPU thread can enter the
+		 * turnstile to operate on the same stub process, including
+		 * executing stub system calls (mmap and munmap).
+		 */
+		enter_turnstile(mm_id);
+
 		/*
 		 * When we are in time-travel mode, userspace can theoretically
 		 * do a *lot* of work without being scheduled. The problem with
@@ -590,14 +591,12 @@ void userspace(struct uml_pt_regs *regs)
 		current_mm_sync();
 
 		if (using_seccomp) {
-			struct mm_id *mm_id = current_mm_id();
 			struct stub_data *proc_data = (void *) mm_id->stack;
-			int ret;
 
-			ret = set_stub_state(regs, proc_data, singlestepping());
-			if (ret) {
+			err = set_stub_state(regs, proc_data, singlestepping());
+			if (err) {
 				printk(UM_KERN_ERR "%s - failed to set regs: %d",
-				       __func__, ret);
+				       __func__, err);
 				fatal_sigsegv();
 			}
 
@@ -623,17 +622,18 @@ void userspace(struct uml_pt_regs *regs)
 			mm_id->syscall_data_len = 0;
 			mm_id->syscall_fd_num = 0;
 
-			ret = get_stub_state(regs, proc_data, NULL);
-			if (ret) {
+			err = get_stub_state(regs, proc_data, NULL);
+			if (err) {
 				printk(UM_KERN_ERR "%s - failed to get regs: %d",
-				       __func__, ret);
+				       __func__, err);
 				fatal_sigsegv();
 			}
 
 			if (proc_data->si_offset > sizeof(proc_data->sigstack) - sizeof(*si))
-				panic("%s - Invalid siginfo offset from child",
-				      __func__);
-			si = (void *)&proc_data->sigstack[proc_data->si_offset];
+				panic("%s - Invalid siginfo offset from child", __func__);
+
+			si = &si_local;
+			memcpy(si, &proc_data->sigstack[proc_data->si_offset], sizeof(*si));
 
 			regs->is_user = 1;
 
@@ -645,8 +645,10 @@ void userspace(struct uml_pt_regs *regs)
 				GET_FAULTINFO_FROM_MC(regs->faultinfo, mcontext);
 			}
 		} else {
+			int pid = mm_id->pid;
+
 			/* Flush out any pending syscalls */
-			err = syscall_stub_flush(current_mm_id());
+			err = syscall_stub_flush(mm_id);
 			if (err) {
 				if (err == -ENOMEM)
 					report_enomem();
@@ -727,8 +729,8 @@ void userspace(struct uml_pt_regs *regs)
 				case SIGFPE:
 				case SIGWINCH:
 					ptrace(PTRACE_GETSIGINFO, pid, 0,
-					       (struct siginfo *)&si_ptrace);
-					si = &si_ptrace;
+					       (struct siginfo *)&si_local);
+					si = &si_local;
 					break;
 				default:
 					si = NULL;
@@ -738,6 +740,8 @@ void userspace(struct uml_pt_regs *regs)
 				sig = 0;
 			}
 		}
+
+		exit_turnstile(mm_id);
 
 		UPT_SYSCALL_NR(regs) = -1; /* Assume: It's not a syscall */
 
@@ -756,7 +760,7 @@ void userspace(struct uml_pt_regs *regs)
 				handle_syscall(regs);
 				break;
 			case SIGTRAP + 0x80:
-				handle_trap(pid, regs);
+				handle_trap(regs);
 				break;
 			case SIGTRAP:
 				relay_signal(SIGTRAP, (struct siginfo *)si, regs, NULL);
@@ -777,7 +781,6 @@ void userspace(struct uml_pt_regs *regs)
 				       __func__, sig);
 				fatal_sigsegv();
 			}
-			pid = userspace_pid[0];
 			interrupt_end();
 
 			/* Avoid -ERESTARTSYS handling in host */
@@ -809,10 +812,9 @@ void switch_threads(jmp_buf *me, jmp_buf *you)
 
 static jmp_buf initial_jmpbuf;
 
-/* XXX Make these percpu */
-static void (*cb_proc)(void *arg);
-static void *cb_arg;
-static jmp_buf *cb_back;
+static __thread void (*cb_proc)(void *arg);
+static __thread void *cb_arg;
+static __thread jmp_buf *cb_back;
 
 int start_idle_thread(void *stack, jmp_buf *switch_buf)
 {
@@ -866,10 +868,10 @@ void initial_thread_cb_skas(void (*proc)(void *), void *arg)
 	cb_arg = arg;
 	cb_back = &here;
 
-	block_signals_trace();
+	initial_jmpbuf_lock();
 	if (UML_SETJMP(&here) == 0)
 		UML_LONGJMP(&initial_jmpbuf, INIT_JMP_CALLBACK);
-	unblock_signals_trace();
+	initial_jmpbuf_unlock();
 
 	cb_proc = NULL;
 	cb_arg = NULL;
@@ -878,8 +880,9 @@ void initial_thread_cb_skas(void (*proc)(void *), void *arg)
 
 void halt_skas(void)
 {
-	block_signals_trace();
+	initial_jmpbuf_lock();
 	UML_LONGJMP(&initial_jmpbuf, INIT_JMP_HALT);
+	/* unreachable */
 }
 
 static bool noreboot;
@@ -895,15 +898,11 @@ __uml_setup("noreboot", noreboot_cmd_param,
 "noreboot\n"
 "    Rather than rebooting, exit always, akin to QEMU's -no-reboot option.\n"
 "    This is useful if you're using CONFIG_PANIC_TIMEOUT in order to catch\n"
-"    crashes in CI\n");
+"    crashes in CI\n\n");
 
 void reboot_skas(void)
 {
-	block_signals_trace();
+	initial_jmpbuf_lock();
 	UML_LONGJMP(&initial_jmpbuf, noreboot ? INIT_JMP_HALT : INIT_JMP_REBOOT);
-}
-
-void __switch_mm(struct mm_id *mm_idp)
-{
-	userspace_pid[0] = mm_idp->pid;
+	/* unreachable */
 }

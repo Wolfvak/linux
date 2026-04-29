@@ -1082,7 +1082,7 @@ static int gs_console_init(struct gs_port *port)
 	if (port->console)
 		return 0;
 
-	cons = kzalloc(sizeof(*port->console), GFP_KERNEL);
+	cons = kzalloc_obj(*port->console);
 	if (!cons)
 		return -ENOMEM;
 
@@ -1215,7 +1215,7 @@ gs_port_alloc(unsigned port_num, struct usb_cdc_line_coding *coding)
 		goto out;
 	}
 
-	port = kzalloc(sizeof(struct gs_port), GFP_KERNEL);
+	port = kzalloc_obj(struct gs_port);
 	if (port == NULL) {
 		ret = -ENOMEM;
 		goto out;
@@ -1501,13 +1501,7 @@ void gserial_suspend(struct gserial *gser)
 		spin_unlock_irqrestore(&serial_port_lock, flags);
 		if (!gserial_wakeup_host(gser))
 			return;
-
-		/* Check if port is valid after acquiring lock back */
 		spin_lock_irqsave(&serial_port_lock, flags);
-		if (!port) {
-			spin_unlock_irqrestore(&serial_port_lock, flags);
-			return;
-		}
 	}
 
 	spin_lock(&port->port_lock);

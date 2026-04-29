@@ -27,7 +27,7 @@ static vm_paddr_t gpa_base;
 
 static struct kvm_vm *vm;
 static struct kvm_vcpu **vcpus;
-static int gic_fd, its_fd;
+static int its_fd;
 
 static struct test_data {
 	bool		request_vcpus_stop;
@@ -118,11 +118,16 @@ static void guest_setup_gic(void)
 
 	guest_setup_its_mappings();
 	guest_invalidate_all_rdists();
+
+	/* SYNC to ensure ITS setup is complete */
+	for (cpuid = 0; cpuid < test_data.nr_cpus; cpuid++)
+		its_send_sync_cmd(test_data.cmdq_base_va, cpuid);
 }
 
 static void guest_code(size_t nr_lpis)
 {
 	guest_setup_gic();
+	local_irq_enable();
 
 	GUEST_SYNC(0);
 
@@ -214,9 +219,6 @@ static void setup_test_data(void)
 
 static void setup_gic(void)
 {
-	gic_fd = vgic_v3_setup(vm, test_data.nr_cpus, 64);
-	__TEST_REQUIRE(gic_fd >= 0, "Failed to create GICv3");
-
 	its_fd = vgic_its_setup(vm);
 }
 
@@ -334,7 +336,7 @@ static void setup_vm(void)
 {
 	int i;
 
-	vcpus = malloc(test_data.nr_cpus * sizeof(struct kvm_vcpu));
+	vcpus = malloc(test_data.nr_cpus * sizeof(struct kvm_vcpu *));
 	TEST_ASSERT(vcpus, "Failed to allocate vCPU array");
 
 	vm = vm_create_with_vcpus(test_data.nr_cpus, guest_code, vcpus);
@@ -355,7 +357,6 @@ static void setup_vm(void)
 static void destroy_vm(void)
 {
 	close(its_fd);
-	close(gic_fd);
 	kvm_vm_free(vm);
 	free(vcpus);
 }
@@ -373,6 +374,8 @@ int main(int argc, char **argv)
 {
 	u32 nr_threads;
 	int c;
+
+	TEST_REQUIRE(kvm_supports_vgic_v3());
 
 	while ((c = getopt(argc, argv, "hv:d:e:i:")) != -1) {
 		switch (c) {

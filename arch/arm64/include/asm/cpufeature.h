@@ -19,7 +19,7 @@
 #define ARM64_SW_FEATURE_OVERRIDE_HVHE		4
 #define ARM64_SW_FEATURE_OVERRIDE_RODATA_OFF	8
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/bug.h>
 #include <linux/jump_label.h>
@@ -199,7 +199,7 @@ extern struct arm64_ftr_reg arm64_ftr_reg_ctrel0;
  *    registers (e.g, SCTLR, TCR etc.) or patching the kernel via
  *    alternatives. The kernel patching is batched and performed at later
  *    point. The actions are always initiated only after the capability
- *    is finalised. This is usally denoted by "enabling" the capability.
+ *    is finalised. This is usually denoted by "enabling" the capability.
  *    The actions are initiated as follows :
  *	a) Action is triggered on all online CPUs, after the capability is
  *	finalised, invoked within the stop_machine() context from
@@ -251,7 +251,7 @@ extern struct arm64_ftr_reg arm64_ftr_reg_ctrel0;
 #define ARM64_CPUCAP_SCOPE_LOCAL_CPU		((u16)BIT(0))
 #define ARM64_CPUCAP_SCOPE_SYSTEM		((u16)BIT(1))
 /*
- * The capabilitiy is detected on the Boot CPU and is used by kernel
+ * The capability is detected on the Boot CPU and is used by kernel
  * during early boot. i.e, the capability should be "detected" and
  * "enabled" as early as possibly on all booting CPUs.
  */
@@ -275,6 +275,14 @@ extern struct arm64_ftr_reg arm64_ftr_reg_ctrel0;
 #define ARM64_CPUCAP_OPTIONAL_FOR_LATE_CPU	((u16)BIT(5))
 /* Panic when a conflict is detected */
 #define ARM64_CPUCAP_PANIC_ON_CONFLICT		((u16)BIT(6))
+/*
+ * When paired with SCOPE_LOCAL_CPU, all early CPUs must satisfy the
+ * condition. This is different from SCOPE_SYSTEM where the check is performed
+ * only once at the end of the SMP boot on the sanitised ID registers.
+ * SCOPE_SYSTEM is not suitable for cases where the capability depends on
+ * properties local to a CPU like MIDR_EL1.
+ */
+#define ARM64_CPUCAP_MATCH_ALL_EARLY_CPUS	((u16)BIT(7))
 
 /*
  * CPU errata workarounds that need to be enabled at boot time if one or
@@ -304,6 +312,16 @@ extern struct arm64_ftr_reg arm64_ftr_reg_ctrel0;
 	(ARM64_CPUCAP_SCOPE_LOCAL_CPU		|	\
 	 ARM64_CPUCAP_OPTIONAL_FOR_LATE_CPU	|	\
 	 ARM64_CPUCAP_PERMITTED_FOR_LATE_CPU)
+/*
+ * CPU feature detected at boot time and present on all early CPUs. Late CPUs
+ * are permitted to have the feature even if it hasn't been enabled, although
+ * the feature will not be used by Linux in this case. If all early CPUs have
+ * the feature, then every late CPU must have it.
+ */
+#define ARM64_CPUCAP_EARLY_LOCAL_CPU_FEATURE		\
+	 (ARM64_CPUCAP_SCOPE_LOCAL_CPU		|	\
+	  ARM64_CPUCAP_PERMITTED_FOR_LATE_CPU	|	\
+	  ARM64_CPUCAP_MATCH_ALL_EARLY_CPUS)
 
 /*
  * CPU feature detected at boot time, on one or more CPUs. A late CPU
@@ -389,6 +407,11 @@ struct arm64_cpu_capabilities {
 static inline int cpucap_default_scope(const struct arm64_cpu_capabilities *cap)
 {
 	return cap->type & ARM64_CPUCAP_SCOPE_MASK;
+}
+
+static inline bool cpucap_match_all_early_cpus(const struct arm64_cpu_capabilities *cap)
+{
+	return cap->type & ARM64_CPUCAP_MATCH_ALL_EARLY_CPUS;
 }
 
 /*
@@ -848,6 +871,13 @@ static inline bool system_supports_pmuv3(void)
 	return cpus_have_final_cap(ARM64_HAS_PMUV3);
 }
 
+bool cpu_supports_bbml2_noabort(void);
+
+static inline bool system_supports_bbml2_noabort(void)
+{
+	return alternative_has_cap_unlikely(ARM64_HAS_BBML2_NOABORT);
+}
+
 int do_emulate_mrs(struct pt_regs *regs, u32 sys_reg, u32 rt);
 bool try_emulate_mrs(struct pt_regs *regs, u32 isn);
 
@@ -1048,6 +1078,6 @@ static inline bool cpu_has_lpa2(void)
 #endif
 }
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #endif

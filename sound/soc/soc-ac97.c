@@ -125,7 +125,7 @@ static const struct gpio_chip snd_soc_ac97_gpio_chip = {
 	.direction_input	= snd_soc_ac97_gpio_direction_in,
 	.get			= snd_soc_ac97_gpio_get,
 	.direction_output	= snd_soc_ac97_gpio_direction_out,
-	.set_rv			= snd_soc_ac97_gpio_set,
+	.set			= snd_soc_ac97_gpio_set,
 	.can_sleep		= 1,
 };
 
@@ -181,7 +181,7 @@ struct snd_ac97 *snd_soc_alloc_ac97_component(struct snd_soc_component *componen
 {
 	struct snd_ac97 *ac97;
 
-	ac97 = kzalloc(sizeof(struct snd_ac97), GFP_KERNEL);
+	ac97 = kzalloc_obj(struct snd_ac97);
 	if (ac97 == NULL)
 		return ERR_PTR(-ENOMEM);
 

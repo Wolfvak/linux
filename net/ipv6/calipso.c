@@ -32,7 +32,7 @@
 #include <linux/unaligned.h>
 #include <linux/crc-ccitt.h>
 
-/* Maximium size of the calipso option including
+/* Maximum size of the calipso option including
  * the two-byte TLV header.
  */
 #define CALIPSO_OPT_LEN_MAX (2 + 252)
@@ -42,13 +42,13 @@
  */
 #define CALIPSO_HDR_LEN (2 + 8)
 
-/* Maximium size of the calipso option including
+/* Maximum size of the calipso option including
  * the two-byte TLV header and upto 3 bytes of
  * leading pad and 7 bytes of trailing pad.
  */
 #define CALIPSO_OPT_LEN_MAX_WITH_PAD (3 + CALIPSO_OPT_LEN_MAX + 7)
 
- /* Maximium size of u32 aligned buffer required to hold calipso
+ /* Maximum size of u32 aligned buffer required to hold calipso
   * option.  Max of 3 initial pad bytes starting from buffer + 3.
   * i.e. the worst case is when the previous tlv finishes on 4n + 3.
   */
@@ -133,9 +133,8 @@ static int __init calipso_cache_init(void)
 {
 	u32 iter;
 
-	calipso_cache = kcalloc(CALIPSO_CACHE_BUCKETS,
-				sizeof(struct calipso_map_cache_bkt),
-				GFP_KERNEL);
+	calipso_cache = kzalloc_objs(struct calipso_map_cache_bkt,
+				     CALIPSO_CACHE_BUCKETS);
 	if (!calipso_cache)
 		return -ENOMEM;
 
@@ -275,7 +274,7 @@ static int calipso_cache_add(const unsigned char *calipso_ptr,
 
 	calipso_ptr_len = calipso_ptr[1];
 
-	entry = kzalloc(sizeof(*entry), GFP_ATOMIC);
+	entry = kzalloc_obj(*entry, GFP_ATOMIC);
 	if (!entry)
 		return -ENOMEM;
 	entry->key = kmemdup(calipso_ptr + 2, calipso_ptr_len, GFP_ATOMIC);
@@ -1342,7 +1341,8 @@ static int calipso_skbuff_setattr(struct sk_buff *skb,
 	/* At this point new_end aligns to 4n, so (new_end & 4) pads to 8n */
 	pad = ((new_end & 4) + (end & 7)) & 7;
 	len_delta = new_end - (int)end + pad;
-	ret_val = skb_cow(skb, skb_headroom(skb) + len_delta);
+	ret_val = skb_cow(skb,
+			  skb_headroom(skb) + (len_delta > 0 ? len_delta : 0));
 	if (ret_val < 0)
 		return ret_val;
 

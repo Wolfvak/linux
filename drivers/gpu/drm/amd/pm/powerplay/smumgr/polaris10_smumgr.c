@@ -336,7 +336,7 @@ static int polaris10_smu_init(struct pp_hwmgr *hwmgr)
 {
 	struct polaris10_smumgr *smu_data;
 
-	smu_data = kzalloc(sizeof(struct polaris10_smumgr), GFP_KERNEL);
+	smu_data = kzalloc_obj(struct polaris10_smumgr);
 	if (smu_data == NULL)
 		return -ENOMEM;
 
@@ -2578,9 +2578,8 @@ static int polaris10_initialize_mc_reg_table(struct pp_hwmgr *hwmgr)
 
 static bool polaris10_is_dpm_running(struct pp_hwmgr *hwmgr)
 {
-	return (1 == PHM_READ_INDIRECT_FIELD(hwmgr->device,
-			CGS_IND_REG__SMC, FEATURE_STATUS, VOLTAGE_CONTROLLER_ON))
-			? true : false;
+	return PHM_READ_INDIRECT_FIELD(hwmgr->device,
+			CGS_IND_REG__SMC, FEATURE_STATUS, VOLTAGE_CONTROLLER_ON) == 1;
 }
 
 static int polaris10_update_dpm_settings(struct pp_hwmgr *hwmgr,

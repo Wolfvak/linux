@@ -823,7 +823,7 @@ static int ocfs2_alloc_write_ctxt(struct ocfs2_write_ctxt **wcp,
 	u32 cend;
 	struct ocfs2_write_ctxt *wc;
 
-	wc = kzalloc(sizeof(struct ocfs2_write_ctxt), GFP_NOFS);
+	wc = kzalloc_obj(struct ocfs2_write_ctxt, GFP_NOFS);
 	if (!wc)
 		return -ENOMEM;
 
@@ -1071,6 +1071,7 @@ static int ocfs2_grab_folios_for_write(struct address_space *mapping,
 			if (IS_ERR(wc->w_folios[i])) {
 				ret = PTR_ERR(wc->w_folios[i]);
 				mlog_errno(ret);
+				wc->w_folios[i] = NULL;
 				goto out;
 			}
 		}
@@ -1324,8 +1325,7 @@ retry:
 
 	if (new == NULL) {
 		spin_unlock(&oi->ip_lock);
-		new = kmalloc(sizeof(struct ocfs2_unwritten_extent),
-			     GFP_NOFS);
+		new = kmalloc_obj(struct ocfs2_unwritten_extent, GFP_NOFS);
 		if (new == NULL) {
 			ret = -ENOMEM;
 			goto out;
@@ -1856,7 +1856,8 @@ out:
 	return ret;
 }
 
-static int ocfs2_write_begin(struct file *file, struct address_space *mapping,
+static int ocfs2_write_begin(const struct kiocb *iocb,
+			     struct address_space *mapping,
 			     loff_t pos, unsigned len,
 			     struct folio **foliop, void **fsdata)
 {
@@ -2047,7 +2048,8 @@ out:
 	return copied;
 }
 
-static int ocfs2_write_end(struct file *file, struct address_space *mapping,
+static int ocfs2_write_end(const struct kiocb *iocb,
+			   struct address_space *mapping,
 			   loff_t pos, unsigned len, unsigned copied,
 			   struct folio *folio, void *fsdata)
 {
@@ -2077,7 +2079,7 @@ ocfs2_dio_alloc_write_ctx(struct buffer_head *bh, int *alloc)
 	if (bh->b_private)
 		return bh->b_private;
 
-	dwc = kmalloc(sizeof(struct ocfs2_dio_write_ctxt), GFP_NOFS);
+	dwc = kmalloc_obj(struct ocfs2_dio_write_ctxt, GFP_NOFS);
 	if (dwc == NULL)
 		return NULL;
 	INIT_LIST_HEAD(&dwc->dw_zero_list);

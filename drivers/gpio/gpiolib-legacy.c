@@ -34,30 +34,20 @@ EXPORT_SYMBOL_GPL(gpio_free);
  */
 int gpio_request_one(unsigned gpio, unsigned long flags, const char *label)
 {
-	struct gpio_desc *desc;
 	int err;
 
-	/* Compatibility: assume unavailable "valid" GPIOs will appear later */
-	desc = gpio_to_desc(gpio);
-	if (!desc)
-		return -EPROBE_DEFER;
-
-	err = gpiod_request(desc, label);
+	err = gpio_request(gpio, label);
 	if (err)
 		return err;
 
 	if (flags & GPIOF_IN)
-		err = gpiod_direction_input(desc);
+		err = gpio_direction_input(gpio);
 	else
-		err = gpiod_direction_output_raw(desc, !!(flags & GPIOF_OUT_INIT_HIGH));
+		err = gpio_direction_output(gpio, !!(flags & GPIOF_OUT_INIT_HIGH));
 
 	if (err)
-		goto free_gpio;
+		gpio_free(gpio);
 
-	return 0;
-
- free_gpio:
-	gpiod_free(desc);
 	return err;
 }
 EXPORT_SYMBOL_GPL(gpio_request_one);
@@ -78,50 +68,10 @@ int gpio_request(unsigned gpio, const char *label)
 }
 EXPORT_SYMBOL_GPL(gpio_request);
 
-static void devm_gpio_release(struct device *dev, void *res)
+static void devm_gpio_release(void *gpio)
 {
-	unsigned *gpio = res;
-
-	gpio_free(*gpio);
+	gpio_free((unsigned)(unsigned long)gpio);
 }
-
-/**
- * devm_gpio_request - request a GPIO for a managed device
- * @dev: device to request the GPIO for
- * @gpio: GPIO to allocate
- * @label: the name of the requested GPIO
- *
- * Except for the extra @dev argument, this function takes the
- * same arguments and performs the same function as gpio_request().
- * GPIOs requested with this function will be automatically freed
- * on driver detach.
- *
- * **DEPRECATED** This function is deprecated and must not be used in new code.
- *
- * Returns:
- * 0 on success, or negative errno on failure.
- */
-int devm_gpio_request(struct device *dev, unsigned gpio, const char *label)
-{
-	unsigned *dr;
-	int rc;
-
-	dr = devres_alloc(devm_gpio_release, sizeof(unsigned), GFP_KERNEL);
-	if (!dr)
-		return -ENOMEM;
-
-	rc = gpio_request(gpio, label);
-	if (rc) {
-		devres_free(dr);
-		return rc;
-	}
-
-	*dr = gpio;
-	devres_add(dev, dr);
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(devm_gpio_request);
 
 /**
  * devm_gpio_request_one - request a single GPIO with initial setup
@@ -138,22 +88,22 @@ EXPORT_SYMBOL_GPL(devm_gpio_request);
 int devm_gpio_request_one(struct device *dev, unsigned gpio,
 			  unsigned long flags, const char *label)
 {
-	unsigned *dr;
 	int rc;
 
-	dr = devres_alloc(devm_gpio_release, sizeof(unsigned), GFP_KERNEL);
-	if (!dr)
-		return -ENOMEM;
+	rc = gpio_request(gpio, label);
+	if (rc)
+		return rc;
 
-	rc = gpio_request_one(gpio, flags, label);
+	if (flags & GPIOF_IN)
+		rc = gpio_direction_input(gpio);
+	else
+		rc = gpio_direction_output(gpio, !!(flags & GPIOF_OUT_INIT_HIGH));
+
 	if (rc) {
-		devres_free(dr);
+		gpio_free(gpio);
 		return rc;
 	}
 
-	*dr = gpio;
-	devres_add(dev, dr);
-
-	return 0;
+	return devm_add_action_or_reset(dev, devm_gpio_release, (void *)(unsigned long)gpio);
 }
 EXPORT_SYMBOL_GPL(devm_gpio_request_one);

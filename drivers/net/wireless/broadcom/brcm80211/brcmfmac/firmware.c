@@ -554,12 +554,16 @@ static int brcmf_fw_request_nvram_done(const struct firmware *fw, void *ctx)
 		data = (u8 *)fw->data;
 		data_len = fw->size;
 	} else {
-		if ((data = bcm47xx_nvram_get_contents(&data_len)))
+		data = bcm47xx_nvram_get_contents(&data_len);
+		if (data) {
 			free_bcm47xx_nvram = true;
-		else if ((data = brcmf_fw_nvram_from_efi(&data_len)))
-			kfree_nvram = true;
-		else if (!(cur->flags & BRCMF_FW_REQF_OPTIONAL))
-			goto fail;
+		} else {
+			data = brcmf_fw_nvram_from_efi(&data_len);
+			if (data)
+				kfree_nvram = true;
+			else if (!(cur->flags & BRCMF_FW_REQF_OPTIONAL))
+				goto fail;
+		}
 	}
 
 	if (data)
@@ -761,7 +765,7 @@ int brcmf_fw_get_firmwares(struct device *dev, struct brcmf_fw_request *req,
 	if (!brcmf_fw_request_is_valid(req))
 		return -EINVAL;
 
-	fwctx = kzalloc(sizeof(*fwctx), GFP_KERNEL);
+	fwctx = kzalloc_obj(*fwctx);
 	if (!fwctx)
 		return -ENOMEM;
 
@@ -821,7 +825,7 @@ brcmf_fw_alloc_request(u32 chip, u32 chiprev,
 		return NULL;
 	}
 
-	fwreq = kzalloc(struct_size(fwreq, items, n_fwnames), GFP_KERNEL);
+	fwreq = kzalloc_flex(*fwreq, items, n_fwnames);
 	if (!fwreq)
 		return NULL;
 

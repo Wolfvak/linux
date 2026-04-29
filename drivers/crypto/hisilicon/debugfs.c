@@ -838,7 +838,7 @@ static struct dfx_diff_registers *dfx_regs_init(struct hisi_qm *qm,
 	u32 j, base_offset;
 	int i;
 
-	diff_regs = kcalloc(reg_len, sizeof(*diff_regs), GFP_KERNEL);
+	diff_regs = kzalloc_objs(*diff_regs, reg_len);
 	if (!diff_regs)
 		return ERR_PTR(-ENOMEM);
 
@@ -888,6 +888,7 @@ static int qm_diff_regs_init(struct hisi_qm *qm,
 		dfx_regs_uninit(qm, qm->debug.qm_diff_regs, ARRAY_SIZE(qm_diff_regs));
 		ret = PTR_ERR(qm->debug.acc_diff_regs);
 		qm->debug.acc_diff_regs = NULL;
+		qm->debug.qm_diff_regs = NULL;
 		return ret;
 	}
 

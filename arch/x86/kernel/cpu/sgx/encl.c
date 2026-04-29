@@ -279,7 +279,7 @@ static struct sgx_encl_page *__sgx_encl_load_page(struct sgx_encl *encl,
 
 static struct sgx_encl_page *sgx_encl_load_page_in_vma(struct sgx_encl *encl,
 						       unsigned long addr,
-						       unsigned long vm_flags)
+						       vm_flags_t vm_flags)
 {
 	unsigned long vm_prot_bits = vm_flags & VM_ACCESS_FLAGS;
 	struct sgx_encl_page *entry;
@@ -520,9 +520,9 @@ static void sgx_vma_open(struct vm_area_struct *vma)
  * Return: 0 on success, -EACCES otherwise
  */
 int sgx_encl_may_map(struct sgx_encl *encl, unsigned long start,
-		     unsigned long end, unsigned long vm_flags)
+		     unsigned long end, vm_flags_t vm_flags)
 {
-	unsigned long vm_prot_bits = vm_flags & VM_ACCESS_FLAGS;
+	vm_flags_t vm_prot_bits = vm_flags & VM_ACCESS_FLAGS;
 	struct sgx_encl_page *page;
 	unsigned long count = 0;
 	int ret = 0;
@@ -605,7 +605,7 @@ static int sgx_encl_debug_write(struct sgx_encl *encl, struct sgx_encl_page *pag
  */
 static struct sgx_encl_page *sgx_encl_reserve_page(struct sgx_encl *encl,
 						   unsigned long addr,
-						   unsigned long vm_flags)
+						   vm_flags_t vm_flags)
 {
 	struct sgx_encl_page *entry;
 
@@ -765,6 +765,7 @@ void sgx_encl_release(struct kref *ref)
 	WARN_ON_ONCE(encl->secs.epc_page);
 
 	kfree(encl);
+	sgx_dec_usage_count();
 }
 
 /*
@@ -853,7 +854,7 @@ int sgx_encl_mm_add(struct sgx_encl *encl, struct mm_struct *mm)
 	if (sgx_encl_find_mm(encl, mm))
 		return 0;
 
-	encl_mm = kzalloc(sizeof(*encl_mm), GFP_KERNEL);
+	encl_mm = kzalloc_obj(*encl_mm);
 	if (!encl_mm)
 		return -ENOMEM;
 
@@ -1162,7 +1163,7 @@ struct sgx_encl_page *sgx_encl_page_alloc(struct sgx_encl *encl,
 	struct sgx_encl_page *encl_page;
 	unsigned long prot;
 
-	encl_page = kzalloc(sizeof(*encl_page), GFP_KERNEL);
+	encl_page = kzalloc_obj(*encl_page);
 	if (!encl_page)
 		return ERR_PTR(-ENOMEM);
 

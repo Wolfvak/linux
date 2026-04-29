@@ -16,7 +16,7 @@
 	};
 
 	chosen {
-		stdout-path = &uart0;
+		stdout-path = "serial0:115200n8";
 	};
 
 	leds {
@@ -212,12 +212,12 @@
 	status = "okay";
 	clock-frequency = <400000>;
 
-	tps: tps@24 {
+	tps: pmic@24 {
 		reg = <0x24>;
 	};
 
 	baseboard_eeprom: eeprom@50 {
-		compatible = "atmel,24c256";
+		compatible = "atmel,24c32";
 		reg = <0x50>;
 		vcc-supply = <&ldo4_reg>;
 

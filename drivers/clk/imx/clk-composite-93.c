@@ -98,12 +98,6 @@ imx93_clk_composite_divider_recalc_rate(struct clk_hw *hw, unsigned long parent_
 	return clk_divider_ops.recalc_rate(hw, parent_rate);
 }
 
-static long
-imx93_clk_composite_divider_round_rate(struct clk_hw *hw, unsigned long rate, unsigned long *prate)
-{
-	return clk_divider_ops.round_rate(hw, rate, prate);
-}
-
 static int
 imx93_clk_composite_divider_determine_rate(struct clk_hw *hw, struct clk_rate_request *req)
 {
@@ -141,7 +135,6 @@ static int imx93_clk_composite_divider_set_rate(struct clk_hw *hw, unsigned long
 
 static const struct clk_ops imx93_clk_composite_divider_ops = {
 	.recalc_rate = imx93_clk_composite_divider_recalc_rate,
-	.round_rate = imx93_clk_composite_divider_round_rate,
 	.determine_rate = imx93_clk_composite_divider_determine_rate,
 	.set_rate = imx93_clk_composite_divider_set_rate,
 };
@@ -200,7 +193,7 @@ struct clk_hw *imx93_clk_composite_flags(const char *name, const char * const *p
 	bool clk_ro = false;
 	u32 authen;
 
-	mux = kzalloc(sizeof(*mux), GFP_KERNEL);
+	mux = kzalloc_obj(*mux);
 	if (!mux)
 		goto fail;
 
@@ -210,7 +203,7 @@ struct clk_hw *imx93_clk_composite_flags(const char *name, const char * const *p
 	mux->mask = CCM_MUX_MASK;
 	mux->lock = &imx_ccm_lock;
 
-	div = kzalloc(sizeof(*div), GFP_KERNEL);
+	div = kzalloc_obj(*div);
 	if (!div)
 		goto fail;
 
@@ -230,7 +223,7 @@ struct clk_hw *imx93_clk_composite_flags(const char *name, const char * const *p
 					       mux_hw, &clk_mux_ro_ops, div_hw,
 					       &clk_divider_ro_ops, NULL, NULL, flags);
 	} else {
-		gate = kzalloc(sizeof(*gate), GFP_KERNEL);
+		gate = kzalloc_obj(*gate);
 		if (!gate)
 			goto fail;
 

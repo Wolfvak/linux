@@ -6,6 +6,7 @@
 #include <linux/ptrace.h>
 #include <linux/uprobes.h>
 #include <asm/cacheflush.h>
+#include <asm/gcs.h>
 
 #include "decode-insn.h"
 
@@ -14,7 +15,7 @@
 void arch_uprobe_copy_ixol(struct page *page, unsigned long vaddr,
 		void *src, unsigned long len)
 {
-	void *xol_page_kaddr = kmap_atomic(page);
+	void *xol_page_kaddr = kmap_local_page(page);
 	void *dst = xol_page_kaddr + (vaddr & ~PAGE_MASK);
 
 	/*
@@ -31,7 +32,7 @@ void arch_uprobe_copy_ixol(struct page *page, unsigned long vaddr,
 	sync_icache_aliases((unsigned long)dst, (unsigned long)dst + len);
 
 done:
-	kunmap_atomic(xol_page_kaddr);
+	kunmap_local(xol_page_kaddr);
 }
 
 unsigned long uprobe_get_swbp_addr(struct pt_regs *regs)
@@ -102,10 +103,7 @@ bool arch_uprobe_xol_was_trapped(struct task_struct *t)
 	 * insn itself is trapped, then detect the case with the help of
 	 * invalid fault code which is being set in arch_uprobe_pre_xol
 	 */
-	if (t->thread.fault_code != UPROBE_INV_FAULT_CODE)
-		return true;
-
-	return false;
+	return t->thread.fault_code != UPROBE_INV_FAULT_CODE;
 }
 
 bool arch_uprobe_skip_sstep(struct arch_uprobe *auprobe, struct pt_regs *regs)
@@ -130,7 +128,7 @@ void arch_uprobe_abort_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 	struct uprobe_task *utask = current->utask;
 
 	/*
-	 * Task has received a fatal signal, so reset back to probbed
+	 * Task has received a fatal signal, so reset back to probed
 	 * address.
 	 */
 	instruction_pointer_set(regs, utask->vaddr);
@@ -159,11 +157,43 @@ arch_uretprobe_hijack_return_addr(unsigned long trampoline_vaddr,
 				  struct pt_regs *regs)
 {
 	unsigned long orig_ret_vaddr;
+	unsigned long gcs_ret_vaddr;
+	int err = 0;
+	u64 gcspr;
 
 	orig_ret_vaddr = procedure_link_pointer(regs);
+
+	if (task_gcs_el0_enabled(current)) {
+		gcspr = read_sysreg_s(SYS_GCSPR_EL0);
+		gcs_ret_vaddr = get_user_gcs((__force unsigned long __user *)gcspr, &err);
+		if (err) {
+			force_sig(SIGSEGV);
+			goto out;
+		}
+
+		/*
+		 * If the LR and GCS return addr don't match, then some kind of PAC
+		 * signing or control flow occurred since entering the probed function.
+		 * Likely because the user is attempting to retprobe on an instruction
+		 * that isn't a function boundary or inside a leaf function. Explicitly
+		 * abort this retprobe because it will generate a GCS exception.
+		 */
+		if (gcs_ret_vaddr != orig_ret_vaddr) {
+			orig_ret_vaddr = -1;
+			goto out;
+		}
+
+		put_user_gcs(trampoline_vaddr, (__force unsigned long __user *)gcspr, &err);
+		if (err) {
+			force_sig(SIGSEGV);
+			goto out;
+		}
+	}
+
 	/* Replace the return addr with trampoline addr */
 	procedure_link_pointer_set(regs, trampoline_vaddr);
 
+out:
 	return orig_ret_vaddr;
 }
 
@@ -173,7 +203,7 @@ int arch_uprobe_exception_notify(struct notifier_block *self,
 	return NOTIFY_DONE;
 }
 
-static int uprobe_breakpoint_handler(struct pt_regs *regs,
+int uprobe_brk_handler(struct pt_regs *regs,
 				     unsigned long esr)
 {
 	if (uprobe_pre_sstep_notifier(regs))
@@ -182,7 +212,7 @@ static int uprobe_breakpoint_handler(struct pt_regs *regs,
 	return DBG_HOOK_ERROR;
 }
 
-static int uprobe_single_step_handler(struct pt_regs *regs,
+int uprobe_single_step_handler(struct pt_regs *regs,
 				      unsigned long esr)
 {
 	struct uprobe_task *utask = current->utask;
@@ -194,23 +224,3 @@ static int uprobe_single_step_handler(struct pt_regs *regs,
 	return DBG_HOOK_ERROR;
 }
 
-/* uprobe breakpoint handler hook */
-static struct break_hook uprobes_break_hook = {
-	.imm = UPROBES_BRK_IMM,
-	.fn = uprobe_breakpoint_handler,
-};
-
-/* uprobe single step handler hook */
-static struct step_hook uprobes_step_hook = {
-	.fn = uprobe_single_step_handler,
-};
-
-static int __init arch_init_uprobes(void)
-{
-	register_user_break_hook(&uprobes_break_hook);
-	register_user_step_hook(&uprobes_step_hook);
-
-	return 0;
-}
-
-device_initcall(arch_init_uprobes);

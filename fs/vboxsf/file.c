@@ -26,7 +26,7 @@ struct vboxsf_handle *vboxsf_create_sf_handle(struct inode *inode,
 	struct vboxsf_inode *sf_i = VBOXSF_I(inode);
 	struct vboxsf_handle *sf_handle;
 
-	sf_handle = kmalloc(sizeof(*sf_handle), GFP_KERNEL);
+	sf_handle = kmalloc_obj(*sf_handle);
 	if (!sf_handle)
 		return ERR_PTR(-ENOMEM);
 
@@ -165,13 +165,13 @@ static const struct vm_operations_struct vboxsf_file_vm_ops = {
 	.map_pages	= filemap_map_pages,
 };
 
-static int vboxsf_file_mmap(struct file *file, struct vm_area_struct *vma)
+static int vboxsf_file_mmap_prepare(struct vm_area_desc *desc)
 {
 	int err;
 
-	err = generic_file_mmap(file, vma);
+	err = generic_file_mmap_prepare(desc);
 	if (!err)
-		vma->vm_ops = &vboxsf_file_vm_ops;
+		desc->vm_ops = &vboxsf_file_vm_ops;
 
 	return err;
 }
@@ -213,12 +213,11 @@ const struct file_operations vboxsf_reg_fops = {
 	.llseek = generic_file_llseek,
 	.read_iter = generic_file_read_iter,
 	.write_iter = generic_file_write_iter,
-	.mmap = vboxsf_file_mmap,
+	.mmap_prepare = vboxsf_file_mmap_prepare,
 	.open = vboxsf_file_open,
 	.release = vboxsf_file_release,
 	.fsync = noop_fsync,
 	.splice_read = filemap_splice_read,
-	.setlease = simple_nosetlease,
 };
 
 const struct inode_operations vboxsf_reg_iops = {
@@ -300,12 +299,13 @@ static int vboxsf_writepages(struct address_space *mapping,
 	return error;
 }
 
-static int vboxsf_write_end(struct file *file, struct address_space *mapping,
+static int vboxsf_write_end(const struct kiocb *iocb,
+			    struct address_space *mapping,
 			    loff_t pos, unsigned int len, unsigned int copied,
 			    struct folio *folio, void *fsdata)
 {
 	struct inode *inode = mapping->host;
-	struct vboxsf_handle *sf_handle = file->private_data;
+	struct vboxsf_handle *sf_handle = iocb->ki_filp->private_data;
 	size_t from = offset_in_folio(folio, pos);
 	u32 nwritten = len;
 	u8 *buf;

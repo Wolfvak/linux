@@ -102,8 +102,8 @@ static int gbphy_dev_uevent(const struct device *dev, struct kobj_uevent_env *en
 }
 
 static const struct gbphy_device_id *
-gbphy_dev_match_id(struct gbphy_device *gbphy_dev,
-		   struct gbphy_driver *gbphy_drv)
+gbphy_dev_match_id(const struct gbphy_device *gbphy_dev,
+		   const struct gbphy_driver *gbphy_drv)
 {
 	const struct gbphy_device_id *id = gbphy_drv->id_table;
 
@@ -119,7 +119,7 @@ gbphy_dev_match_id(struct gbphy_device *gbphy_dev,
 
 static int gbphy_dev_match(struct device *dev, const struct device_driver *drv)
 {
-	struct gbphy_driver *gbphy_drv = to_gbphy_driver(drv);
+	const struct gbphy_driver *gbphy_drv = to_gbphy_driver(drv);
 	struct gbphy_device *gbphy_dev = to_gbphy_dev(dev);
 	const struct gbphy_device_id *id;
 
@@ -229,7 +229,7 @@ static struct gbphy_device *gb_gbphy_create_dev(struct gb_bundle *bundle,
 	if (id < 0)
 		return ERR_PTR(id);
 
-	gbphy_dev = kzalloc(sizeof(*gbphy_dev), GFP_KERNEL);
+	gbphy_dev = kzalloc_obj(*gbphy_dev);
 	if (!gbphy_dev) {
 		ida_free(&gbphy_id, id);
 		return ERR_PTR(-ENOMEM);
@@ -282,7 +282,7 @@ static int gb_gbphy_probe(struct gb_bundle *bundle,
 	if (bundle->num_cports == 0)
 		return -ENODEV;
 
-	gbphy_host = kzalloc(sizeof(*gbphy_host), GFP_KERNEL);
+	gbphy_host = kzalloc_obj(*gbphy_host);
 	if (!gbphy_host)
 		return -ENOMEM;
 

@@ -192,7 +192,7 @@ int aa_audit(int type, struct aa_profile *profile,
 	aa_audit_msg(type, ad, cb);
 
 	if (ad->type == AUDIT_APPARMOR_KILL)
-		(void)send_sig_info(SIGKILL, NULL,
+		(void)send_sig_info(profile->signal, NULL,
 			ad->common.type == LSM_AUDIT_DATA_TASK &&
 			ad->common.u.tsk ? ad->common.u.tsk : current);
 
@@ -230,7 +230,7 @@ int aa_audit_rule_init(u32 field, u32 op, char *rulestr, void **vrule, gfp_t gfp
 		return -EINVAL;
 	}
 
-	rule = kzalloc(sizeof(struct aa_audit_rule), gfp);
+	rule = kzalloc_obj(struct aa_audit_rule, gfp);
 
 	if (!rule)
 		return -ENOMEM;

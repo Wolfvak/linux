@@ -26,6 +26,8 @@
 #include <linux/dma-mapping.h>
 #include <linux/moduleparam.h>
 
+#include <drm/drm_print.h>
+
 #include "virtgpu_drv.h"
 
 static int virtio_gpu_virglrenderer_workaround = 1;
@@ -47,6 +49,7 @@ int virtio_gpu_resource_id_get(struct virtio_gpu_device *vgdev, uint32_t *resid)
 		*resid = handle + 1;
 	} else {
 		int handle = ida_alloc(&vgdev->resource_ida, GFP_KERNEL);
+
 		if (handle < 0)
 			return handle;
 		*resid = handle + 1;
@@ -56,9 +59,8 @@ int virtio_gpu_resource_id_get(struct virtio_gpu_device *vgdev, uint32_t *resid)
 
 static void virtio_gpu_resource_id_put(struct virtio_gpu_device *vgdev, uint32_t id)
 {
-	if (!virtio_gpu_virglrenderer_workaround) {
+	if (!virtio_gpu_virglrenderer_workaround)
 		ida_free(&vgdev->resource_ida, id - 1);
-	}
 }
 
 void virtio_gpu_cleanup_object(struct virtio_gpu_object *bo)
@@ -147,7 +149,7 @@ struct drm_gem_object *virtio_gpu_create_object(struct drm_device *dev,
 	struct virtio_gpu_object_shmem *shmem;
 	struct drm_gem_shmem_object *dshmem;
 
-	shmem = kzalloc(sizeof(*shmem), GFP_KERNEL);
+	shmem = kzalloc_obj(*shmem);
 	if (!shmem)
 		return ERR_PTR(-ENOMEM);
 
@@ -175,9 +177,7 @@ static int virtio_gpu_object_shmem_init(struct virtio_gpu_device *vgdev,
 	else
 		*nents = pages->orig_nents;
 
-	*ents = kvmalloc_array(*nents,
-			       sizeof(struct virtio_gpu_mem_entry),
-			       GFP_KERNEL);
+	*ents = kvmalloc_objs(struct virtio_gpu_mem_entry, *nents);
 	if (!(*ents)) {
 		DRM_ERROR("failed to allocate ent list\n");
 		return -ENOMEM;

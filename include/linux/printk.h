@@ -78,7 +78,6 @@ extern void console_verbose(void);
 /* strlen("ratelimit") + 1 */
 #define DEVKMSG_STR_MAX_SIZE 10
 extern char devkmsg_log_str[DEVKMSG_STR_MAX_SIZE];
-struct ctl_table;
 
 extern int suppress_printk;
 
@@ -154,6 +153,8 @@ int vprintk_emit(int facility, int level,
 
 asmlinkage __printf(1, 0)
 int vprintk(const char *fmt, va_list args);
+__printf(1, 0)
+int vprintk_deferred(const char *fmt, va_list args);
 
 asmlinkage __printf(1, 2) __cold
 int _printk(const char *fmt, ...);
@@ -211,6 +212,11 @@ bool pr_flush(int timeout_ms, bool reset_on_progress);
 #else
 static inline __printf(1, 0)
 int vprintk(const char *s, va_list args)
+{
+	return 0;
+}
+static inline __printf(1, 0)
+int vprintk_deferred(const char *fmt, va_list args)
 {
 	return 0;
 }
@@ -322,8 +328,6 @@ static inline bool pr_flush(int timeout_ms, bool reset_on_progress)
 }
 
 #endif
-
-bool this_cpu_in_panic(void);
 
 #ifdef CONFIG_SMP
 extern int __printk_cpu_sync_try_get(void);

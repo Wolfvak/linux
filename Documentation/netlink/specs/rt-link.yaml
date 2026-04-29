@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: ((GPL-2.0 WITH Linux-syscall-note) OR BSD-3-Clause)
-
+---
 name: rt-link
 protocol: netlink-raw
 uapi-header: linux/rtnetlink.h
 protonum: 0
 
-doc:
+doc: >-
   Link configuration over rtnetlink.
 
 definitions:
@@ -1057,6 +1057,12 @@ attribute-sets:
       -
         name: netns-immutable
         type: u8
+      -
+        name: headroom
+        type: u16
+      -
+        name: tailroom
+        type: u16
   -
     name: prop-list-link-attrs
     subset-of: link-attrs
@@ -1701,11 +1707,11 @@ attribute-sets:
       -
         name: local
         type: binary
-        display-hint: ipv4
+        display-hint: ipv4-or-v6
       -
         name: remote
         type: binary
-        display-hint: ipv4
+        display-hint: ipv4-or-v6
       -
         name: ttl
         type: u8
@@ -1827,11 +1833,11 @@ attribute-sets:
       -
         name: local
         type: binary
-        display-hint: ipv4
+        display-hint: ipv4-or-v6
       -
         name: remote
         type: binary
-        display-hint: ipv4
+        display-hint: ipv4-or-v6
       -
         name: fwmark
         type: u32
@@ -1862,7 +1868,8 @@ attribute-sets:
         type: u32
       -
         name: remote
-        type: binary
+        type: u32
+        byte-order: big-endian
         display-hint: ipv4
       -
         name: ttl
@@ -1907,6 +1914,38 @@ attribute-sets:
         name: port-range
         type: binary
         struct: ifla-geneve-port-range
+      -
+        name: gro-hint
+        type: flag
+  -
+    name: linkinfo-hsr-attrs
+    name-prefix: ifla-hsr-
+    attributes:
+      -
+        name: slave1
+        type: u32
+      -
+        name: slave2
+        type: u32
+      -
+        name: multicast-spec
+        type: u8
+      -
+        name: supervision-addr
+        type: binary
+        display-hint: mac
+      -
+        name: seq-nr
+        type: u16
+      -
+        name: version
+        type: u8
+      -
+        name: protocol
+        type: u8
+      -
+        name: interlink
+        type: u32
   -
     name: linkinfo-iptun-attrs
     name-prefix: ifla-iptun-
@@ -1917,11 +1956,11 @@ attribute-sets:
       -
         name: local
         type: binary
-        display-hint: ipv4
+        display-hint: ipv4-or-v6
       -
         name: remote
         type: binary
-        display-hint: ipv4
+        display-hint: ipv4-or-v6
       -
         name: ttl
         type: u8
@@ -1951,7 +1990,8 @@ attribute-sets:
         display-hint: ipv6
       -
         name: 6rd-relay-prefix
-        type: binary
+        type: u32
+        byte-order: big-endian
         display-hint: ipv4
       -
         name: 6rd-prefixlen
@@ -2293,6 +2333,9 @@ sub-messages:
       -
         value: geneve
         attribute-set: linkinfo-geneve-attrs
+      -
+        value: hsr
+        attribute-set: linkinfo-hsr-attrs
       -
         value: ipip
         attribute-set: linkinfo-iptun-attrs

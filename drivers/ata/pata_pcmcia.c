@@ -46,7 +46,7 @@ static int pcmcia_set_mode(struct ata_link *link, struct ata_device **r_failed_d
 	struct ata_device *slave = &link->device[1];
 
 	if (!ata_dev_enabled(master) || !ata_dev_enabled(slave))
-		return ata_do_set_mode(link, r_failed_dev);
+		return ata_set_mode(link, r_failed_dev);
 
 	if (memcmp(master->id + ATA_ID_FW_REV,  slave->id + ATA_ID_FW_REV,
 			   ATA_ID_FW_REV_LEN + ATA_ID_PROD_LEN) == 0) {
@@ -58,7 +58,7 @@ static int pcmcia_set_mode(struct ata_link *link, struct ata_device **r_failed_d
 			ata_dev_disable(slave);
 		}
 	}
-	return ata_do_set_mode(link, r_failed_dev);
+	return ata_set_mode(link, r_failed_dev);
 }
 
 /**
@@ -344,6 +344,7 @@ static const struct pcmcia_device_id pcmcia_devices[] = {
 	PCMCIA_DEVICE_PROD_ID2("NinjaATA-", 0xebe0bd79),
 	PCMCIA_DEVICE_PROD_ID12("PCMCIA", "CD-ROM", 0x281f1c5d, 0x66536591),
 	PCMCIA_DEVICE_PROD_ID12("PCMCIA", "PnPIDE", 0x281f1c5d, 0x0c694728),
+	PCMCIA_DEVICE_PROD_ID2("PCMCIA ATA/ATAPI Adapter", 0x888d7b73),
 	PCMCIA_DEVICE_PROD_ID12("SHUTTLE TECHNOLOGY LTD.", "PCCARD-IDE/ATAPI Adapter", 0x4a3f0ba0, 0x322560e1),
 	PCMCIA_DEVICE_PROD_ID12("SEAGATE", "ST1", 0x87c1b330, 0xe1f30883),
 	PCMCIA_DEVICE_PROD_ID12("SAMSUNG", "04/05/06", 0x43d74cb4, 0x6a22777d),

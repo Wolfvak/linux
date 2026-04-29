@@ -39,7 +39,8 @@ const volatile u32 stall_kernel_nth;
 const volatile u32 dsp_inf_loop_after;
 const volatile u32 dsp_batch;
 const volatile bool highpri_boosting;
-const volatile bool print_shared_dsq;
+const volatile bool print_dsqs_and_events;
+const volatile bool print_msgs;
 const volatile s32 disallow_tgid;
 const volatile bool suppress_dump;
 
@@ -56,7 +57,8 @@ struct qmap {
   queue1 SEC(".maps"),
   queue2 SEC(".maps"),
   queue3 SEC(".maps"),
-  queue4 SEC(".maps");
+  queue4 SEC(".maps"),
+  dump_store SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY_OF_MAPS);
@@ -200,6 +202,9 @@ void BPF_STRUCT_OPS(qmap_enqueue, struct task_struct *p, u64 enq_flags)
 	void *ring;
 	s32 cpu;
 
+	if (enq_flags & SCX_ENQ_REENQ)
+		__sync_fetch_and_add(&nr_reenqueued, 1);
+
 	if (p->flags & PF_KTHREAD) {
 		if (stall_kernel_nth && !(++kernel_cnt % stall_kernel_nth))
 			return;
@@ -318,12 +323,9 @@ static bool dispatch_highpri(bool from_timer)
 
 		if (tctx->highpri) {
 			/* exercise the set_*() and vtime interface too */
-			__COMPAT_scx_bpf_dsq_move_set_slice(
-				BPF_FOR_EACH_ITER, slice_ns * 2);
-			__COMPAT_scx_bpf_dsq_move_set_vtime(
-				BPF_FOR_EACH_ITER, highpri_seq++);
-			__COMPAT_scx_bpf_dsq_move_vtime(
-				BPF_FOR_EACH_ITER, p, HIGHPRI_DSQ, 0);
+			scx_bpf_dsq_move_set_slice(BPF_FOR_EACH_ITER, slice_ns * 2);
+			scx_bpf_dsq_move_set_vtime(BPF_FOR_EACH_ITER, highpri_seq++);
+			scx_bpf_dsq_move_vtime(BPF_FOR_EACH_ITER, p, HIGHPRI_DSQ, 0);
 		}
 	}
 
@@ -340,9 +342,8 @@ static bool dispatch_highpri(bool from_timer)
 		else
 			cpu = scx_bpf_pick_any_cpu(p->cpus_ptr, 0);
 
-		if (__COMPAT_scx_bpf_dsq_move(BPF_FOR_EACH_ITER, p,
-					      SCX_DSQ_LOCAL_ON | cpu,
-					      SCX_ENQ_PREEMPT)) {
+		if (scx_bpf_dsq_move(BPF_FOR_EACH_ITER, p, SCX_DSQ_LOCAL_ON | cpu,
+				     SCX_ENQ_PREEMPT)) {
 			if (cpu == this_cpu) {
 				dispatched = true;
 				__sync_fetch_and_add(&nr_expedited_local, 1);
@@ -531,20 +532,35 @@ bool BPF_STRUCT_OPS(qmap_core_sched_before,
 	return task_qdist(a) > task_qdist(b);
 }
 
-void BPF_STRUCT_OPS(qmap_cpu_release, s32 cpu, struct scx_cpu_release_args *args)
+SEC("tp_btf/sched_switch")
+int BPF_PROG(qmap_sched_switch, bool preempt, struct task_struct *prev,
+	     struct task_struct *next, unsigned long prev_state)
 {
-	u32 cnt;
+	if (!__COMPAT_scx_bpf_reenqueue_local_from_anywhere())
+		return 0;
 
 	/*
-	 * Called when @cpu is taken by a higher priority scheduling class. This
-	 * makes @cpu no longer available for executing sched_ext tasks. As we
-	 * don't want the tasks in @cpu's local dsq to sit there until @cpu
-	 * becomes available again, re-enqueue them into the global dsq. See
-	 * %SCX_ENQ_REENQ handling in qmap_enqueue().
+	 * If @cpu is taken by a higher priority scheduling class, it is no
+	 * longer available for executing sched_ext tasks. As we don't want the
+	 * tasks in @cpu's local dsq to sit there until @cpu becomes available
+	 * again, re-enqueue them into the global dsq. See %SCX_ENQ_REENQ
+	 * handling in qmap_enqueue().
 	 */
-	cnt = scx_bpf_reenqueue_local();
-	if (cnt)
-		__sync_fetch_and_add(&nr_reenqueued, cnt);
+	switch (next->policy) {
+	case 1: /* SCHED_FIFO */
+	case 2: /* SCHED_RR */
+	case 6: /* SCHED_DEADLINE */
+		scx_bpf_reenqueue_local();
+	}
+
+	return 0;
+}
+
+void BPF_STRUCT_OPS(qmap_cpu_release, s32 cpu, struct scx_cpu_release_args *args)
+{
+	/* see qmap_sched_switch() to learn how to do this on newer kernels */
+	if (!__COMPAT_scx_bpf_reenqueue_local_from_anywhere())
+		scx_bpf_reenqueue_local();
 }
 
 s32 BPF_STRUCT_OPS(qmap_init_task, struct task_struct *p,
@@ -578,11 +594,26 @@ void BPF_STRUCT_OPS(qmap_dump, struct scx_dump_ctx *dctx)
 			return;
 
 		scx_bpf_dump("QMAP FIFO[%d]:", i);
+
+		/*
+		 * Dump can be invoked anytime and there is no way to iterate in
+		 * a non-destructive way. Pop and store in dump_store and then
+		 * restore afterwards. If racing against new enqueues, ordering
+		 * can get mixed up.
+		 */
 		bpf_repeat(4096) {
 			if (bpf_map_pop_elem(fifo, &pid))
 				break;
+			bpf_map_push_elem(&dump_store, &pid, 0);
 			scx_bpf_dump(" %d", pid);
 		}
+
+		bpf_repeat(4096) {
+			if (bpf_map_pop_elem(&dump_store, &pid))
+				break;
+			bpf_map_push_elem(fifo, &pid, 0);
+		}
+
 		scx_bpf_dump("\n");
 	}
 }
@@ -613,6 +644,29 @@ void BPF_STRUCT_OPS(qmap_dump_task, struct scx_dump_ctx *dctx, struct task_struc
 
 	scx_bpf_dump("QMAP: force_local=%d core_sched_seq=%llu",
 		     taskc->force_local, taskc->core_sched_seq);
+}
+
+s32 BPF_STRUCT_OPS(qmap_cgroup_init, struct cgroup *cgrp, struct scx_cgroup_init_args *args)
+{
+	if (print_msgs)
+		bpf_printk("CGRP INIT %llu weight=%u period=%lu quota=%ld burst=%lu",
+			   cgrp->kn->id, args->weight, args->bw_period_us,
+			   args->bw_quota_us, args->bw_burst_us);
+	return 0;
+}
+
+void BPF_STRUCT_OPS(qmap_cgroup_set_weight, struct cgroup *cgrp, u32 weight)
+{
+	if (print_msgs)
+		bpf_printk("CGRP SET %llu weight=%u", cgrp->kn->id, weight);
+}
+
+void BPF_STRUCT_OPS(qmap_cgroup_set_bandwidth, struct cgroup *cgrp,
+		    u64 period_us, u64 quota_us, u64 burst_us)
+{
+	if (print_msgs)
+		bpf_printk("CGRP SET %llu period=%lu quota=%ld burst=%lu",
+			   cgrp->kn->id, period_us, quota_us, burst_us);
 }
 
 /*
@@ -656,16 +710,20 @@ static void print_cpus(void)
 
 void BPF_STRUCT_OPS(qmap_cpu_online, s32 cpu)
 {
-	bpf_printk("CPU %d coming online", cpu);
-	/* @cpu is already online at this point */
-	print_cpus();
+	if (print_msgs) {
+		bpf_printk("CPU %d coming online", cpu);
+		/* @cpu is already online at this point */
+		print_cpus();
+	}
 }
 
 void BPF_STRUCT_OPS(qmap_cpu_offline, s32 cpu)
 {
-	bpf_printk("CPU %d going offline", cpu);
-	/* @cpu is still online at this point */
-	print_cpus();
+	if (print_msgs) {
+		bpf_printk("CPU %d going offline", cpu);
+		/* @cpu is still online at this point */
+		print_cpus();
+	}
 }
 
 struct monitor_timer {
@@ -763,35 +821,36 @@ static void dump_shared_dsq(void)
 
 static int monitor_timerfn(void *map, int *key, struct bpf_timer *timer)
 {
-	struct scx_event_stats events;
-
 	bpf_rcu_read_lock();
 	dispatch_highpri(true);
 	bpf_rcu_read_unlock();
 
 	monitor_cpuperf();
 
-	if (print_shared_dsq)
+	if (print_dsqs_and_events) {
+		struct scx_event_stats events;
+
 		dump_shared_dsq();
 
-	__COMPAT_scx_bpf_events(&events, sizeof(events));
+		__COMPAT_scx_bpf_events(&events, sizeof(events));
 
-	bpf_printk("%35s: %lld", "SCX_EV_SELECT_CPU_FALLBACK",
-		   scx_read_event(&events, SCX_EV_SELECT_CPU_FALLBACK));
-	bpf_printk("%35s: %lld", "SCX_EV_DISPATCH_LOCAL_DSQ_OFFLINE",
-		   scx_read_event(&events, SCX_EV_DISPATCH_LOCAL_DSQ_OFFLINE));
-	bpf_printk("%35s: %lld", "SCX_EV_DISPATCH_KEEP_LAST",
-		   scx_read_event(&events, SCX_EV_DISPATCH_KEEP_LAST));
-	bpf_printk("%35s: %lld", "SCX_EV_ENQ_SKIP_EXITING",
-		   scx_read_event(&events, SCX_EV_ENQ_SKIP_EXITING));
-	bpf_printk("%35s: %lld", "SCX_EV_REFILL_SLICE_DFL",
-		   scx_read_event(&events, SCX_EV_REFILL_SLICE_DFL));
-	bpf_printk("%35s: %lld", "SCX_EV_BYPASS_DURATION",
-		   scx_read_event(&events, SCX_EV_BYPASS_DURATION));
-	bpf_printk("%35s: %lld", "SCX_EV_BYPASS_DISPATCH",
-		   scx_read_event(&events, SCX_EV_BYPASS_DISPATCH));
-	bpf_printk("%35s: %lld", "SCX_EV_BYPASS_ACTIVATE",
-		   scx_read_event(&events, SCX_EV_BYPASS_ACTIVATE));
+		bpf_printk("%35s: %lld", "SCX_EV_SELECT_CPU_FALLBACK",
+			   scx_read_event(&events, SCX_EV_SELECT_CPU_FALLBACK));
+		bpf_printk("%35s: %lld", "SCX_EV_DISPATCH_LOCAL_DSQ_OFFLINE",
+			   scx_read_event(&events, SCX_EV_DISPATCH_LOCAL_DSQ_OFFLINE));
+		bpf_printk("%35s: %lld", "SCX_EV_DISPATCH_KEEP_LAST",
+			   scx_read_event(&events, SCX_EV_DISPATCH_KEEP_LAST));
+		bpf_printk("%35s: %lld", "SCX_EV_ENQ_SKIP_EXITING",
+			   scx_read_event(&events, SCX_EV_ENQ_SKIP_EXITING));
+		bpf_printk("%35s: %lld", "SCX_EV_REFILL_SLICE_DFL",
+			   scx_read_event(&events, SCX_EV_REFILL_SLICE_DFL));
+		bpf_printk("%35s: %lld", "SCX_EV_BYPASS_DURATION",
+			   scx_read_event(&events, SCX_EV_BYPASS_DURATION));
+		bpf_printk("%35s: %lld", "SCX_EV_BYPASS_DISPATCH",
+			   scx_read_event(&events, SCX_EV_BYPASS_DISPATCH));
+		bpf_printk("%35s: %lld", "SCX_EV_BYPASS_ACTIVATE",
+			   scx_read_event(&events, SCX_EV_BYPASS_ACTIVATE));
+	}
 
 	bpf_timer_start(timer, ONE_SEC_IN_NS, 0);
 	return 0;
@@ -803,15 +862,20 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(qmap_init)
 	struct bpf_timer *timer;
 	s32 ret;
 
-	print_cpus();
+	if (print_msgs)
+		print_cpus();
 
 	ret = scx_bpf_create_dsq(SHARED_DSQ, -1);
-	if (ret)
+	if (ret) {
+		scx_bpf_error("failed to create DSQ %d (%d)", SHARED_DSQ, ret);
 		return ret;
+	}
 
 	ret = scx_bpf_create_dsq(HIGHPRI_DSQ, -1);
-	if (ret)
+	if (ret) {
+		scx_bpf_error("failed to create DSQ %d (%d)", HIGHPRI_DSQ, ret);
 		return ret;
+	}
 
 	timer = bpf_map_lookup_elem(&monitor_timer, &key);
 	if (!timer)
@@ -840,6 +904,9 @@ SCX_OPS_DEFINE(qmap_ops,
 	       .dump			= (void *)qmap_dump,
 	       .dump_cpu		= (void *)qmap_dump_cpu,
 	       .dump_task		= (void *)qmap_dump_task,
+	       .cgroup_init		= (void *)qmap_cgroup_init,
+	       .cgroup_set_weight	= (void *)qmap_cgroup_set_weight,
+	       .cgroup_set_bandwidth	= (void *)qmap_cgroup_set_bandwidth,
 	       .cpu_online		= (void *)qmap_cpu_online,
 	       .cpu_offline		= (void *)qmap_cpu_offline,
 	       .init			= (void *)qmap_init,

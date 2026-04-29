@@ -279,7 +279,7 @@ status
        - Can be 'online' or 'offline'.
 	 Piping 'on' or 'off' sets the chpid logically online/offline.
 	 Piping 'on' to an online chpid triggers path reprobing for all devices
-	 the chpid connects to. This can be used to force the kernel to re-use
+	 the chpid connects to. This can be used to force the kernel to reuse
 	 a channel path the user knows to be online, but the machine hasn't
 	 created a machine check for.
 
@@ -305,24 +305,3 @@ xpram shows up under devices/system/ as 'xpram'.
 
 For each cpu, a directory is created under devices/system/cpu/. Each cpu has an
 attribute 'online' which can be 0 or 1.
-
-
-4. Other devices
-----------------
-
-4.1 Netiucv
------------
-
-The netiucv driver creates an attribute 'connection' under
-bus/iucv/drivers/netiucv. Piping to this attribute creates a new netiucv
-connection to the specified host.
-
-Netiucv connections show up under devices/iucv/ as "netiucv<ifnum>". The interface
-number is assigned sequentially to the connections defined via the 'connection'
-attribute.
-
-user
-    - shows the connection partner.
-
-buffer
-    - maximum buffer size. Pipe to it to change buffer size.

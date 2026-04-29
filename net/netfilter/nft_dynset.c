@@ -30,23 +30,31 @@ static int nft_dynset_expr_setup(const struct nft_dynset *priv,
 				 const struct nft_set_ext *ext)
 {
 	struct nft_set_elem_expr *elem_expr = nft_set_ext_expr(ext);
+	struct nft_ctx ctx = {
+		.net	= read_pnet(&priv->set->net),
+		.family	= priv->set->table->family,
+	};
 	struct nft_expr *expr;
 	int i;
 
 	for (i = 0; i < priv->num_exprs; i++) {
 		expr = nft_setelem_expr_at(elem_expr, elem_expr->size);
 		if (nft_expr_clone(expr, priv->expr_array[i], GFP_ATOMIC) < 0)
-			return -1;
+			goto err_out;
 
 		elem_expr->size += priv->expr_array[i]->ops->size;
 	}
 
 	return 0;
+err_out:
+	nft_set_elem_expr_destroy(&ctx, elem_expr);
+
+	return -1;
 }
 
-static struct nft_elem_priv *nft_dynset_new(struct nft_set *set,
-					    const struct nft_expr *expr,
-					    struct nft_regs *regs)
+struct nft_elem_priv *nft_dynset_new(struct nft_set *set,
+				     const struct nft_expr *expr,
+				     struct nft_regs *regs)
 {
 	const struct nft_dynset *priv = nft_expr_priv(expr);
 	struct nft_set_ext *ext;
@@ -91,8 +99,8 @@ void nft_dynset_eval(const struct nft_expr *expr,
 		return;
 	}
 
-	if (set->ops->update(set, &regs->data[priv->sreg_key], nft_dynset_new,
-			     expr, regs, &ext)) {
+	ext = set->ops->update(set, &regs->data[priv->sreg_key], expr, regs);
+	if (ext) {
 		if (priv->op == NFT_DYNSET_OP_UPDATE &&
 		    nft_set_ext_exists(ext, NFT_SET_EXT_TIMEOUT) &&
 		    READ_ONCE(nft_set_ext_timeout(ext)->timeout) != 0) {

@@ -3,8 +3,11 @@
  * Copyright © 2019 Intel Corporation
  */
 
+#include <drm/drm_print.h>
+
 #include "i915_selftest.h"
 
+#include "display/intel_display_device.h"
 #include "gt/intel_context.h"
 #include "gt/intel_engine_regs.h"
 #include "gt/intel_engine_user.h"
@@ -109,6 +112,7 @@ struct tiled_blits {
 
 static bool fastblit_supports_x_tiling(const struct drm_i915_private *i915)
 {
+	struct intel_display *display = i915->display;
 	int gen = GRAPHICS_VER(i915);
 
 	/* XY_FAST_COPY_BLT does not exist on pre-gen9 platforms */
@@ -120,7 +124,7 @@ static bool fastblit_supports_x_tiling(const struct drm_i915_private *i915)
 	if (GRAPHICS_VER_FULL(i915) < IP_VER(12, 55))
 		return false;
 
-	return HAS_DISPLAY(i915);
+	return intel_display_device_present(display);
 }
 
 static bool fast_blit_ok(const struct blit_buffer *buf)
@@ -536,7 +540,7 @@ tiled_blits_create(struct intel_engine_cs *engine, struct rnd_state *prng)
 	u64 hole_size;
 	int err;
 
-	t = kzalloc(sizeof(*t), GFP_KERNEL);
+	t = kzalloc_obj(*t);
 	if (!t)
 		return ERR_PTR(-ENOMEM);
 

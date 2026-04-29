@@ -50,6 +50,11 @@ enum amdgpu_sdma_irq {
 
 #define NUM_SDMA(x) hweight32(x)
 
+struct amdgpu_sdma_csa_info {
+	u32 size;
+	u32 alignment;
+};
+
 struct amdgpu_sdma_funcs {
 	int (*stop_kernel_queue)(struct amdgpu_ring *ring);
 	int (*start_kernel_queue)(struct amdgpu_ring *ring);
@@ -65,7 +70,10 @@ struct amdgpu_sdma_instance {
 	struct amdgpu_ring	ring;
 	struct amdgpu_ring	page;
 	bool			burst_nop;
-	uint32_t		aid_id;
+	union {
+	    uint32_t		aid_id;
+	    uint32_t		xcc_id;
+	};
 
 	struct amdgpu_bo	*sdma_fw_obj;
 	uint64_t		sdma_fw_gpu_addr;
@@ -123,7 +131,10 @@ struct amdgpu_sdma {
 
 	int			num_instances;
 	uint32_t 		sdma_mask;
-	int			num_inst_per_aid;
+	union {
+	    int			num_inst_per_aid;
+	    int			num_inst_per_xcc;
+	};
 	uint32_t                    srbm_soft_reset;
 	bool			has_page_queue;
 	struct ras_common_if	*ras_if;
@@ -133,6 +144,8 @@ struct amdgpu_sdma {
 	struct list_head	reset_callback_list;
 	bool			no_user_submission;
 	bool			disable_uq;
+	void (*get_csa_info)(struct amdgpu_device *adev,
+			     struct amdgpu_sdma_csa_info *csa_info);
 };
 
 /*
@@ -172,7 +185,8 @@ struct amdgpu_buffer_funcs {
 				 uint32_t byte_count);
 };
 
-int amdgpu_sdma_reset_engine(struct amdgpu_device *adev, uint32_t instance_id);
+int amdgpu_sdma_reset_engine(struct amdgpu_device *adev, uint32_t instance_id,
+			     bool caller_handles_kernel_queues);
 
 #define amdgpu_emit_copy_buffer(adev, ib, s, d, b, t) (adev)->mman.buffer_funcs->emit_copy_buffer((ib),  (s), (d), (b), (t))
 #define amdgpu_emit_fill_buffer(adev, ib, s, d, b) (adev)->mman.buffer_funcs->emit_fill_buffer((ib), (s), (d), (b))

@@ -6,10 +6,11 @@
 
 #define IPL_START	0x200
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/printk.h>
 #include <asm/physmem_info.h>
+#include <asm/stacktrace.h>
 
 struct vmlinux_info {
 	unsigned long entry;
@@ -27,6 +28,10 @@ struct vmlinux_info {
 	unsigned long invalid_pg_dir_off;
 	unsigned long alt_instructions;
 	unsigned long alt_instructions_end;
+#ifdef CONFIG_STACKPROTECTOR
+	unsigned long stack_prot_start;
+	unsigned long stack_prot_end;
+#endif
 #ifdef CONFIG_KASAN
 	unsigned long kasan_early_shadow_page_off;
 	unsigned long kasan_early_shadow_pte_off;
@@ -74,6 +79,7 @@ void print_stacktrace(unsigned long sp);
 void error(char *m);
 int get_random(unsigned long limit, unsigned long *value);
 void boot_rb_dump(void);
+void __noreturn jump_to_kernel(psw_t *psw);
 
 #ifndef boot_fmt
 #define boot_fmt(fmt)	fmt
@@ -87,6 +93,13 @@ void boot_rb_dump(void);
 #define boot_notice(fmt, ...)	boot_printk(KERN_NOTICE boot_fmt(fmt), ##__VA_ARGS__)
 #define boot_info(fmt, ...)	boot_printk(KERN_INFO boot_fmt(fmt), ##__VA_ARGS__)
 #define boot_debug(fmt, ...)	boot_printk(KERN_DEBUG boot_fmt(fmt), ##__VA_ARGS__)
+
+#define boot_panic(...) do {				\
+	boot_emerg(__VA_ARGS__);			\
+	print_stacktrace(current_frame_address());	\
+	boot_emerg(" -- System halted\n");		\
+	disabled_wait();				\
+} while (0)
 
 extern struct machine_info machine;
 extern int boot_console_loglevel;
@@ -121,5 +134,5 @@ static inline bool intersects(unsigned long addr0, unsigned long size0,
 {
 	return addr0 + size0 > addr1 && addr1 + size1 > addr0;
 }
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 #endif /* BOOT_BOOT_H */

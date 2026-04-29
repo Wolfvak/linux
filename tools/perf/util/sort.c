@@ -1016,7 +1016,7 @@ static int hist_entry__cgroup_snprintf(struct hist_entry *he,
 	const char *cgrp_name = "N/A";
 
 	if (he->cgroup) {
-		struct cgroup *cgrp = cgroup__find(maps__machine(he->ms.maps)->env,
+		struct cgroup *cgrp = cgroup__find(maps__machine(thread__maps(he->ms.thread))->env,
 						   he->cgroup);
 		if (cgrp != NULL)
 			cgrp_name = cgrp->name;
@@ -1746,22 +1746,27 @@ sort__dcacheline_cmp(struct hist_entry *left, struct hist_entry *right)
 	if (rc)
 		return rc;
 	/*
-	 * Addresses with no major/minor numbers are assumed to be
+	 * Addresses with no major/minor numbers or build ID are assumed to be
 	 * anonymous in userspace.  Sort those on pid then address.
 	 *
 	 * The kernel and non-zero major/minor mapped areas are
 	 * assumed to be unity mapped.  Sort those on address.
 	 */
+	if (left->cpumode != PERF_RECORD_MISC_KERNEL && (map__flags(l_map) & MAP_SHARED) == 0) {
+		const struct dso_id *dso_id = dso__id_const(l_dso);
 
-	if ((left->cpumode != PERF_RECORD_MISC_KERNEL) &&
-	    (!(map__flags(l_map) & MAP_SHARED)) && !dso__id(l_dso)->maj && !dso__id(l_dso)->min &&
-	     !dso__id(l_dso)->ino && !dso__id(l_dso)->ino_generation) {
-		/* userspace anonymous */
+		if (!dso_id->mmap2_valid)
+			dso_id = dso__id_const(r_dso);
 
-		if (thread__pid(left->thread) > thread__pid(right->thread))
-			return -1;
-		if (thread__pid(left->thread) < thread__pid(right->thread))
-			return 1;
+		if (!build_id__is_defined(&dso_id->build_id) &&
+		    (!dso_id->mmap2_valid || (dso_id->maj == 0 && dso_id->min == 0))) {
+			/* userspace anonymous */
+
+			if (thread__pid(left->thread) > thread__pid(right->thread))
+				return -1;
+			if (thread__pid(left->thread) < thread__pid(right->thread))
+				return 1;
+		}
 	}
 
 addr:
@@ -1786,6 +1791,7 @@ static int hist_entry__dcacheline_snprintf(struct hist_entry *he, char *bf,
 	if (he->mem_info) {
 		struct map *map = mem_info__daddr(he->mem_info)->ms.map;
 		struct dso *dso = map ? map__dso(map) : NULL;
+		const struct dso_id *dso_id = dso ? dso__id_const(dso) : &dso_id_empty;
 
 		addr = cl_address(mem_info__daddr(he->mem_info)->al_addr, chk_double_cl);
 		ms = &mem_info__daddr(he->mem_info)->ms;
@@ -1794,8 +1800,7 @@ static int hist_entry__dcacheline_snprintf(struct hist_entry *he, char *bf,
 		if ((he->cpumode != PERF_RECORD_MISC_KERNEL) &&
 		     map && !(map__prot(map) & PROT_EXEC) &&
 		     (map__flags(map) & MAP_SHARED) &&
-		     (dso__id(dso)->maj || dso__id(dso)->min || dso__id(dso)->ino ||
-		      dso__id(dso)->ino_generation))
+		     (!dso_id->mmap2_valid || (dso_id->maj == 0 && dso_id->min == 0)))
 			level = 's';
 		else if (!map)
 			level = 'X';
@@ -1879,21 +1884,20 @@ struct sort_entry sort_global_ins_lat = {
 static int64_t
 sort__p_stage_cyc_cmp(struct hist_entry *left, struct hist_entry *right)
 {
-	return left->p_stage_cyc - right->p_stage_cyc;
+	return left->weight3 - right->weight3;
 }
 
 static int hist_entry__global_p_stage_cyc_snprintf(struct hist_entry *he, char *bf,
 					size_t size, unsigned int width)
 {
-	return repsep_snprintf(bf, size, "%-*u", width,
-			he->p_stage_cyc * he->stat.nr_events);
+	return repsep_snprintf(bf, size, "%-*u", width, he->weight3 * he->stat.nr_events);
 }
 
 
 static int hist_entry__p_stage_cyc_snprintf(struct hist_entry *he, char *bf,
 					size_t size, unsigned int width)
 {
-	return repsep_snprintf(bf, size, "%-*u", width, he->p_stage_cyc);
+	return repsep_snprintf(bf, size, "%-*u", width, he->weight3);
 }
 
 struct sort_entry sort_local_p_stage_cyc = {
@@ -2470,8 +2474,7 @@ struct sort_entry sort_type_offset = {
 
 /* --sort typecln */
 
-/* TODO: use actual value in the system */
-#define TYPE_CACHELINE_SIZE  64
+#define DEFAULT_CACHELINE_SIZE 64
 
 static int64_t
 sort__typecln_sort(struct hist_entry *left, struct hist_entry *right)
@@ -2480,6 +2483,10 @@ sort__typecln_sort(struct hist_entry *left, struct hist_entry *right)
 	struct annotated_data_type *right_type = right->mem_type;
 	int64_t left_cln, right_cln;
 	int64_t ret;
+	int cln_size = cacheline_size();
+
+	if (cln_size == 0)
+		cln_size = DEFAULT_CACHELINE_SIZE;
 
 	if (!left_type) {
 		sort__type_init(left);
@@ -2495,8 +2502,8 @@ sort__typecln_sort(struct hist_entry *left, struct hist_entry *right)
 	if (ret)
 		return ret;
 
-	left_cln = left->mem_type_off / TYPE_CACHELINE_SIZE;
-	right_cln = right->mem_type_off / TYPE_CACHELINE_SIZE;
+	left_cln = left->mem_type_off / cln_size;
+	right_cln = right->mem_type_off / cln_size;
 	return left_cln - right_cln;
 }
 
@@ -2504,9 +2511,13 @@ static int hist_entry__typecln_snprintf(struct hist_entry *he, char *bf,
 				     size_t size, unsigned int width __maybe_unused)
 {
 	struct annotated_data_type *he_type = he->mem_type;
+	int cln_size = cacheline_size();
+
+	if (cln_size == 0)
+		cln_size = DEFAULT_CACHELINE_SIZE;
 
 	return repsep_snprintf(bf, size, "%s: cache-line %d", he_type->self.type_name,
-			       he->mem_type_off / TYPE_CACHELINE_SIZE);
+			       he->mem_type_off / cln_size);
 }
 
 struct sort_entry sort_type_cacheline = {
@@ -2526,19 +2537,44 @@ struct sort_dimension {
 	int			taken;
 };
 
-int __weak arch_support_sort_key(const char *sort_key __maybe_unused)
+static int arch_support_sort_key(const char *sort_key, struct perf_env *env)
 {
+	const char *arch = perf_env__arch(env);
+
+	if (!strcmp("x86", arch) || !strcmp("powerpc", arch)) {
+		if (!strcmp(sort_key, "p_stage_cyc"))
+			return 1;
+		if (!strcmp(sort_key, "local_p_stage_cyc"))
+			return 1;
+	}
 	return 0;
 }
 
-const char * __weak arch_perf_header_entry(const char *se_header)
+static const char *arch_perf_header_entry(const char *se_header, struct perf_env *env)
 {
+	const char *arch = perf_env__arch(env);
+
+	if (!strcmp("x86", arch)) {
+		if (!strcmp(se_header, "Local Pipeline Stage Cycle"))
+			return "Local Retire Latency";
+		else if (!strcmp(se_header, "Pipeline Stage Cycle"))
+			return "Retire Latency";
+	} else if (!strcmp("powerpc", arch)) {
+		if (!strcmp(se_header, "Local INSTR Latency"))
+			return "Finish Cyc";
+		else if (!strcmp(se_header, "INSTR Latency"))
+			return "Global Finish_cyc";
+		else if (!strcmp(se_header, "Local Pipeline Stage Cycle"))
+			return "Dispatch Cyc";
+		else if (!strcmp(se_header, "Pipeline Stage Cycle"))
+			return "Global Dispatch_cyc";
+	}
 	return se_header;
 }
 
-static void sort_dimension_add_dynamic_header(struct sort_dimension *sd)
+static void sort_dimension_add_dynamic_header(struct sort_dimension *sd, struct perf_env *env)
 {
-	sd->entry->se_header = arch_perf_header_entry(sd->entry->se_header);
+	sd->entry->se_header = arch_perf_header_entry(sd->entry->se_header, env);
 }
 
 #define DIM(d, n, func) [d] = { .name = n, .entry = &(func) }
@@ -3509,6 +3545,56 @@ out:
 	return ret;
 }
 
+static int __sort_dimension__update(struct sort_dimension *sd,
+				    struct perf_hpp_list *list)
+{
+	if (sd->entry == &sort_parent && parent_pattern) {
+		int ret = regcomp(&parent_regex, parent_pattern, REG_EXTENDED);
+		if (ret) {
+			char err[BUFSIZ];
+
+			regerror(ret, &parent_regex, err, sizeof(err));
+			pr_err("Invalid regex: %s\n%s", parent_pattern, err);
+			return -EINVAL;
+		}
+		list->parent = 1;
+	} else if (sd->entry == &sort_sym) {
+		list->sym = 1;
+		/*
+		 * perf diff displays the performance difference amongst
+		 * two or more perf.data files. Those files could come
+		 * from different binaries. So we should not compare
+		 * their ips, but the name of symbol.
+		 */
+		if (sort__mode == SORT_MODE__DIFF)
+			sd->entry->se_collapse = sort__sym_sort;
+
+	} else if (sd->entry == &sort_sym_offset) {
+		list->sym = 1;
+	} else if (sd->entry == &sort_dso) {
+		list->dso = 1;
+	} else if (sd->entry == &sort_socket) {
+		list->socket = 1;
+	} else if (sd->entry == &sort_thread) {
+		list->thread = 1;
+	} else if (sd->entry == &sort_comm) {
+		list->comm = 1;
+	} else if (sd->entry == &sort_type_offset) {
+		symbol_conf.annotate_data_member = true;
+	} else if (sd->entry == &sort_sym_from || sd->entry == &sort_sym_to) {
+		list->sym = 1;
+	} else if (sd->entry == &sort_mem_dcacheline && cacheline_size() == 0) {
+		return -EINVAL;
+	} else if (sd->entry == &sort_mem_daddr_sym) {
+		list->sym = 1;
+	}
+
+	if (sd->entry->se_collapse)
+		list->need_collapse = 1;
+
+	return 0;
+}
+
 static int __sort_dimension__add(struct sort_dimension *sd,
 				 struct perf_hpp_list *list,
 				 int level)
@@ -3519,8 +3605,8 @@ static int __sort_dimension__add(struct sort_dimension *sd,
 	if (__sort_dimension__add_hpp_sort(sd, list, level) < 0)
 		return -1;
 
-	if (sd->entry->se_collapse)
-		list->need_collapse = 1;
+	if (__sort_dimension__update(sd, list) < 0)
+		return -1;
 
 	sd->taken = 1;
 
@@ -3554,6 +3640,9 @@ static int __sort_dimension__add_output(struct perf_hpp_list *list,
 		return 0;
 
 	if (__sort_dimension__add_hpp_output(sd, list, level) < 0)
+		return -1;
+
+	if (__sort_dimension__update(sd, list) < 0)
 		return -1;
 
 	sd->taken = 1;
@@ -3590,7 +3679,7 @@ int hpp_dimension__add_output(unsigned col, bool implicit)
 }
 
 int sort_dimension__add(struct perf_hpp_list *list, const char *tok,
-			struct evlist *evlist,
+			struct evlist *evlist, struct perf_env *env,
 			int level)
 {
 	unsigned int i, j;
@@ -3603,7 +3692,7 @@ int sort_dimension__add(struct perf_hpp_list *list, const char *tok,
 	 */
 	for (j = 0; j < ARRAY_SIZE(arch_specific_sort_keys); j++) {
 		if (!strcmp(arch_specific_sort_keys[j], tok) &&
-				!arch_support_sort_key(tok)) {
+		    !arch_support_sort_key(tok, env)) {
 			return 0;
 		}
 	}
@@ -3616,40 +3705,7 @@ int sort_dimension__add(struct perf_hpp_list *list, const char *tok,
 
 		for (j = 0; j < ARRAY_SIZE(dynamic_headers); j++) {
 			if (sd->name && !strcmp(dynamic_headers[j], sd->name))
-				sort_dimension_add_dynamic_header(sd);
-		}
-
-		if (sd->entry == &sort_parent && parent_pattern) {
-			int ret = regcomp(&parent_regex, parent_pattern, REG_EXTENDED);
-			if (ret) {
-				char err[BUFSIZ];
-
-				regerror(ret, &parent_regex, err, sizeof(err));
-				pr_err("Invalid regex: %s\n%s", parent_pattern, err);
-				return -EINVAL;
-			}
-			list->parent = 1;
-		} else if (sd->entry == &sort_sym) {
-			list->sym = 1;
-			/*
-			 * perf diff displays the performance difference amongst
-			 * two or more perf.data files. Those files could come
-			 * from different binaries. So we should not compare
-			 * their ips, but the name of symbol.
-			 */
-			if (sort__mode == SORT_MODE__DIFF)
-				sd->entry->se_collapse = sort__sym_sort;
-
-		} else if (sd->entry == &sort_dso) {
-			list->dso = 1;
-		} else if (sd->entry == &sort_socket) {
-			list->socket = 1;
-		} else if (sd->entry == &sort_thread) {
-			list->thread = 1;
-		} else if (sd->entry == &sort_comm) {
-			list->comm = 1;
-		} else if (sd->entry == &sort_type_offset) {
-			symbol_conf.annotate_data_member = true;
+				sort_dimension_add_dynamic_header(sd, env);
 		}
 
 		return __sort_dimension__add(sd, list, level);
@@ -3670,9 +3726,6 @@ int sort_dimension__add(struct perf_hpp_list *list, const char *tok,
 				    strlen(tok)))
 			return -EINVAL;
 
-		if (sd->entry == &sort_sym_from || sd->entry == &sort_sym_to)
-			list->sym = 1;
-
 		__sort_dimension__add(sd, list, level);
 		return 0;
 	}
@@ -3685,12 +3738,6 @@ int sort_dimension__add(struct perf_hpp_list *list, const char *tok,
 
 		if (sort__mode != SORT_MODE__MEMORY)
 			return -EINVAL;
-
-		if (sd->entry == &sort_mem_dcacheline && cacheline_size() == 0)
-			return -EINVAL;
-
-		if (sd->entry == &sort_mem_daddr_sym)
-			list->sym = 1;
 
 		__sort_dimension__add(sd, list, level);
 		return 0;
@@ -3712,13 +3759,13 @@ int sort_dimension__add(struct perf_hpp_list *list, const char *tok,
 }
 
 /* This should match with sort_dimension__add() above */
-static bool is_hpp_sort_key(const char *key)
+static bool is_hpp_sort_key(const char *key, struct perf_env *env)
 {
 	unsigned i;
 
 	for (i = 0; i < ARRAY_SIZE(arch_specific_sort_keys); i++) {
 		if (!strcmp(arch_specific_sort_keys[i], key) &&
-		    !arch_support_sort_key(key)) {
+		    !arch_support_sort_key(key, env)) {
 			return false;
 		}
 	}
@@ -3740,7 +3787,7 @@ static bool is_hpp_sort_key(const char *key)
 }
 
 static int setup_sort_list(struct perf_hpp_list *list, char *str,
-			   struct evlist *evlist)
+			   struct evlist *evlist, struct perf_env *env)
 {
 	char *tmp, *tok;
 	int ret = 0;
@@ -3769,7 +3816,7 @@ static int setup_sort_list(struct perf_hpp_list *list, char *str,
 		}
 
 		if (*tok) {
-			if (is_hpp_sort_key(tok)) {
+			if (is_hpp_sort_key(tok, env)) {
 				/* keep output (hpp) sort keys in the same level */
 				if (prev_was_hpp) {
 					bool next_same = (level == next_level);
@@ -3782,7 +3829,7 @@ static int setup_sort_list(struct perf_hpp_list *list, char *str,
 				prev_was_hpp = false;
 			}
 
-			ret = sort_dimension__add(list, tok, evlist, level);
+			ret = sort_dimension__add(list, tok, evlist, env, level);
 			if (ret == -EINVAL) {
 				if (!cacheline_size() && !strncasecmp(tok, "dcacheline", strlen(tok)))
 					ui__error("The \"dcacheline\" --sort key needs to know the cacheline size and it couldn't be determined on this system");
@@ -3911,7 +3958,7 @@ static char *setup_overhead(char *keys)
 	return keys;
 }
 
-static int __setup_sorting(struct evlist *evlist)
+static int __setup_sorting(struct evlist *evlist, struct perf_env *env)
 {
 	char *str;
 	const char *sort_keys;
@@ -3951,7 +3998,7 @@ static int __setup_sorting(struct evlist *evlist)
 		}
 	}
 
-	ret = setup_sort_list(&perf_hpp_list, str, evlist);
+	ret = setup_sort_list(&perf_hpp_list, str, evlist, env);
 
 	free(str);
 	return ret;
@@ -4187,16 +4234,16 @@ out:
 	return ret;
 }
 
-int setup_sorting(struct evlist *evlist)
+int setup_sorting(struct evlist *evlist, struct perf_env *env)
 {
 	int err;
 
-	err = __setup_sorting(evlist);
+	err = __setup_sorting(evlist, env);
 	if (err < 0)
 		return err;
 
 	if (parent_pattern != default_parent_pattern) {
-		err = sort_dimension__add(&perf_hpp_list, "parent", evlist, -1);
+		err = sort_dimension__add(&perf_hpp_list, "parent", evlist, env, -1);
 		if (err < 0)
 			return err;
 	}

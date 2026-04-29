@@ -271,7 +271,7 @@ static struct ccu_div_data *ccu_div_create_data(struct device_node *np)
 	struct ccu_div_data *data;
 	int ret;
 
-	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	data = kzalloc_obj(*data);
 	if (!data)
 		return ERR_PTR(-ENOMEM);
 
@@ -289,7 +289,7 @@ static struct ccu_div_data *ccu_div_create_data(struct device_node *np)
 		goto err_kfree_data;
 	}
 
-	data->divs = kcalloc(data->divs_num, sizeof(*data->divs), GFP_KERNEL);
+	data->divs = kzalloc_objs(*data->divs, data->divs_num);
 	if (!data->divs) {
 		ret = -ENOMEM;
 		goto err_kfree_data;
@@ -405,7 +405,7 @@ static void ccu_div_clk_unregister(struct ccu_div_data *data, bool defer)
 {
 	int idx;
 
-	/* Uninstall only the clocks registered on the specfied stage */
+	/* Uninstall only the clocks registered on the specified stage */
 	for (idx = 0; idx < data->divs_num; ++idx) {
 		if (!!(data->divs_info[idx].features & CCU_DIV_BASIC) ^ defer)
 			continue;

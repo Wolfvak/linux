@@ -8,11 +8,12 @@
 #ifndef __LINUX_MFD_WM8350_CORE_H_
 #define __LINUX_MFD_WM8350_CORE_H_
 
-#include <linux/kernel.h>
-#include <linux/mutex.h>
-#include <linux/interrupt.h>
 #include <linux/completion.h>
+#include <linux/errno.h>
+#include <linux/interrupt.h>
+#include <linux/mutex.h>
 #include <linux/regmap.h>
+#include <linux/types.h>
 
 #include <linux/mfd/wm8350/audio.h>
 #include <linux/mfd/wm8350/gpio.h>
@@ -20,6 +21,9 @@
 #include <linux/mfd/wm8350/rtc.h>
 #include <linux/mfd/wm8350/supply.h>
 #include <linux/mfd/wm8350/wdt.h>
+
+struct device;
+struct platform_device;
 
 /*
  * Register values.
@@ -663,7 +667,7 @@ static inline int wm8350_register_irq(struct wm8350 *wm8350, int irq,
 		return -ENODEV;
 
 	return request_threaded_irq(irq + wm8350->irq_base, NULL,
-				    handler, flags, name, data);
+				    handler, flags | IRQF_ONESHOT, name, data);
 }
 
 static inline void wm8350_free_irq(struct wm8350 *wm8350, int irq, void *data)

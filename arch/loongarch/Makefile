@@ -5,7 +5,12 @@
 
 boot	:= arch/loongarch/boot
 
-KBUILD_DEFCONFIG := loongson3_defconfig
+ifeq ($(shell uname -m),loongarch32)
+KBUILD_DEFCONFIG := loongson32_defconfig
+else
+KBUILD_DEFCONFIG := loongson64_defconfig
+endif
+
 KBUILD_DTBS      := dtbs
 
 image-name-y			:= vmlinux
@@ -106,6 +111,17 @@ KBUILD_CFLAGS			+= -mannotate-tablejump
 else
 KBUILD_CFLAGS			+= -fno-jump-tables # keep compatibility with older compilers
 endif
+ifdef CONFIG_RUSTC_HAS_ANNOTATE_TABLEJUMP
+KBUILD_RUSTFLAGS		+= -Cllvm-args=--loongarch-annotate-tablejump
+else
+KBUILD_RUSTFLAGS		+= $(if $(call rustc-min-version,109300),-Cjump-tables=n,-Zno-jump-tables) # keep compatibility with older compilers
+endif
+ifdef CONFIG_LTO_CLANG
+# The annotate-tablejump option can not be passed to LLVM backend when LTO is enabled.
+# Ensure it is aware of linker with LTO, '--loongarch-annotate-tablejump' also needs to
+# be passed via '-mllvm' to ld.lld.
+KBUILD_LDFLAGS			+= $(call ld-option,-mllvm --loongarch-annotate-tablejump)
+endif
 endif
 
 KBUILD_RUSTFLAGS		+= --target=loongarch64-unknown-none-softfloat -Ccode-model=small
@@ -118,7 +134,7 @@ KBUILD_RUSTFLAGS_KERNEL		+= -Crelocation-model=pie
 LDFLAGS_vmlinux			+= -static -pie --no-dynamic-linker -z notext $(call ld-option, --apply-dynamic-relocs)
 endif
 
-cflags-y += $(call cc-option, -mno-check-zero-division)
+cflags-y += $(call cc-option, -mno-check-zero-division -fno-isolate-erroneous-paths-dereference)
 
 ifndef CONFIG_KASAN
 cflags-y += -fno-builtin-memcpy -fno-builtin-memmove -fno-builtin-memset

@@ -70,7 +70,7 @@ static void *pstore_ftrace_seq_start(struct seq_file *s, loff_t *pos)
 	struct pstore_private *ps = s->private;
 	struct pstore_ftrace_seq_data *data __free(kfree) = NULL;
 
-	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	data = kzalloc_obj(*data);
 	if (!data)
 		return NULL;
 
@@ -282,7 +282,7 @@ static int pstore_reconfigure(struct fs_context *fc)
 
 static const struct super_operations pstore_ops = {
 	.statfs		= simple_statfs,
-	.drop_inode	= generic_delete_inode,
+	.drop_inode	= inode_just_drop,
 	.evict_inode	= pstore_evict_inode,
 	.show_options	= pstore_show_options,
 };
@@ -300,7 +300,7 @@ static struct dentry *psinfo_lock_root(void)
 		return NULL;
 
 	root = pstore_sb->s_root;
-	inode_lock(d_inode(root));
+	inode_lock_nested(d_inode(root), I_MUTEX_PARENT);
 
 	return root;
 }
@@ -318,8 +318,7 @@ int pstore_put_backend_records(struct pstore_info *psi)
 		list_for_each_entry_safe(pos, tmp, &records_list, list) {
 			if (pos->record->psi == psi) {
 				list_del_init(&pos->list);
-				d_invalidate(pos->dentry);
-				simple_unlink(d_inode(root), pos->dentry);
+				locked_recursive_removal(pos->dentry, NULL);
 				pos->dentry = NULL;
 			}
 		}
@@ -366,7 +365,7 @@ int pstore_mkfile(struct dentry *root, struct pstore_record *record)
 			record->psi->name, record->id,
 			record->compressed ? ".enc.z" : "");
 
-	private = kzalloc(sizeof(*private), GFP_KERNEL);
+	private = kzalloc_obj(*private);
 	if (!private)
 		return -ENOMEM;
 
@@ -374,7 +373,7 @@ int pstore_mkfile(struct dentry *root, struct pstore_record *record)
 	if (!dentry)
 		return -ENOMEM;
 
-	private->dentry = dentry;
+	private->dentry = dentry; // borrowed
 	private->record = record;
 	inode->i_size = private->total_size = size;
 	inode->i_private = private;
@@ -383,7 +382,8 @@ int pstore_mkfile(struct dentry *root, struct pstore_record *record)
 		inode_set_mtime_to_ts(inode,
 				      inode_set_ctime_to_ts(inode, record->time));
 
-	d_add(dentry, no_free_ptr(inode));
+	d_make_persistent(dentry, no_free_ptr(inode));
+	dput(dentry);
 
 	list_add(&(no_free_ptr(private))->list, &records_list);
 
@@ -466,7 +466,7 @@ static void pstore_kill_sb(struct super_block *sb)
 	guard(mutex)(&pstore_sb_lock);
 	WARN_ON(pstore_sb && pstore_sb != sb);
 
-	kill_litter_super(sb);
+	kill_anon_super(sb);
 	pstore_sb = NULL;
 
 	guard(mutex)(&records_list_lock);
@@ -477,7 +477,7 @@ static int pstore_init_fs_context(struct fs_context *fc)
 {
 	struct pstore_context *ctx;
 
-	ctx = kzalloc(sizeof(struct pstore_context), GFP_KERNEL);
+	ctx = kzalloc_obj(struct pstore_context);
 	if (!ctx)
 		return -ENOMEM;
 

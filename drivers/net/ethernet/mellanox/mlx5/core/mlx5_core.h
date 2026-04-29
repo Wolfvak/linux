@@ -258,6 +258,7 @@ int mlx5_wait_for_pages(struct mlx5_core_dev *dev, int *pages);
 void mlx5_cmd_flush(struct mlx5_core_dev *dev);
 void mlx5_cq_debugfs_init(struct mlx5_core_dev *dev);
 void mlx5_cq_debugfs_cleanup(struct mlx5_core_dev *dev);
+void mlx5_vhca_debugfs_init(struct mlx5_core_dev *dev);
 
 int mlx5_query_pcam_reg(struct mlx5_core_dev *dev, u32 *pcam, u8 feature_group,
 			u8 access_reg_group);
@@ -290,6 +291,7 @@ int mlx5_register_device(struct mlx5_core_dev *dev);
 void mlx5_unregister_device(struct mlx5_core_dev *dev);
 void mlx5_dev_set_lightweight(struct mlx5_core_dev *dev);
 bool mlx5_dev_is_lightweight(struct mlx5_core_dev *dev);
+void mlx5_core_reps_aux_devs_remove(struct mlx5_core_dev *dev);
 
 void mlx5_fw_reporters_create(struct mlx5_core_dev *dev);
 int mlx5_query_mtpps(struct mlx5_core_dev *dev, u32 *mtpps, u32 mtpps_size);
@@ -299,6 +301,15 @@ int mlx5_set_mtppse(struct mlx5_core_dev *mdev, u8 pin, u8 arm, u8 mode);
 
 struct mlx5_dm *mlx5_dm_create(struct mlx5_core_dev *dev);
 void mlx5_dm_cleanup(struct mlx5_core_dev *dev);
+
+#ifdef CONFIG_PCIE_TPH
+struct mlx5_st *mlx5_st_create(struct mlx5_core_dev *dev);
+void mlx5_st_destroy(struct mlx5_core_dev *dev);
+#else
+static inline struct mlx5_st *
+mlx5_st_create(struct mlx5_core_dev *dev) { return NULL; }
+static inline void mlx5_st_destroy(struct mlx5_core_dev *dev) { return; }
+#endif
 
 void mlx5_toggle_port_link(struct mlx5_core_dev *dev);
 int mlx5_set_port_admin_status(struct mlx5_core_dev *dev,
@@ -334,10 +345,10 @@ int mlx5_set_port_tc_bw_alloc(struct mlx5_core_dev *mdev, u8 *tc_bw);
 int mlx5_query_port_tc_bw_alloc(struct mlx5_core_dev *mdev,
 				u8 tc, u8 *bw_pct);
 int mlx5_modify_port_ets_rate_limit(struct mlx5_core_dev *mdev,
-				    u8 *max_bw_value,
+				    u16 *max_bw_value,
 				    u8 *max_bw_unit);
 int mlx5_query_port_ets_rate_limit(struct mlx5_core_dev *mdev,
-				   u8 *max_bw_value,
+				   u16 *max_bw_value,
 				   u8 *max_bw_unit);
 int mlx5_set_port_wol(struct mlx5_core_dev *mdev, u8 wol_mode);
 int mlx5_query_port_wol(struct mlx5_core_dev *mdev, u8 *wol_mode);
@@ -348,16 +359,18 @@ int mlx5_set_port_fcs(struct mlx5_core_dev *mdev, u8 enable);
 void mlx5_query_port_fcs(struct mlx5_core_dev *mdev, bool *supported,
 			 bool *enabled);
 int mlx5_query_module_eeprom(struct mlx5_core_dev *dev,
-			     u16 offset, u16 size, u8 *data);
+			     u16 offset, u16 size, u8 *data, u8 *status);
 int
 mlx5_query_module_eeprom_by_page(struct mlx5_core_dev *dev,
 				 struct mlx5_module_eeprom_query_params *params,
-				 u8 *data);
+				 u8 *data, u8 *status);
 
 int mlx5_query_port_dcbx_param(struct mlx5_core_dev *mdev, u32 *out);
 int mlx5_set_port_dcbx_param(struct mlx5_core_dev *mdev, u32 *in);
 int mlx5_set_trust_state(struct mlx5_core_dev *mdev, u8 trust_state);
 int mlx5_query_trust_state(struct mlx5_core_dev *mdev, u8 *trust_state);
+int mlx5_query_port_buffer_ownership(struct mlx5_core_dev *mdev,
+				     u8 *buffer_ownership);
 int mlx5_set_dscp2prio(struct mlx5_core_dev *mdev, u8 dscp, u8 prio);
 int mlx5_query_dscp2prio(struct mlx5_core_dev *mdev, u8 *dscp2prio);
 
@@ -370,6 +383,7 @@ const struct mlx5_link_info *mlx5_port_ptys2info(struct mlx5_core_dev *mdev,
 u32 mlx5_port_info2linkmodes(struct mlx5_core_dev *mdev,
 			     struct mlx5_link_info *info,
 			     bool force_legacy);
+int mlx5_port_oper_linkspeed(struct mlx5_core_dev *mdev, u32 *speed);
 int mlx5_port_max_linkspeed(struct mlx5_core_dev *mdev, u32 *speed);
 
 #define MLX5_PPS_CAP(mdev) (MLX5_CAP_GEN((mdev), pps) &&		\
@@ -379,8 +393,8 @@ int mlx5_port_max_linkspeed(struct mlx5_core_dev *mdev, u32 *speed);
 
 int mlx5_firmware_flash(struct mlx5_core_dev *dev, const struct firmware *fw,
 			struct netlink_ext_ack *extack);
-int mlx5_fw_version_query(struct mlx5_core_dev *dev,
-			  u32 *running_ver, u32 *stored_ver);
+void mlx5_fw_version_query(struct mlx5_core_dev *dev, u32 *running_ver,
+			   u32 *stored_ver);
 
 #ifdef CONFIG_MLX5_CORE_EN
 int mlx5e_init(void);
@@ -433,12 +447,12 @@ int mlx5_init_one_light(struct mlx5_core_dev *dev);
 void mlx5_uninit_one_light(struct mlx5_core_dev *dev);
 void mlx5_unload_one_light(struct mlx5_core_dev *dev);
 
+void mlx5_query_nic_sw_system_image_guid(struct mlx5_core_dev *mdev, u8 *buf,
+					 u8 *len);
 int mlx5_vport_set_other_func_cap(struct mlx5_core_dev *dev, const void *hca_cap, u16 vport,
 				  u16 opmod);
 #define mlx5_vport_get_other_func_general_cap(dev, vport, out)		\
 	mlx5_vport_get_other_func_cap(dev, vport, out, MLX5_CAP_GENERAL)
-
-int mlx5_vport_get_vhca_id(struct mlx5_core_dev *dev, u16 vport, u16 *vhca_id);
 
 static inline u32 mlx5_sriov_get_vf_total_msix(struct pci_dev *pdev)
 {
@@ -494,5 +508,18 @@ static inline int mlx5_max_eq_cap_get(const struct mlx5_core_dev *dev)
 		return MLX5_CAP_GEN(dev, max_num_eqs);
 
 	return 1 << MLX5_CAP_GEN(dev, log_max_eq);
+}
+
+static inline bool mlx5_pcie_cong_event_supported(struct mlx5_core_dev *dev)
+{
+	u64 features = MLX5_CAP_GEN_2_64(dev, general_obj_types_127_64);
+
+	if (!(features & MLX5_HCA_CAP_2_GENERAL_OBJECT_TYPES_PCIE_CONG_EVENT))
+		return false;
+
+	if (dev->sd)
+		return false;
+
+	return true;
 }
 #endif /* __MLX5_CORE_H__ */

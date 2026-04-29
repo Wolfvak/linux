@@ -266,7 +266,7 @@ static inline int dw100_dump_regs(struct seq_file *m)
 
 static inline struct dw100_ctx *dw100_file2ctx(struct file *file)
 {
-	return container_of(file->private_data, struct dw100_ctx, fh);
+	return container_of(file_to_v4l2_fh(file), struct dw100_ctx, fh);
 }
 
 static struct dw100_q_data *dw100_get_q_data(struct dw100_ctx *ctx,
@@ -601,13 +601,12 @@ static int dw100_open(struct file *file)
 	struct v4l2_pix_format_mplane *pix_fmt;
 	int ret, i;
 
-	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+	ctx = kzalloc_obj(*ctx);
 	if (!ctx)
 		return -ENOMEM;
 
 	mutex_init(&ctx->vq_mutex);
 	v4l2_fh_init(&ctx->fh, video_devdata(file));
-	file->private_data = &ctx->fh;
 	ctx->dw_dev = dw_dev;
 
 	ctx->q_data[DW100_QUEUE_SRC].fmt = &formats[0];
@@ -651,7 +650,7 @@ static int dw100_open(struct file *file)
 		goto err;
 	}
 
-	v4l2_fh_add(&ctx->fh);
+	v4l2_fh_add(&ctx->fh, file);
 
 	return 0;
 
@@ -668,7 +667,7 @@ static int dw100_release(struct file *file)
 {
 	struct dw100_ctx *ctx = dw100_file2ctx(file);
 
-	v4l2_fh_del(&ctx->fh);
+	v4l2_fh_del(&ctx->fh, file);
 	v4l2_fh_exit(&ctx->fh);
 	v4l2_ctrl_handler_free(&ctx->hdl);
 	v4l2_m2m_ctx_release(ctx->fh.m2m_ctx);
@@ -736,12 +735,7 @@ static int dw100_enum_framesizes(struct file *file, void *priv,
 static int dw100_g_fmt_vid(struct file *file, void *priv, struct v4l2_format *f)
 {
 	struct dw100_ctx *ctx = dw100_file2ctx(file);
-	struct vb2_queue *vq;
 	struct dw100_q_data *q_data;
-
-	vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx, f->type);
-	if (!vq)
-		return -EINVAL;
 
 	q_data = dw100_get_q_data(ctx, f->type);
 
@@ -804,8 +798,6 @@ static int dw100_s_fmt(struct dw100_ctx *ctx, struct v4l2_format *f)
 	struct vb2_queue *vq;
 
 	vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx, f->type);
-	if (!vq)
-		return -EINVAL;
 
 	q_data = dw100_get_q_data(ctx, f->type);
 	if (!q_data)
@@ -1438,7 +1430,7 @@ static void dw100_start(struct dw100_ctx *ctx, struct vb2_v4l2_buffer *in_vb,
 				V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE),
 		in_vb->sequence, out_vb->sequence);
 
-	v4l2_m2m_buf_copy_metadata(in_vb, out_vb, true);
+	v4l2_m2m_buf_copy_metadata(in_vb, out_vb);
 
 	/* Now, let's deal with hardware ... */
 	dw100_hw_master_bus_disable(dw_dev);

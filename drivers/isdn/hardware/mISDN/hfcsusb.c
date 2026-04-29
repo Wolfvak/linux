@@ -249,7 +249,7 @@ hfcsusb_ph_info(struct hfcsusb *hw)
 	struct dchannel *dch = &hw->dch;
 	int i;
 
-	phi = kzalloc(struct_size(phi, bch, dch->dev.nrbchan), GFP_ATOMIC);
+	phi = kzalloc_flex(*phi, bch, dch->dev.nrbchan, GFP_ATOMIC);
 	if (!phi)
 		return -ENOMEM;
 
@@ -1696,7 +1696,7 @@ hfcsusb_stop_endpoint(struct hfcsusb *hw, int channel)
 static int
 setup_hfcsusb(struct hfcsusb *hw)
 {
-	void *dmabuf = kmalloc(sizeof(u_char), GFP_KERNEL);
+	void *dmabuf = kmalloc_obj(u_char);
 	u_char b;
 	int ret;
 
@@ -1904,13 +1904,13 @@ out:
 	mISDN_freebchannel(&hw->bch[1]);
 	mISDN_freebchannel(&hw->bch[0]);
 	mISDN_freedchannel(&hw->dch);
-	kfree(hw);
 	return err;
 }
 
 static int
 hfcsusb_probe(struct usb_interface *intf, const struct usb_device_id *id)
 {
+	int err;
 	struct hfcsusb			*hw;
 	struct usb_device		*dev = interface_to_usbdev(intf);
 	struct usb_host_interface	*iface = intf->cur_altsetting;
@@ -2018,7 +2018,7 @@ hfcsusb_probe(struct usb_interface *intf, const struct usb_device_id *id)
 		return -EIO;
 
 	iface = iface_used;
-	hw = kzalloc(sizeof(struct hfcsusb), GFP_KERNEL);
+	hw = kzalloc_obj(struct hfcsusb);
 	if (!hw)
 		return -ENOMEM;	/* got no mem */
 	snprintf(hw->name, MISDN_MAX_IDLEN - 1, "%s", DRIVER_NAME);
@@ -2101,20 +2101,28 @@ hfcsusb_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	if (!hw->ctrl_urb) {
 		pr_warn("%s: No memory for control urb\n",
 			driver_info->vend_name);
-		kfree(hw);
-		return -ENOMEM;
+		err = -ENOMEM;
+		goto err_free_hw;
 	}
 
 	pr_info("%s: %s: detected \"%s\" (%s, if=%d alt=%d)\n",
 		hw->name, __func__, driver_info->vend_name,
 		conf_str[small_match], ifnum, alt_used);
 
-	if (setup_instance(hw, dev->dev.parent))
-		return -EIO;
+	if (setup_instance(hw, dev->dev.parent)) {
+		err = -EIO;
+		goto err_free_urb;
+	}
 
 	hw->intf = intf;
 	usb_set_intfdata(hw->intf, hw);
 	return 0;
+
+err_free_urb:
+	usb_free_urb(hw->ctrl_urb);
+err_free_hw:
+	kfree(hw);
+	return err;
 }
 
 /* function called when an active device is removed */

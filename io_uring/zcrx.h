@@ -14,11 +14,12 @@ struct io_zcrx_mem {
 
 	struct page			**pages;
 	unsigned long			nr_folios;
+	struct sg_table			page_sg_table;
+	unsigned long			account_pages;
+	struct sg_table			*sgt;
 
 	struct dma_buf_attachment	*attach;
 	struct dma_buf			*dmabuf;
-	struct sg_table			*sgt;
-	unsigned long			dmabuf_offset;
 };
 
 struct io_zcrx_area {
@@ -38,8 +39,10 @@ struct io_zcrx_area {
 };
 
 struct io_zcrx_ifq {
-	struct io_ring_ctx		*ctx;
 	struct io_zcrx_area		*area;
+	unsigned			niov_shift;
+	struct user_struct		*user;
+	struct mm_struct		*mm_account;
 
 	spinlock_t			rq_lock ____cacheline_aligned_in_smp;
 	struct io_uring			*rq_ring;
@@ -51,16 +54,23 @@ struct io_zcrx_ifq {
 	struct device			*dev;
 	struct net_device		*netdev;
 	netdevice_tracker		netdev_tracker;
-	spinlock_t			lock;
-	struct mutex			dma_lock;
+	refcount_t			refs;
+	/* counts userspace facing users like io_uring */
+	refcount_t			user_refs;
+
+	/*
+	 * Page pool and net configuration lock, can be taken deeper in the
+	 * net stack.
+	 */
+	struct mutex			pp_lock;
 	struct io_mapped_region		region;
 };
 
 #if defined(CONFIG_IO_URING_ZCRX)
+int io_zcrx_ctrl(struct io_ring_ctx *ctx, void __user *arg, unsigned nr_arg);
 int io_register_zcrx_ifq(struct io_ring_ctx *ctx,
 			 struct io_uring_zcrx_ifq_reg __user *arg);
 void io_unregister_zcrx_ifqs(struct io_ring_ctx *ctx);
-void io_shutdown_zcrx_ifqs(struct io_ring_ctx *ctx);
 int io_zcrx_recv(struct io_kiocb *req, struct io_zcrx_ifq *ifq,
 		 struct socket *sock, unsigned int flags,
 		 unsigned issue_flags, unsigned int *len);
@@ -75,9 +85,6 @@ static inline int io_register_zcrx_ifq(struct io_ring_ctx *ctx,
 static inline void io_unregister_zcrx_ifqs(struct io_ring_ctx *ctx)
 {
 }
-static inline void io_shutdown_zcrx_ifqs(struct io_ring_ctx *ctx)
-{
-}
 static inline int io_zcrx_recv(struct io_kiocb *req, struct io_zcrx_ifq *ifq,
 			       struct socket *sock, unsigned int flags,
 			       unsigned issue_flags, unsigned int *len)
@@ -88,6 +95,11 @@ static inline struct io_mapped_region *io_zcrx_get_region(struct io_ring_ctx *ct
 							  unsigned int id)
 {
 	return NULL;
+}
+static inline int io_zcrx_ctrl(struct io_ring_ctx *ctx,
+				void __user *arg, unsigned nr_arg)
+{
+	return -EOPNOTSUPP;
 }
 #endif
 

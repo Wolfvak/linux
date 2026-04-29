@@ -11,14 +11,15 @@
 
 #include "g4x_dp.h"
 #include "i915_reg.h"
-#include "i915_utils.h"
 #include "intel_audio.h"
 #include "intel_backlight.h"
 #include "intel_connector.h"
 #include "intel_crtc.h"
 #include "intel_de.h"
 #include "intel_display_power.h"
+#include "intel_display_regs.h"
 #include "intel_display_types.h"
+#include "intel_display_utils.h"
 #include "intel_dp.h"
 #include "intel_dp_aux.h"
 #include "intel_dp_link_training.h"
@@ -136,7 +137,7 @@ static void intel_dp_prepare(struct intel_encoder *encoder,
 			intel_dp->DP |= DP_SYNC_VS_HIGH;
 		intel_dp->DP |= DP_LINK_TRAIN_OFF_CPT;
 
-		if (drm_dp_enhanced_frame_cap(intel_dp->dpcd))
+		if (pipe_config->enhanced_framing)
 			intel_dp->DP |= DP_ENHANCED_FRAMING;
 
 		intel_dp->DP |= DP_PIPE_SEL_IVB(crtc->pipe);
@@ -301,7 +302,7 @@ static bool intel_dp_get_hw_state(struct intel_encoder *encoder,
 {
 	struct intel_display *display = to_intel_display(encoder);
 	struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 	bool ret;
 
 	wakeref = intel_display_power_get_if_enabled(display,
@@ -422,17 +423,6 @@ intel_dp_link_down(struct intel_encoder *encoder,
 		return;
 
 	drm_dbg_kms(display->drm, "\n");
-
-	if ((display->platform.ivybridge && port == PORT_A) ||
-	    (HAS_PCH_CPT(display) && port != PORT_A)) {
-		intel_dp->DP &= ~DP_LINK_TRAIN_MASK_CPT;
-		intel_dp->DP |= DP_LINK_TRAIN_PAT_IDLE_CPT;
-	} else {
-		intel_dp->DP &= ~DP_LINK_TRAIN_MASK;
-		intel_dp->DP |= DP_LINK_TRAIN_PAT_IDLE;
-	}
-	intel_de_write(display, intel_dp->output_reg, intel_dp->DP);
-	intel_de_posting_read(display, intel_dp->output_reg);
 
 	intel_dp->DP &= ~DP_PORT_EN;
 	intel_de_write(display, intel_dp->output_reg, intel_dp->DP);
@@ -611,6 +601,19 @@ cpt_set_link_train(struct intel_dp *intel_dp,
 }
 
 static void
+cpt_set_idle_link_train(struct intel_dp *intel_dp,
+			const struct intel_crtc_state *crtc_state)
+{
+	struct intel_display *display = to_intel_display(intel_dp);
+
+	intel_dp->DP &= ~DP_LINK_TRAIN_MASK_CPT;
+	intel_dp->DP |= DP_LINK_TRAIN_PAT_IDLE_CPT;
+
+	intel_de_write(display, intel_dp->output_reg, intel_dp->DP);
+	intel_de_posting_read(display, intel_dp->output_reg);
+}
+
+static void
 g4x_set_link_train(struct intel_dp *intel_dp,
 		   const struct intel_crtc_state *crtc_state,
 		   u8 dp_train_pat)
@@ -633,6 +636,19 @@ g4x_set_link_train(struct intel_dp *intel_dp,
 		MISSING_CASE(intel_dp_training_pattern_symbol(dp_train_pat));
 		return;
 	}
+
+	intel_de_write(display, intel_dp->output_reg, intel_dp->DP);
+	intel_de_posting_read(display, intel_dp->output_reg);
+}
+
+static void
+g4x_set_idle_link_train(struct intel_dp *intel_dp,
+			const struct intel_crtc_state *crtc_state)
+{
+	struct intel_display *display = to_intel_display(intel_dp);
+
+	intel_dp->DP &= ~DP_LINK_TRAIN_MASK;
+	intel_dp->DP |= DP_LINK_TRAIN_PAT_IDLE;
 
 	intel_de_write(display, intel_dp->output_reg, intel_dp->DP);
 	intel_de_posting_read(display, intel_dp->output_reg);
@@ -668,12 +684,11 @@ static void intel_enable_dp(struct intel_atomic_state *state,
 	struct intel_display *display = to_intel_display(state);
 	struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
 	u32 dp_reg = intel_de_read(display, intel_dp->output_reg);
-	intel_wakeref_t wakeref;
 
 	if (drm_WARN_ON(display->drm, dp_reg & DP_PORT_EN))
 		return;
 
-	with_intel_pps_lock(intel_dp, wakeref) {
+	with_intel_pps_lock(intel_dp) {
 		if (display->platform.valleyview || display->platform.cherryview)
 			vlv_pps_port_enable_unlocked(encoder, pipe_config);
 
@@ -1284,11 +1299,9 @@ bool g4x_dp_init(struct intel_display *display,
 		drm_dbg_kms(display->drm, "No VBT child device for DP-%c\n",
 			    port_name(port));
 
-	dig_port = kzalloc(sizeof(*dig_port), GFP_KERNEL);
+	dig_port = intel_dig_port_alloc();
 	if (!dig_port)
 		return false;
-
-	dig_port->aux_ch = AUX_CH_NONE;
 
 	intel_connector = intel_connector_alloc();
 	if (!intel_connector)
@@ -1298,8 +1311,6 @@ bool g4x_dp_init(struct intel_display *display,
 	encoder = &intel_encoder->base;
 
 	intel_encoder->devdata = devdata;
-
-	mutex_init(&dig_port->hdcp.mutex);
 
 	if (drm_encoder_init(display->drm, &intel_encoder->base,
 			     &intel_dp_enc_funcs, DRM_MODE_ENCODER_TMDS,
@@ -1341,10 +1352,13 @@ bool g4x_dp_init(struct intel_display *display,
 	intel_encoder->audio_disable = g4x_dp_audio_disable;
 
 	if ((display->platform.ivybridge && port == PORT_A) ||
-	    (HAS_PCH_CPT(display) && port != PORT_A))
+	    (HAS_PCH_CPT(display) && port != PORT_A)) {
 		dig_port->dp.set_link_train = cpt_set_link_train;
-	else
+		dig_port->dp.set_idle_link_train = cpt_set_idle_link_train;
+	} else {
 		dig_port->dp.set_link_train = g4x_set_link_train;
+		dig_port->dp.set_idle_link_train = g4x_set_idle_link_train;
+	}
 
 	if (display->platform.cherryview)
 		intel_encoder->set_signal_levels = chv_set_signal_levels;
@@ -1367,7 +1381,6 @@ bool g4x_dp_init(struct intel_display *display,
 	}
 
 	dig_port->dp.output_reg = output_reg;
-	dig_port->max_lanes = 4;
 
 	intel_encoder->type = INTEL_OUTPUT_DP;
 	intel_encoder->power_domain = intel_display_power_ddi_lanes_domain(display, port);

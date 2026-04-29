@@ -22,6 +22,8 @@
 #include <linux/lsm_hooks.h>
 #include <linux/magic.h>
 
+#include "lsm.h"
+
 static struct vfsmount *mount;
 static int mount_count;
 
@@ -70,7 +72,7 @@ static struct file_system_type fs_type = {
 	.owner =	THIS_MODULE,
 	.name =		"securityfs",
 	.init_fs_context = securityfs_init_fs_context,
-	.kill_sb =	kill_litter_super,
+	.kill_sb =	kill_anon_super,
 };
 
 /**
@@ -112,37 +114,34 @@ static struct dentry *securityfs_create_dentry(const char *name, umode_t mode,
 	struct dentry *dentry;
 	struct inode *dir, *inode;
 	int error;
+	bool pinned = false;
 
 	if (!(mode & S_IFMT))
 		mode = (mode & S_IALLUGO) | S_IFREG;
 
 	pr_debug("securityfs: creating file '%s'\n",name);
 
-	error = simple_pin_fs(&fs_type, &mount, &mount_count);
-	if (error)
-		return ERR_PTR(error);
-
-	if (!parent)
+	if (!parent) {
+		error = simple_pin_fs(&fs_type, &mount, &mount_count);
+		if (error)
+			return ERR_PTR(error);
+		pinned = true;
 		parent = mount->mnt_root;
+	}
+
+	inode = new_inode(parent->d_sb);
+	if (unlikely(!inode)) {
+		dentry = ERR_PTR(-ENOMEM);
+		goto out;
+	}
 
 	dir = d_inode(parent);
 
-	inode_lock(dir);
-	dentry = lookup_noperm(&QSTR(name), parent);
-	if (IS_ERR(dentry))
+	dentry = simple_start_creating(parent, name);
+	if (IS_ERR(dentry)) {
+		iput(inode);
 		goto out;
-
-	if (d_really_is_positive(dentry)) {
-		error = -EEXIST;
-		goto out1;
 	}
-
-	inode = new_inode(dir->i_sb);
-	if (!inode) {
-		error = -ENOMEM;
-		goto out1;
-	}
-
 	inode->i_ino = get_next_ino();
 	inode->i_mode = mode;
 	simple_inode_init_ts(inode);
@@ -158,17 +157,13 @@ static struct dentry *securityfs_create_dentry(const char *name, umode_t mode,
 	} else {
 		inode->i_fop = fops;
 	}
-	d_instantiate(dentry, inode);
-	dget(dentry);
-	inode_unlock(dir);
-	return dentry;
+	d_make_persistent(dentry, inode);
+	simple_done_creating(dentry);
+	return dentry; // borrowed
 
-out1:
-	dput(dentry);
-	dentry = ERR_PTR(error);
 out:
-	inode_unlock(dir);
-	simple_release_fs(&mount, &mount_count);
+	if (pinned)
+		simple_release_fs(&mount, &mount_count);
 	return dentry;
 }
 
@@ -279,6 +274,12 @@ struct dentry *securityfs_create_symlink(const char *name,
 }
 EXPORT_SYMBOL_GPL(securityfs_create_symlink);
 
+static void remove_one(struct dentry *victim)
+{
+	if (victim->d_parent == victim->d_sb->s_root)
+		simple_release_fs(&mount, &mount_count);
+}
+
 /**
  * securityfs_remove - removes a file or directory from the securityfs filesystem
  *
@@ -291,43 +292,11 @@ EXPORT_SYMBOL_GPL(securityfs_create_symlink);
  * This function is required to be called in order for the file to be
  * removed. No automatic cleanup of files will happen when a module is
  * removed; you are responsible here.
+ *
+ * AV: when applied to directory it will take all children out; no need to call
+ * it for descendents if ancestor is getting killed.
  */
 void securityfs_remove(struct dentry *dentry)
-{
-	struct inode *dir;
-
-	if (IS_ERR_OR_NULL(dentry))
-		return;
-
-	dir = d_inode(dentry->d_parent);
-	inode_lock(dir);
-	if (simple_positive(dentry)) {
-		if (d_is_dir(dentry))
-			simple_rmdir(dir, dentry);
-		else
-			simple_unlink(dir, dentry);
-		dput(dentry);
-	}
-	inode_unlock(dir);
-	simple_release_fs(&mount, &mount_count);
-}
-EXPORT_SYMBOL_GPL(securityfs_remove);
-
-static void remove_one(struct dentry *victim)
-{
-	simple_release_fs(&mount, &mount_count);
-}
-
-/**
- * securityfs_recursive_remove - recursively removes a file or directory
- *
- * @dentry: a pointer to a the dentry of the file or directory to be removed.
- *
- * This function recursively removes a file or directory in securityfs that was
- * previously created with a call to another securityfs function (like
- * securityfs_create_file() or variants thereof.)
- */
-void securityfs_recursive_remove(struct dentry *dentry)
 {
 	if (IS_ERR_OR_NULL(dentry))
 		return;
@@ -336,15 +305,52 @@ void securityfs_recursive_remove(struct dentry *dentry)
 	simple_recursive_removal(dentry, remove_one);
 	simple_release_fs(&mount, &mount_count);
 }
-EXPORT_SYMBOL_GPL(securityfs_recursive_remove);
+EXPORT_SYMBOL_GPL(securityfs_remove);
 
 #ifdef CONFIG_SECURITY
+#include <linux/spinlock.h>
+
 static struct dentry *lsm_dentry;
+
 static ssize_t lsm_read(struct file *filp, char __user *buf, size_t count,
 			loff_t *ppos)
 {
-	return simple_read_from_buffer(buf, count, ppos, lsm_names,
-		strlen(lsm_names));
+	int i;
+	static char *str;
+	static size_t len;
+	static DEFINE_SPINLOCK(lock);
+
+	/* NOTE: we never free or modify the string once it is set */
+
+	if (unlikely(!str || !len)) {
+		char *str_tmp;
+		size_t len_tmp = 0;
+
+		for (i = 0; i < lsm_active_cnt; i++)
+			/* the '+ 1' accounts for either a comma or a NUL */
+			len_tmp += strlen(lsm_idlist[i]->name) + 1;
+
+		str_tmp = kmalloc(len_tmp, GFP_KERNEL);
+		if (!str_tmp)
+			return -ENOMEM;
+		str_tmp[0] = '\0';
+
+		for (i = 0; i < lsm_active_cnt; i++) {
+			if (i > 0)
+				strcat(str_tmp, ",");
+			strcat(str_tmp, lsm_idlist[i]->name);
+		}
+
+		spin_lock(&lock);
+		if (!str) {
+			str = str_tmp;
+			len = len_tmp - 1;
+		} else
+			kfree(str_tmp);
+		spin_unlock(&lock);
+	}
+
+	return simple_read_from_buffer(buf, count, ppos, str, len);
 }
 
 static const struct file_operations lsm_ops = {
@@ -353,7 +359,7 @@ static const struct file_operations lsm_ops = {
 };
 #endif
 
-static int __init securityfs_init(void)
+int __init securityfs_init(void)
 {
 	int retval;
 
@@ -372,4 +378,3 @@ static int __init securityfs_init(void)
 #endif
 	return 0;
 }
-core_initcall(securityfs_init);

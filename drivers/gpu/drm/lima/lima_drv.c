@@ -215,7 +215,7 @@ static int lima_drm_driver_open(struct drm_device *dev, struct drm_file *file)
 	struct lima_drm_priv *priv;
 	struct lima_device *ldev = to_lima_dev(dev);
 
-	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+	priv = kzalloc_obj(*priv);
 	if (!priv)
 		return -ENOMEM;
 
@@ -362,8 +362,8 @@ static const struct bin_attribute lima_error_state_attr = {
 	.attr.name = "error",
 	.attr.mode = 0600,
 	.size = 0,
-	.read_new = lima_error_state_read,
-	.write_new = lima_error_state_write,
+	.read = lima_error_state_read,
+	.write = lima_error_state_write,
 };
 
 static int lima_pdev_probe(struct platform_device *pdev)

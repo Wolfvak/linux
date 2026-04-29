@@ -56,16 +56,8 @@ static int cma_maxchunk_get(void *data, u64 *val)
 	for (r = 0; r < cma->nranges; r++) {
 		cmr = &cma->ranges[r];
 		bitmap_maxno = cma_bitmap_maxno(cma, cmr);
-		end = 0;
-		for (;;) {
-			start = find_next_zero_bit(cmr->bitmap,
-						   bitmap_maxno, end);
-			if (start >= bitmap_maxno)
-				break;
-			end = find_next_bit(cmr->bitmap, bitmap_maxno,
-					    start);
+		for_each_clear_bitrange(start, end, cmr->bitmap, bitmap_maxno)
 			maxchunk = max(end - start, maxchunk);
-		}
 	}
 	spin_unlock_irq(&cma->lock);
 	*val = (u64)maxchunk << cma->order_per_bit;
@@ -139,7 +131,7 @@ static int cma_alloc_mem(struct cma *cma, int count)
 	struct cma_mem *mem;
 	struct page *p;
 
-	mem = kzalloc(sizeof(*mem), GFP_KERNEL);
+	mem = kzalloc_obj(*mem);
 	if (!mem)
 		return -ENOMEM;
 

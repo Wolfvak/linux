@@ -276,7 +276,7 @@ static int peb2466_lkup_ctrl_put(struct snd_kcontrol *kcontrol,
 {
 	struct peb2466_lkup_ctrl *lkup_ctrl =
 		(struct peb2466_lkup_ctrl *)kcontrol->private_value;
-	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
 	struct peb2466 *peb2466 = snd_soc_component_get_drvdata(component);
 	unsigned int index;
 	int ret;
@@ -377,7 +377,7 @@ static const struct soc_enum peb2466_tg_freq[][2] = {
 static int peb2466_tg_freq_get(struct snd_kcontrol *kcontrol,
 			       struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
 	struct peb2466 *peb2466 = snd_soc_component_get_drvdata(component);
 	struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
 
@@ -415,7 +415,7 @@ static int peb2466_tg_freq_get(struct snd_kcontrol *kcontrol,
 static int peb2466_tg_freq_put(struct snd_kcontrol *kcontrol,
 			       struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
 	struct peb2466 *peb2466 = snd_soc_component_get_drvdata(component);
 	struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
 	unsigned int *tg_freq_item;
@@ -1945,7 +1945,7 @@ static int peb2466_gpio_init(struct peb2466 *peb2466)
 	peb2466->gpio.gpio_chip.direction_input = peb2466_chip_direction_input;
 	peb2466->gpio.gpio_chip.direction_output = peb2466_chip_direction_output;
 	peb2466->gpio.gpio_chip.get = peb2466_chip_gpio_get;
-	peb2466->gpio.gpio_chip.set_rv = peb2466_chip_gpio_set;
+	peb2466->gpio.gpio_chip.set = peb2466_chip_gpio_set;
 	peb2466->gpio.gpio_chip.can_sleep = true;
 
 	return devm_gpiochip_add_data(&peb2466->spi->dev, &peb2466->gpio.gpio_chip,

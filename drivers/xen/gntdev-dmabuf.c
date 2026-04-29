@@ -95,7 +95,7 @@ dmabuf_exp_wait_obj_new(struct gntdev_dmabuf_priv *priv,
 {
 	struct gntdev_dmabuf_wait_obj *obj;
 
-	obj = kzalloc(sizeof(*obj), GFP_KERNEL);
+	obj = kzalloc_obj(*obj);
 	if (!obj)
 		return ERR_PTR(-ENOMEM);
 
@@ -198,7 +198,7 @@ dmabuf_pages_to_sgt(struct page **pages, unsigned int nr_pages)
 	struct sg_table *sgt;
 	int ret;
 
-	sgt = kmalloc(sizeof(*sgt), GFP_KERNEL);
+	sgt = kmalloc_obj(*sgt);
 	if (!sgt) {
 		ret = -ENOMEM;
 		goto out;
@@ -222,8 +222,7 @@ static int dmabuf_exp_ops_attach(struct dma_buf *dma_buf,
 {
 	struct gntdev_dmabuf_attachment *gntdev_dmabuf_attach;
 
-	gntdev_dmabuf_attach = kzalloc(sizeof(*gntdev_dmabuf_attach),
-				       GFP_KERNEL);
+	gntdev_dmabuf_attach = kzalloc_obj(*gntdev_dmabuf_attach);
 	if (!gntdev_dmabuf_attach)
 		return -ENOMEM;
 
@@ -357,10 +356,13 @@ struct gntdev_dmabuf_export_args {
 static int dmabuf_exp_from_pages(struct gntdev_dmabuf_export_args *args)
 {
 	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
-	struct gntdev_dmabuf *gntdev_dmabuf;
-	int ret;
+	struct gntdev_dmabuf *gntdev_dmabuf __free(kfree) = NULL;
+	CLASS(get_unused_fd, ret)(O_CLOEXEC);
 
-	gntdev_dmabuf = kzalloc(sizeof(*gntdev_dmabuf), GFP_KERNEL);
+	if (ret < 0)
+		return ret;
+
+	gntdev_dmabuf = kzalloc_obj(*gntdev_dmabuf);
 	if (!gntdev_dmabuf)
 		return -ENOMEM;
 
@@ -383,32 +385,21 @@ static int dmabuf_exp_from_pages(struct gntdev_dmabuf_export_args *args)
 	exp_info.priv = gntdev_dmabuf;
 
 	gntdev_dmabuf->dmabuf = dma_buf_export(&exp_info);
-	if (IS_ERR(gntdev_dmabuf->dmabuf)) {
-		ret = PTR_ERR(gntdev_dmabuf->dmabuf);
-		gntdev_dmabuf->dmabuf = NULL;
-		goto fail;
-	}
-
-	ret = dma_buf_fd(gntdev_dmabuf->dmabuf, O_CLOEXEC);
-	if (ret < 0)
-		goto fail;
+	if (IS_ERR(gntdev_dmabuf->dmabuf))
+		return PTR_ERR(gntdev_dmabuf->dmabuf);
 
 	gntdev_dmabuf->fd = ret;
 	args->fd = ret;
 
 	pr_debug("Exporting DMA buffer with fd %d\n", ret);
 
+	get_file(gntdev_dmabuf->priv->filp);
 	mutex_lock(&args->dmabuf_priv->lock);
 	list_add(&gntdev_dmabuf->next, &args->dmabuf_priv->exp_list);
 	mutex_unlock(&args->dmabuf_priv->lock);
-	get_file(gntdev_dmabuf->priv->filp);
-	return 0;
 
-fail:
-	if (gntdev_dmabuf->dmabuf)
-		dma_buf_put(gntdev_dmabuf->dmabuf);
-	kfree(gntdev_dmabuf);
-	return ret;
+	fd_install(take_fd(ret), no_free_ptr(gntdev_dmabuf)->dmabuf->file);
+	return 0;
 }
 
 static struct gntdev_grant_map *
@@ -539,13 +530,12 @@ static struct gntdev_dmabuf *dmabuf_imp_alloc_storage(int count)
 	struct gntdev_dmabuf *gntdev_dmabuf;
 	int i;
 
-	gntdev_dmabuf = kzalloc(sizeof(*gntdev_dmabuf), GFP_KERNEL);
+	gntdev_dmabuf = kzalloc_obj(*gntdev_dmabuf);
 	if (!gntdev_dmabuf)
 		goto fail_no_free;
 
-	gntdev_dmabuf->u.imp.refs = kcalloc(count,
-					    sizeof(gntdev_dmabuf->u.imp.refs[0]),
-					    GFP_KERNEL);
+	gntdev_dmabuf->u.imp.refs = kzalloc_objs(gntdev_dmabuf->u.imp.refs[0],
+						 count);
 	if (!gntdev_dmabuf->u.imp.refs)
 		goto fail;
 
@@ -728,16 +718,15 @@ static void dmabuf_imp_release_all(struct gntdev_dmabuf_priv *priv)
 
 /* DMA buffer IOCTL support. */
 
-long gntdev_ioctl_dmabuf_exp_from_refs(struct gntdev_priv *priv, int use_ptemod,
+long gntdev_ioctl_dmabuf_exp_from_refs(struct gntdev_priv *priv,
 				       struct ioctl_gntdev_dmabuf_exp_from_refs __user *u)
 {
 	struct ioctl_gntdev_dmabuf_exp_from_refs op;
 	u32 *refs;
 	long ret;
 
-	if (use_ptemod) {
-		pr_debug("Cannot provide dma-buf: use_ptemode %d\n",
-			 use_ptemod);
+	if (xen_pv_domain()) {
+		pr_debug("Cannot provide dma-buf in a PV domain\n");
 		return -EINVAL;
 	}
 
@@ -827,7 +816,7 @@ struct gntdev_dmabuf_priv *gntdev_dmabuf_init(struct file *filp)
 {
 	struct gntdev_dmabuf_priv *priv;
 
-	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+	priv = kzalloc_obj(*priv);
 	if (!priv)
 		return ERR_PTR(-ENOMEM);
 

@@ -14,7 +14,6 @@
 #define CREATE_TRACE_POINTS
 #include "nfs4trace.h"
 
-#ifdef CONFIG_NFS_V4_1
 EXPORT_TRACEPOINT_SYMBOL_GPL(nfs4_pnfs_read);
 EXPORT_TRACEPOINT_SYMBOL_GPL(nfs4_pnfs_write);
 EXPORT_TRACEPOINT_SYMBOL_GPL(nfs4_pnfs_commit_ds);
@@ -26,15 +25,16 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(pnfs_mds_fallback_read_done);
 EXPORT_TRACEPOINT_SYMBOL_GPL(pnfs_mds_fallback_write_done);
 EXPORT_TRACEPOINT_SYMBOL_GPL(pnfs_mds_fallback_read_pagelist);
 EXPORT_TRACEPOINT_SYMBOL_GPL(pnfs_mds_fallback_write_pagelist);
+EXPORT_TRACEPOINT_SYMBOL_GPL(pnfs_ds_connect);
 
 EXPORT_TRACEPOINT_SYMBOL_GPL(ff_layout_read_error);
 EXPORT_TRACEPOINT_SYMBOL_GPL(ff_layout_write_error);
 EXPORT_TRACEPOINT_SYMBOL_GPL(ff_layout_commit_error);
 
+EXPORT_TRACEPOINT_SYMBOL_GPL(bl_ext_tree_prepare_commit);
 EXPORT_TRACEPOINT_SYMBOL_GPL(bl_pr_key_reg);
 EXPORT_TRACEPOINT_SYMBOL_GPL(bl_pr_key_reg_err);
 EXPORT_TRACEPOINT_SYMBOL_GPL(bl_pr_key_unreg);
 EXPORT_TRACEPOINT_SYMBOL_GPL(bl_pr_key_unreg_err);
 
 EXPORT_TRACEPOINT_SYMBOL_GPL(fl_getdevinfo);
-#endif

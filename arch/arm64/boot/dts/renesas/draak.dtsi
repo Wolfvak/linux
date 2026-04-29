@@ -308,6 +308,7 @@
 &i2c0 {
 	pinctrl-0 = <&i2c0_pins>;
 	pinctrl-names = "default";
+	bootph-all;
 	status = "okay";
 
 	ak4613: codec@10 {
@@ -449,6 +450,7 @@
 		compatible = "rohm,br24t01", "atmel,24c01";
 		reg = <0x50>;
 		pagesize = <8>;
+		bootph-all;
 	};
 };
 
@@ -658,7 +660,7 @@
 				reg = <0x00040000 0x140000>;
 				read-only;
 			};
-			cert_header_sa6@180000 {
+			cert-header-sa6@180000 {
 				reg = <0x00180000 0x040000>;
 				read-only;
 			};
@@ -718,6 +720,11 @@
 
 &ssi4 {
 	shared-pin;
+};
+
+/* Firmware should reserve it but sadly doesn't */
+&swdt {
+	status = "reserved";
 };
 
 &usb2_phy0 {

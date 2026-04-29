@@ -502,6 +502,7 @@ struct tegra_xudc {
 	struct clk_bulk_data *clks;
 
 	bool device_mode;
+	bool current_device_mode;
 	struct work_struct usb_role_sw_work;
 
 	struct phy **usb3_phy;
@@ -715,6 +716,8 @@ static void tegra_xudc_device_mode_on(struct tegra_xudc *xudc)
 
 	phy_set_mode_ext(xudc->curr_utmi_phy, PHY_MODE_USB_OTG,
 			 USB_ROLE_DEVICE);
+
+	xudc->current_device_mode = true;
 }
 
 static void tegra_xudc_device_mode_off(struct tegra_xudc *xudc)
@@ -724,6 +727,8 @@ static void tegra_xudc_device_mode_off(struct tegra_xudc *xudc)
 	int err;
 
 	dev_dbg(xudc->dev, "device mode off\n");
+
+	xudc->current_device_mode = false;
 
 	connected = !!(xudc_readl(xudc, PORTSC) & PORTSC_CCS);
 
@@ -807,8 +812,7 @@ static void tegra_xudc_update_data_role(struct tegra_xudc *xudc,
 		return;
 	}
 
-	xudc->device_mode = (usbphy->last_event == USB_EVENT_VBUS) ? true :
-								     false;
+	xudc->device_mode = usbphy->last_event == USB_EVENT_VBUS;
 
 	phy_index = tegra_xudc_get_phy_index(xudc, usbphy);
 	dev_dbg(xudc->dev, "%s(): current phy index is %d\n", __func__,
@@ -1554,12 +1558,6 @@ static int __tegra_xudc_ep_set_halt(struct tegra_xudc_ep *ep, bool halt)
 		return -ENOTSUPP;
 	}
 
-	if (!!(xudc_readl(xudc, EP_HALT) & BIT(ep->index)) == halt) {
-		dev_dbg(xudc->dev, "EP %u already %s\n", ep->index,
-			halt ? "halted" : "not halted");
-		return 0;
-	}
-
 	if (halt) {
 		ep_halt(xudc, ep->index);
 	} else {
@@ -1908,7 +1906,7 @@ tegra_xudc_ep_alloc_request(struct usb_ep *usb_ep, gfp_t gfp)
 {
 	struct tegra_xudc_request *req;
 
-	req = kzalloc(sizeof(*req), gfp);
+	req = kzalloc_obj(*req, gfp);
 	if (!req)
 		return NULL;
 
@@ -3394,17 +3392,18 @@ static void tegra_xudc_device_params_init(struct tegra_xudc *xudc)
 {
 	u32 val, imod;
 
+	val = xudc_readl(xudc, BLCG);
 	if (xudc->soc->has_ipfs) {
-		val = xudc_readl(xudc, BLCG);
 		val |= BLCG_ALL;
 		val &= ~(BLCG_DFPCI | BLCG_UFPCI | BLCG_FE |
 				BLCG_COREPLL_PWRDN);
 		val |= BLCG_IOPLL_0_PWRDN;
 		val |= BLCG_IOPLL_1_PWRDN;
 		val |= BLCG_IOPLL_2_PWRDN;
-
-		xudc_writel(xudc, val, BLCG);
+	} else {
+		val &= ~BLCG_COREPLL_PWRDN;
 	}
+	xudc_writel(xudc, val, BLCG);
 
 	if (xudc->soc->port_speed_quirk)
 		tegra_xudc_limit_port_speed(xudc);
@@ -3955,6 +3954,7 @@ static void tegra_xudc_remove(struct platform_device *pdev)
 static int __maybe_unused tegra_xudc_powergate(struct tegra_xudc *xudc)
 {
 	unsigned long flags;
+	u32 val;
 
 	dev_dbg(xudc->dev, "entering ELPG\n");
 
@@ -3966,6 +3966,10 @@ static int __maybe_unused tegra_xudc_powergate(struct tegra_xudc *xudc)
 	xudc_writel(xudc, 0, CTRL);
 
 	spin_unlock_irqrestore(&xudc->lock, flags);
+
+	val = xudc_readl(xudc, BLCG);
+	val |= BLCG_COREPLL_PWRDN;
+	xudc_writel(xudc, val, BLCG);
 
 	clk_bulk_disable_unprepare(xudc->soc->num_clks, xudc->clks);
 
@@ -4044,9 +4048,9 @@ static int __maybe_unused tegra_xudc_resume(struct device *dev)
 
 	spin_lock_irqsave(&xudc->lock, flags);
 	xudc->suspended = false;
+	if (xudc->device_mode != xudc->current_device_mode)
+		schedule_work(&xudc->usb_role_sw_work);
 	spin_unlock_irqrestore(&xudc->lock, flags);
-
-	schedule_work(&xudc->usb_role_sw_work);
 
 	pm_runtime_enable(dev);
 

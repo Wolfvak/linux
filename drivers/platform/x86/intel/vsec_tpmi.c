@@ -116,7 +116,7 @@ struct intel_tpmi_info {
 	struct intel_vsec_device *vsec_dev;
 	int feature_count;
 	u64 pfs_start;
-	struct intel_tpmi_plat_info plat_info;
+	struct oobmsm_plat_info plat_info;
 	void __iomem *tpmi_control_mem;
 	struct dentry *dbgfs_dir;
 };
@@ -187,7 +187,7 @@ struct tpmi_feature_state {
 /* Used during auxbus device creation */
 static DEFINE_IDA(intel_vsec_tpmi_ida);
 
-struct intel_tpmi_plat_info *tpmi_get_platform_data(struct auxiliary_device *auxdev)
+struct oobmsm_plat_info *tpmi_get_platform_data(struct auxiliary_device *auxdev)
 {
 	struct intel_vsec_device *vsec_dev = auxdev_to_ivdev(auxdev);
 
@@ -622,11 +622,11 @@ static int tpmi_create_device(struct intel_tpmi_info *tpmi_info,
 	if (!name)
 		return -EOPNOTSUPP;
 
-	res = kcalloc(pfs->pfs_header.num_entries, sizeof(*res), GFP_KERNEL);
+	res = kzalloc_objs(*res, pfs->pfs_header.num_entries);
 	if (!res)
 		return -ENOMEM;
 
-	feature_vsec_dev = kzalloc(sizeof(*feature_vsec_dev), GFP_KERNEL);
+	feature_vsec_dev = kzalloc_obj(*feature_vsec_dev);
 	if (!feature_vsec_dev) {
 		kfree(res);
 		return -ENOMEM;
@@ -797,6 +797,10 @@ static int intel_vsec_tpmi_init(struct auxiliary_device *auxdev)
 		 */
 		if (pfs->pfs_header.tpmi_id == TPMI_INFO_ID) {
 			ret = tpmi_process_info(tpmi_info, pfs);
+			if (ret)
+				return ret;
+
+			ret = intel_vsec_set_mapping(&tpmi_info->plat_info, vsec_dev);
 			if (ret)
 				return ret;
 		}

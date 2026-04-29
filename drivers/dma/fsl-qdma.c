@@ -148,6 +148,9 @@
  * @__reserved1:	    Reserved field.
  * @cfg8b_w1:		    Compound descriptor command queue origin produced
  *			    by qDMA and dynamic debug field.
+ * @__reserved2:	    Reserved field.
+ * @cmd:		    Command for QDMA (see FSL_QDMA_CMD_RWTTYPE and
+ *			     others).
  * @data:		    Pointer to the memory 40-bit address, describes DMA
  *			    source information and DMA destination information.
  */
@@ -403,7 +406,7 @@ static int fsl_qdma_pre_request_enqueue_desc(struct fsl_qdma_queue *queue)
 	struct fsl_qdma_comp *comp_temp, *_comp_temp;
 
 	for (i = 0; i < queue->n_cq + FSL_COMMAND_QUEUE_OVERFLLOW; i++) {
-		comp_temp = kzalloc(sizeof(*comp_temp), GFP_KERNEL);
+		comp_temp = kzalloc_obj(*comp_temp);
 		if (!comp_temp)
 			goto err_alloc;
 		comp_temp->virt_addr =
@@ -1293,6 +1296,5 @@ static struct platform_driver fsl_qdma_driver = {
 
 module_platform_driver(fsl_qdma_driver);
 
-MODULE_ALIAS("platform:fsl-qdma");
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("NXP Layerscape qDMA engine driver");

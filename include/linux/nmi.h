@@ -83,6 +83,7 @@ static inline void reset_hung_task_detector(void) { }
 #if defined(CONFIG_HARDLOCKUP_DETECTOR)
 extern void hardlockup_detector_disable(void);
 extern unsigned int hardlockup_panic;
+extern unsigned long hardlockup_si_mask;
 #else
 static inline void hardlockup_detector_disable(void) {}
 #endif
@@ -103,10 +104,12 @@ void watchdog_hardlockup_check(unsigned int cpu, struct pt_regs *regs);
 extern void hardlockup_detector_perf_stop(void);
 extern void hardlockup_detector_perf_restart(void);
 extern void hardlockup_config_perf_event(const char *str);
+extern void hardlockup_detector_perf_adjust_period(u64 period);
 #else
 static inline void hardlockup_detector_perf_stop(void) { }
 static inline void hardlockup_detector_perf_restart(void) { }
 static inline void hardlockup_config_perf_event(const char *str) { }
+static inline void hardlockup_detector_perf_adjust_period(u64 period) { }
 #endif
 
 void watchdog_hardlockup_stop(void);

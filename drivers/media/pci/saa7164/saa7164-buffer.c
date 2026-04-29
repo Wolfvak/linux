@@ -52,26 +52,6 @@
  *						    | etc
  */
 
-void saa7164_buffer_display(struct saa7164_buffer *buf)
-{
-	struct saa7164_dev *dev = buf->port->dev;
-	int i;
-
-	dprintk(DBGLVL_BUF, "%s()   buffer @ 0x%p nr=%d\n",
-		__func__, buf, buf->idx);
-	dprintk(DBGLVL_BUF, "  pci_cpu @ 0x%p    dma @ 0x%08llx len = 0x%x\n",
-		buf->cpu, (long long)buf->dma, buf->pci_size);
-	dprintk(DBGLVL_BUF, "   pt_cpu @ 0x%p pt_dma @ 0x%08llx len = 0x%x\n",
-		buf->pt_cpu, (long long)buf->pt_dma, buf->pt_size);
-
-	/* Format the Page Table Entries to point into the data buffer */
-	for (i = 0 ; i < SAA7164_PT_ENTRIES; i++) {
-
-		dprintk(DBGLVL_BUF, "    pt[%02d] = 0x%p -> 0x%llx\n",
-			i, buf->pt_cpu, (u64)*(buf->pt_cpu));
-
-	}
-}
 /* Allocate a new buffer structure and associated PCI space in bytes.
  * len must be a multiple of sizeof(u64)
  */
@@ -88,7 +68,7 @@ struct saa7164_buffer *saa7164_buffer_alloc(struct saa7164_port *port,
 		goto ret;
 	}
 
-	buf = kzalloc(sizeof(*buf), GFP_KERNEL);
+	buf = kzalloc_obj(*buf);
 	if (!buf)
 		goto ret;
 
@@ -272,7 +252,7 @@ struct saa7164_user_buffer *saa7164_buffer_alloc_user(struct saa7164_dev *dev,
 {
 	struct saa7164_user_buffer *buf;
 
-	buf = kzalloc(sizeof(*buf), GFP_KERNEL);
+	buf = kzalloc_obj(*buf);
 	if (!buf)
 		return NULL;
 

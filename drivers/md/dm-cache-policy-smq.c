@@ -590,7 +590,7 @@ static int h_init(struct smq_hash_table *ht, struct entry_space *es, unsigned in
 	nr_buckets = roundup_pow_of_two(max(nr_entries / 4u, 16u));
 	ht->hash_bits = __ffs(nr_buckets);
 
-	ht->buckets = vmalloc(array_size(nr_buckets, sizeof(*ht->buckets)));
+	ht->buckets = vmalloc_array(nr_buckets, sizeof(*ht->buckets));
 	if (!ht->buckets)
 		return -ENOMEM;
 
@@ -1735,7 +1735,7 @@ __smq_create(dm_cblock_t cache_size, sector_t origin_size, sector_t cache_block_
 	unsigned int i;
 	unsigned int nr_sentinels_per_queue = 2u * NR_CACHE_LEVELS;
 	unsigned int total_sentinels = 2u * nr_sentinels_per_queue;
-	struct smq_policy *mq = kzalloc(sizeof(*mq), GFP_KERNEL);
+	struct smq_policy *mq = kzalloc_obj(*mq);
 
 	if (!mq)
 		return NULL;

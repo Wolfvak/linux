@@ -465,7 +465,7 @@ static int evdev_open(struct inode *inode, struct file *file)
 	struct evdev_client *client;
 	int error;
 
-	client = kvzalloc(struct_size(client, buffer, bufsize), GFP_KERNEL);
+	client = kvzalloc_flex(*client, buffer, bufsize);
 	if (!client)
 		return -ENOMEM;
 
@@ -1346,7 +1346,7 @@ static int evdev_connect(struct input_handler *handler, struct input_dev *dev,
 		return error;
 	}
 
-	evdev = kzalloc(sizeof(struct evdev), GFP_KERNEL);
+	evdev = kzalloc_obj(struct evdev);
 	if (!evdev) {
 		error = -ENOMEM;
 		goto err_free_minor;
@@ -1408,8 +1408,12 @@ static void evdev_disconnect(struct input_handle *handle)
 }
 
 static const struct input_device_id evdev_ids[] = {
-	{ .driver_info = 1 },	/* Matches all devices */
-	{ },			/* Terminating zero entry */
+	{
+		/* Matches all devices */
+		.flags = INPUT_DEVICE_ID_MATCH_EVBIT,
+		.evbit = { BIT_MASK(EV_SYN) },
+	},
+	{ }	/* Terminating zero entry */
 };
 
 MODULE_DEVICE_TABLE(input, evdev_ids);

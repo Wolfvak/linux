@@ -124,7 +124,7 @@ static int kobject_action_args(const char *buf, size_t count,
 	if (!count)
 		return -EINVAL;
 
-	env = kzalloc(sizeof(*env), GFP_KERNEL);
+	env = kzalloc_obj(*env);
 	if (!env)
 		return -ENOMEM;
 
@@ -238,7 +238,7 @@ static int kobj_usermode_filter(struct kobject *kobj)
 
 	ops = kobj_ns_ops(kobj);
 	if (ops) {
-		const void *init_ns, *ns;
+		const struct ns_common *init_ns, *ns;
 
 		ns = kobj->ktype->namespace(kobj);
 		init_ns = ops->initial_ns();
@@ -388,7 +388,7 @@ static int kobject_uevent_net_broadcast(struct kobject *kobj,
 
 #ifdef CONFIG_NET
 	const struct kobj_ns_type_operations *ops;
-	const struct net *net = NULL;
+	const struct ns_common *ns = NULL;
 
 	ops = kobj_ns_ops(kobj);
 	if (!ops && kobj->kset) {
@@ -404,14 +404,17 @@ static int kobject_uevent_net_broadcast(struct kobject *kobj,
 	 */
 	if (ops && ops->netlink_ns && kobj->ktype->namespace)
 		if (ops->type == KOBJ_NS_TYPE_NET)
-			net = kobj->ktype->namespace(kobj);
+			ns = kobj->ktype->namespace(kobj);
 
-	if (!net)
+	if (!ns)
 		ret = uevent_net_broadcast_untagged(env, action_string,
 						    devpath);
-	else
+	else {
+		const struct net *net = container_of(ns, struct net, ns);
+
 		ret = uevent_net_broadcast_tagged(net->uevent_sock->sk, env,
 						  action_string, devpath);
+	}
 #endif
 
 	return ret;
@@ -537,7 +540,7 @@ int kobject_uevent_env(struct kobject *kobj, enum kobject_action action,
 	}
 
 	/* environment buffer */
-	env = kzalloc(sizeof(struct kobj_uevent_env), GFP_KERNEL);
+	env = kzalloc_obj(struct kobj_uevent_env);
 	if (!env)
 		return -ENOMEM;
 
@@ -776,7 +779,7 @@ static int uevent_net_init(struct net *net)
 		.flags	= NL_CFG_F_NONROOT_RECV
 	};
 
-	ue_sk = kzalloc(sizeof(*ue_sk), GFP_KERNEL);
+	ue_sk = kzalloc_obj(*ue_sk);
 	if (!ue_sk)
 		return -ENOMEM;
 
@@ -825,4 +828,24 @@ static int __init kobject_uevent_init(void)
 
 
 postcore_initcall(kobject_uevent_init);
+#endif
+
+#ifdef CONFIG_UEVENT_HELPER
+static const struct ctl_table uevent_helper_sysctl_table[] = {
+	{
+		.procname	= "hotplug",
+		.data		= &uevent_helper,
+		.maxlen		= UEVENT_HELPER_PATH_LEN,
+		.mode		= 0644,
+		.proc_handler	= proc_dostring,
+	},
+};
+
+static int __init init_uevent_helper_sysctl(void)
+{
+	register_sysctl_init("kernel", uevent_helper_sysctl_table);
+	return 0;
+}
+
+postcore_initcall(init_uevent_helper_sysctl);
 #endif

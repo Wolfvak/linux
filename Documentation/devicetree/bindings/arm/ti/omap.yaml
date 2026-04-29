@@ -107,6 +107,7 @@ properties:
               - compulab,cm-t335
               - moxa,uc-8100-me-t
               - novatech,am335x-lxm
+              - seeed,am335x-bone-green-eco
               - ti,am335x-bone
               - ti,am335x-evm
               - ti,am3359-icev2
@@ -126,6 +127,13 @@ properties:
               - phytec,am335x-pcm-953
               - phytec,am335x-regor
           - const: phytec,am335x-phycore-som
+          - const: ti,am33xx
+
+      - description: TQ-Systems TQMa335x[L] SoM
+        items:
+          - enum:
+              - tq,tqma3359-mba335x # MBa335x carrier board
+          - const: tq,tqma3359
           - const: ti,am33xx
 
       - description: TI OMAP4430 SoC based platforms

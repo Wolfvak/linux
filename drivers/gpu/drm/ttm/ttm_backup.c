@@ -4,6 +4,8 @@
  */
 
 #include <drm/ttm/ttm_backup.h>
+
+#include <linux/export.h>
 #include <linux/page-flags.h>
 #include <linux/swap.h>
 
@@ -112,15 +114,8 @@ ttm_backup_backup_page(struct file *backup, struct page *page,
 
 	if (writeback && !folio_mapped(to_folio) &&
 	    folio_clear_dirty_for_io(to_folio)) {
-		struct writeback_control wbc = {
-			.sync_mode = WB_SYNC_NONE,
-			.nr_to_write = SWAP_CLUSTER_MAX,
-			.range_start = 0,
-			.range_end = LLONG_MAX,
-			.for_reclaim = 1,
-		};
 		folio_set_reclaim(to_folio);
-		ret = shmem_writeout(to_folio, &wbc);
+		ret = shmem_writeout(to_folio, NULL, NULL);
 		if (!folio_test_writeback(to_folio))
 			folio_clear_reclaim(to_folio);
 		/*
@@ -183,5 +178,6 @@ EXPORT_SYMBOL_GPL(ttm_backup_bytes_avail);
  */
 struct file *ttm_backup_shmem_create(loff_t size)
 {
-	return shmem_file_setup("ttm shmem backup", size, 0);
+	return shmem_file_setup("ttm shmem backup", size,
+				EMPTY_VMA_FLAGS);
 }

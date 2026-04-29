@@ -306,11 +306,13 @@ static struct iommu_domain *msm_iommu_domain_alloc_paging(struct device *dev)
 {
 	struct msm_priv *priv;
 
-	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+	priv = kzalloc_obj(*priv);
 	if (!priv)
 		goto fail_nomem;
 
 	INIT_LIST_HEAD(&priv->list_attached);
+
+	priv->domain.pgsize_bitmap = MSM_IOMMU_PGSIZES;
 
 	priv->domain.geometry.aperture_start = 0;
 	priv->domain.geometry.aperture_end   = (1ULL << 32) - 1;
@@ -339,7 +341,7 @@ static int msm_iommu_domain_config(struct msm_priv *priv)
 	spin_lock_init(&priv->pgtlock);
 
 	priv->cfg = (struct io_pgtable_cfg) {
-		.pgsize_bitmap = msm_iommu_ops.pgsize_bitmap,
+		.pgsize_bitmap = priv->domain.pgsize_bitmap,
 		.ias = 32,
 		.oas = 32,
 		.tlb = &msm_iommu_flush_ops,
@@ -351,8 +353,6 @@ static int msm_iommu_domain_config(struct msm_priv *priv)
 		dev_err(priv->dev, "Failed to allocate pgtable\n");
 		return -EINVAL;
 	}
-
-	msm_iommu_ops.pgsize_bitmap = priv->cfg.pgsize_bitmap;
 
 	return 0;
 }
@@ -391,7 +391,8 @@ static struct iommu_device *msm_iommu_probe_device(struct device *dev)
 	return &iommu->iommu;
 }
 
-static int msm_iommu_attach_dev(struct iommu_domain *domain, struct device *dev)
+static int msm_iommu_attach_dev(struct iommu_domain *domain, struct device *dev,
+				struct iommu_domain *old)
 {
 	int ret = 0;
 	unsigned long flags;
@@ -441,19 +442,19 @@ fail:
 }
 
 static int msm_iommu_identity_attach(struct iommu_domain *identity_domain,
-				     struct device *dev)
+				     struct device *dev,
+				     struct iommu_domain *old)
 {
-	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
 	struct msm_priv *priv;
 	unsigned long flags;
 	struct msm_iommu_dev *iommu;
 	struct msm_iommu_ctx_dev *master;
 	int ret = 0;
 
-	if (domain == identity_domain || !domain)
+	if (old == identity_domain || !old)
 		return 0;
 
-	priv = to_msm_priv(domain);
+	priv = to_msm_priv(old);
 	free_io_pgtable_ops(priv->iop);
 
 	spin_lock_irqsave(&msm_iommu_lock, flags);
@@ -604,7 +605,7 @@ static int insert_iommu_master(struct device *dev,
 	int sid;
 
 	if (list_empty(&(*iommu)->ctx_list)) {
-		master = kzalloc(sizeof(*master), GFP_ATOMIC);
+		master = kzalloc_obj(*master, GFP_ATOMIC);
 		if (!master) {
 			dev_err(dev, "Failed to allocate iommu_master\n");
 			return -ENOMEM;
@@ -692,7 +693,6 @@ static struct iommu_ops msm_iommu_ops = {
 	.domain_alloc_paging = msm_iommu_domain_alloc_paging,
 	.probe_device = msm_iommu_probe_device,
 	.device_group = generic_device_group,
-	.pgsize_bitmap = MSM_IOMMU_PGSIZES,
 	.of_xlate = qcom_iommu_of_xlate,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
 		.attach_dev	= msm_iommu_attach_dev,

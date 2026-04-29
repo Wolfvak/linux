@@ -9,10 +9,11 @@
 #include <linux/slab.h>
 #include <linux/device.h>
 #include <linux/devfreq.h>
+#include <linux/devfreq-governor.h>
+#include <linux/kstrtox.h>
 #include <linux/pm.h>
 #include <linux/mutex.h>
 #include <linux/module.h>
-#include "governor.h"
 
 struct userspace_data {
 	unsigned long user_frequency;
@@ -39,10 +40,13 @@ static ssize_t set_freq_store(struct device *dev, struct device_attribute *attr,
 	unsigned long wanted;
 	int err = 0;
 
+	err = kstrtoul(buf, 0, &wanted);
+	if (err)
+		return err;
+
 	mutex_lock(&devfreq->lock);
 	data = devfreq->governor_data;
 
-	sscanf(buf, "%lu", &wanted);
 	data->user_frequency = wanted;
 	data->valid = true;
 	err = update_devfreq(devfreq);
@@ -83,8 +87,7 @@ static const struct attribute_group dev_attr_group = {
 static int userspace_init(struct devfreq *devfreq)
 {
 	int err = 0;
-	struct userspace_data *data = kzalloc(sizeof(struct userspace_data),
-					      GFP_KERNEL);
+	struct userspace_data *data = kzalloc_obj(struct userspace_data);
 
 	if (!data) {
 		err = -ENOMEM;

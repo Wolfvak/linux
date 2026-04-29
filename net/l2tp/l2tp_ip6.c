@@ -280,7 +280,8 @@ static void l2tp_ip6_destroy_sock(struct sock *sk)
 	}
 }
 
-static int l2tp_ip6_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len)
+static int l2tp_ip6_bind(struct sock *sk, struct sockaddr_unsized *uaddr,
+			 int addr_len)
 {
 	struct inet_sock *inet = inet_sk(sk);
 	struct ipv6_pinfo *np = inet6_sk(sk);
@@ -383,7 +384,7 @@ out_unlock:
 	return err;
 }
 
-static int l2tp_ip6_connect(struct sock *sk, struct sockaddr *uaddr,
+static int l2tp_ip6_connect(struct sock *sk, struct sockaddr_unsized *uaddr,
 			    int addr_len)
 {
 	struct sockaddr_l2tpip6 *lsa = (struct sockaddr_l2tpip6 *)uaddr;
@@ -545,7 +546,7 @@ static int l2tp_ip6_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	memset(&fl6, 0, sizeof(fl6));
 
 	fl6.flowi6_mark = READ_ONCE(sk->sk_mark);
-	fl6.flowi6_uid = sk->sk_uid;
+	fl6.flowi6_uid = sk_uid(sk);
 
 	ipcm6_init_sk(&ipc6, sk);
 

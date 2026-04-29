@@ -25,11 +25,23 @@ properties:
               - ti,am62a7-sk
           - const: ti,am62a7
 
+      - description: K3 AM62D2 SoC and Boards
+        items:
+          - enum:
+              - ti,am62d2-evm
+          - const: ti,am62d2
+
       - description: K3 AM62A7 SoC PHYTEC phyBOARD-Lyra
         items:
           - const: phytec,am62a7-phyboard-lyra-rdk
           - const: phytec,am62a-phycore-som
           - const: ti,am62a7
+
+      - description: K3 AM62L3 SoC and Boards
+        items:
+          - enum:
+              - ti,am62l3-evm
+          - const: ti,am62l3
 
       - description: K3 AM62P5 SoC and Boards
         items:
@@ -50,6 +62,13 @@ properties:
               - beagle,am625-beagleplay
               - ti,am625-sk
               - ti,am62-lp-sk
+          - const: ti,am625
+
+      - description: K3 AM6254atl SiP
+        items:
+          - enum:
+              - ti,am6254atl-sk
+          - const: ti,am6254atl
           - const: ti,am625
 
       - description: K3 AM62x SoC Toradex Verdin Modules and Carrier Boards
@@ -100,6 +119,12 @@ properties:
           - const: toradex,verdin-am62p          # Verdin AM62P Module
           - const: ti,am62p5
 
+      - description: K3 AM62P5 SoC Variscite SOM and Carrier Boards
+        items:
+          - const: variscite,var-som-am62p-symphony
+          - const: variscite,var-som-am62p
+          - const: ti,am62p5
+
       - description: K3 AM642 SoC
         items:
           - enum:
@@ -139,6 +164,14 @@ properties:
               - ti,am654-evm
           - const: ti,am654
 
+      - description: K3 AM69 SoC Toradex Aquila Modules and Carrier Boards
+        items:
+          - enum:
+              - toradex,aquila-am69-clover   # Aquila AM69 Module on Clover Board
+              - toradex,aquila-am69-dev      # Aquila AM69 Module on Aquila Development Board
+          - const: toradex,aquila-am69       # Aquila AM69 Module
+          - const: ti,j784s4
+
       - description: K3 J7200 SoC
         oneOf:
           - const: ti,j7200
@@ -175,6 +208,7 @@ properties:
         items:
           - enum:
               - beagle,am67a-beagley-ai
+              - kontron,sa67             # Kontron SMARC-sAM67 board
               - ti,j722s-evm
           - const: ti,j722s
 

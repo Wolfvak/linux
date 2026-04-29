@@ -60,7 +60,7 @@ static void radeon_do_test_moves(struct radeon_device *rdev, int flag)
 	n = rdev->mc.gtt_size - rdev->gart_pin_size;
 	n /= size;
 
-	gtt_obj = kcalloc(n, sizeof(*gtt_obj), GFP_KERNEL);
+	gtt_obj = kzalloc_objs(*gtt_obj, n);
 	if (!gtt_obj) {
 		DRM_ERROR("Failed to allocate %d pointers\n", n);
 		r = 1;
@@ -455,7 +455,7 @@ static void radeon_test_ring_sync2(struct radeon_device *rdev,
 
 	r = radeon_ring_lock(rdev, ringC, 64);
 	if (r) {
-		DRM_ERROR("Failed to lock ring B %p\n", ringC);
+		DRM_ERROR("Failed to lock ring C %p\n", ringC);
 		goto out_cleanup;
 	}
 	radeon_semaphore_emit_signal(rdev, ringC->idx, semaphore);
@@ -481,7 +481,7 @@ static void radeon_test_ring_sync2(struct radeon_device *rdev,
 
 	r = radeon_ring_lock(rdev, ringC, 64);
 	if (r) {
-		DRM_ERROR("Failed to lock ring B %p\n", ringC);
+		DRM_ERROR("Failed to lock ring C %p\n", ringC);
 		goto out_cleanup;
 	}
 	radeon_semaphore_emit_signal(rdev, ringC->idx, semaphore);

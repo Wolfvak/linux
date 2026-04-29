@@ -6,12 +6,16 @@
 #include <linux/string_helpers.h>
 
 #include <drm/intel/i915_drm.h>
+#include <drm/intel/display_parent_interface.h>
 
-#include "display/intel_display.h"
 #include "display/intel_display_rps.h"
+#include "display/vlv_clock.h"
+
 #include "i915_drv.h"
+#include "i915_freq.h"
 #include "i915_irq.h"
 #include "i915_reg.h"
+#include "i915_wait_util.h"
 #include "intel_breadcrumbs.h"
 #include "intel_gt.h"
 #include "intel_gt_clock_utils.h"
@@ -23,7 +27,7 @@
 #include "intel_mchbar_regs.h"
 #include "intel_pcode.h"
 #include "intel_rps.h"
-#include "vlv_sideband.h"
+#include "vlv_iosf_sb.h"
 #include "../../../platform/x86/intel_ips.h"
 
 #define BUSY_MAX_EI	20u /* ms */
@@ -276,20 +280,24 @@ static void gen5_rps_init(struct intel_rps *rps)
 {
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 	struct intel_uncore *uncore = rps_to_uncore(rps);
+	unsigned int fsb_freq, mem_freq;
 	u8 fmax, fmin, fstart;
 	u32 rgvmodectl;
 	int c_m, i;
 
-	if (i915->fsb_freq <= 3200000)
+	fsb_freq = ilk_fsb_freq(i915);
+	mem_freq = ilk_mem_freq(i915);
+
+	if (fsb_freq <= 3200000)
 		c_m = 0;
-	else if (i915->fsb_freq <= 4800000)
+	else if (fsb_freq <= 4800000)
 		c_m = 1;
 	else
 		c_m = 2;
 
 	for (i = 0; i < ARRAY_SIZE(cparams); i++) {
 		if (cparams[i].i == c_m &&
-		    cparams[i].t == DIV_ROUND_CLOSEST(i915->mem_freq, 1000)) {
+		    cparams[i].t == DIV_ROUND_CLOSEST(mem_freq, 1000)) {
 			rps->ips.m = cparams[i].m;
 			rps->ips.c = cparams[i].c;
 			break;
@@ -550,7 +558,7 @@ static unsigned int init_emon(struct intel_uncore *uncore)
 static bool gen5_rps_enable(struct intel_rps *rps)
 {
 	struct drm_i915_private *i915 = rps_to_i915(rps);
-	struct intel_display *display = &i915->display;
+	struct intel_display *display = i915->display;
 	struct intel_uncore *uncore = rps_to_uncore(rps);
 	u8 fstart, vstart;
 	u32 rgvmodectl;
@@ -620,7 +628,7 @@ static bool gen5_rps_enable(struct intel_rps *rps)
 static void gen5_rps_disable(struct intel_rps *rps)
 {
 	struct drm_i915_private *i915 = rps_to_i915(rps);
-	struct intel_display *display = &i915->display;
+	struct intel_display *display = i915->display;
 	struct intel_uncore *uncore = rps_to_uncore(rps);
 	u16 rgvswctl;
 
@@ -820,9 +828,9 @@ static int vlv_rps_set(struct intel_rps *rps, u8 val)
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 	int err;
 
-	vlv_punit_get(i915);
-	err = vlv_punit_write(i915, PUNIT_REG_GPU_FREQ_REQ, val);
-	vlv_punit_put(i915);
+	vlv_iosf_sb_get(&i915->drm, BIT(VLV_IOSF_SB_PUNIT));
+	err = vlv_iosf_sb_write(&i915->drm, VLV_IOSF_SB_PUNIT, PUNIT_REG_GPU_FREQ_REQ, val);
+	vlv_iosf_sb_put(&i915->drm, BIT(VLV_IOSF_SB_PUNIT));
 
 	GT_TRACE(rps_to_gt(rps), "set val:%x, freq:%d\n",
 		 val, intel_gpu_freq(rps, val));
@@ -1280,7 +1288,7 @@ static int chv_rps_max_freq(struct intel_rps *rps)
 	struct intel_gt *gt = rps_to_gt(rps);
 	u32 val;
 
-	val = vlv_punit_read(i915, FB_GFX_FMAX_AT_VMAX_FUSE);
+	val = vlv_iosf_sb_read(&i915->drm, VLV_IOSF_SB_PUNIT, FB_GFX_FMAX_AT_VMAX_FUSE);
 
 	switch (gt->info.sseu.eu_total) {
 	case 8:
@@ -1307,7 +1315,7 @@ static int chv_rps_rpe_freq(struct intel_rps *rps)
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 	u32 val;
 
-	val = vlv_punit_read(i915, PUNIT_GPU_DUTYCYCLE_REG);
+	val = vlv_iosf_sb_read(&i915->drm, VLV_IOSF_SB_PUNIT, PUNIT_GPU_DUTYCYCLE_REG);
 	val >>= PUNIT_GPU_DUTYCYCLE_RPE_FREQ_SHIFT;
 
 	return val & PUNIT_GPU_DUTYCYCLE_RPE_FREQ_MASK;
@@ -1318,7 +1326,7 @@ static int chv_rps_guar_freq(struct intel_rps *rps)
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 	u32 val;
 
-	val = vlv_punit_read(i915, FB_GFX_FMAX_AT_VMAX_FUSE);
+	val = vlv_iosf_sb_read(&i915->drm, VLV_IOSF_SB_PUNIT, FB_GFX_FMAX_AT_VMAX_FUSE);
 
 	return val & FB_GFX_FREQ_FUSE_MASK;
 }
@@ -1328,7 +1336,7 @@ static u32 chv_rps_min_freq(struct intel_rps *rps)
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 	u32 val;
 
-	val = vlv_punit_read(i915, FB_GFX_FMIN_AT_VMIN_FUSE);
+	val = vlv_iosf_sb_read(&i915->drm, VLV_IOSF_SB_PUNIT, FB_GFX_FMIN_AT_VMIN_FUSE);
 	val >>= FB_GFX_FMIN_AT_VMIN_FUSE_SHIFT;
 
 	return val & FB_GFX_FREQ_FUSE_MASK;
@@ -1362,14 +1370,14 @@ static bool chv_rps_enable(struct intel_rps *rps)
 			  GEN6_PM_RP_DOWN_TIMEOUT);
 
 	/* Setting Fixed Bias */
-	vlv_punit_get(i915);
+	vlv_iosf_sb_get(&i915->drm, BIT(VLV_IOSF_SB_PUNIT));
 
 	val = VLV_OVERRIDE_EN | VLV_SOC_TDP_EN | CHV_BIAS_CPU_50_SOC_50;
-	vlv_punit_write(i915, VLV_TURBO_SOC_OVERRIDE, val);
+	vlv_iosf_sb_write(&i915->drm, VLV_IOSF_SB_PUNIT, VLV_TURBO_SOC_OVERRIDE, val);
 
-	val = vlv_punit_read(i915, PUNIT_REG_GPU_FREQ_STS);
+	val = vlv_iosf_sb_read(&i915->drm, VLV_IOSF_SB_PUNIT, PUNIT_REG_GPU_FREQ_STS);
 
-	vlv_punit_put(i915);
+	vlv_iosf_sb_put(&i915->drm, BIT(VLV_IOSF_SB_PUNIT));
 
 	/* RPS code assumes GPLL is used */
 	drm_WARN_ONCE(&i915->drm, (val & GPLLENABLE) == 0,
@@ -1387,7 +1395,7 @@ static int vlv_rps_guar_freq(struct intel_rps *rps)
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 	u32 val, rp1;
 
-	val = vlv_nc_read(i915, IOSF_NC_FB_GFX_FREQ_FUSE);
+	val = vlv_iosf_sb_read(&i915->drm, VLV_IOSF_SB_NC, IOSF_NC_FB_GFX_FREQ_FUSE);
 
 	rp1 = val & FB_GFX_FGUARANTEED_FREQ_FUSE_MASK;
 	rp1 >>= FB_GFX_FGUARANTEED_FREQ_FUSE_SHIFT;
@@ -1400,7 +1408,7 @@ static int vlv_rps_max_freq(struct intel_rps *rps)
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 	u32 val, rp0;
 
-	val = vlv_nc_read(i915, IOSF_NC_FB_GFX_FREQ_FUSE);
+	val = vlv_iosf_sb_read(&i915->drm, VLV_IOSF_SB_NC, IOSF_NC_FB_GFX_FREQ_FUSE);
 
 	rp0 = (val & FB_GFX_MAX_FREQ_FUSE_MASK) >> FB_GFX_MAX_FREQ_FUSE_SHIFT;
 	/* Clamp to max */
@@ -1414,9 +1422,9 @@ static int vlv_rps_rpe_freq(struct intel_rps *rps)
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 	u32 val, rpe;
 
-	val = vlv_nc_read(i915, IOSF_NC_FB_GFX_FMAX_FUSE_LO);
+	val = vlv_iosf_sb_read(&i915->drm, VLV_IOSF_SB_NC, IOSF_NC_FB_GFX_FMAX_FUSE_LO);
 	rpe = (val & FB_FMAX_VMIN_FREQ_LO_MASK) >> FB_FMAX_VMIN_FREQ_LO_SHIFT;
-	val = vlv_nc_read(i915, IOSF_NC_FB_GFX_FMAX_FUSE_HI);
+	val = vlv_iosf_sb_read(&i915->drm, VLV_IOSF_SB_NC, IOSF_NC_FB_GFX_FMAX_FUSE_HI);
 	rpe |= (val & FB_FMAX_VMIN_FREQ_HI_MASK) << 5;
 
 	return rpe;
@@ -1427,7 +1435,7 @@ static int vlv_rps_min_freq(struct intel_rps *rps)
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 	u32 val;
 
-	val = vlv_punit_read(i915, PUNIT_REG_GPU_LFM) & 0xff;
+	val = vlv_iosf_sb_read(&i915->drm, VLV_IOSF_SB_PUNIT, PUNIT_REG_GPU_LFM) & 0xff;
 	/*
 	 * According to the BYT Punit GPU turbo HAS 1.1.6.3 the minimum value
 	 * for the minimum frequency in GPLL mode is 0xc1. Contrary to this on
@@ -1463,15 +1471,15 @@ static bool vlv_rps_enable(struct intel_rps *rps)
 	/* WaGsvRC0ResidencyMethod:vlv */
 	rps->pm_events = GEN6_PM_RP_UP_EI_EXPIRED;
 
-	vlv_punit_get(i915);
+	vlv_iosf_sb_get(&i915->drm, BIT(VLV_IOSF_SB_PUNIT));
 
 	/* Setting Fixed Bias */
 	val = VLV_OVERRIDE_EN | VLV_SOC_TDP_EN | VLV_BIAS_CPU_125_SOC_875;
-	vlv_punit_write(i915, VLV_TURBO_SOC_OVERRIDE, val);
+	vlv_iosf_sb_write(&i915->drm, VLV_IOSF_SB_PUNIT, VLV_TURBO_SOC_OVERRIDE, val);
 
-	val = vlv_punit_read(i915, PUNIT_REG_GPU_FREQ_STS);
+	val = vlv_iosf_sb_read(&i915->drm, VLV_IOSF_SB_PUNIT, PUNIT_REG_GPU_FREQ_STS);
 
-	vlv_punit_put(i915);
+	vlv_iosf_sb_put(&i915->drm, BIT(VLV_IOSF_SB_PUNIT));
 
 	/* RPS code assumes GPLL is used */
 	drm_WARN_ONCE(&i915->drm, (val & GPLLENABLE) == 0,
@@ -1683,10 +1691,7 @@ static void vlv_init_gpll_ref_freq(struct intel_rps *rps)
 {
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 
-	rps->gpll_ref_freq =
-		vlv_get_cck_clock(i915, "GPLL ref",
-				  CCK_GPLL_CLOCK_CONTROL,
-				  i915->czclk_freq);
+	rps->gpll_ref_freq = vlv_clock_get_gpll(&i915->drm);
 
 	drm_dbg(&i915->drm, "GPLL reference freq: %d kHz\n",
 		rps->gpll_ref_freq);
@@ -1696,12 +1701,12 @@ static void vlv_rps_init(struct intel_rps *rps)
 {
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 
-	vlv_iosf_sb_get(i915,
+	vlv_init_gpll_ref_freq(rps);
+
+	vlv_iosf_sb_get(&i915->drm,
 			BIT(VLV_IOSF_SB_PUNIT) |
 			BIT(VLV_IOSF_SB_NC) |
 			BIT(VLV_IOSF_SB_CCK));
-
-	vlv_init_gpll_ref_freq(rps);
 
 	rps->max_freq = vlv_rps_max_freq(rps);
 	rps->rp0_freq = rps->max_freq;
@@ -1720,7 +1725,7 @@ static void vlv_rps_init(struct intel_rps *rps)
 	drm_dbg(&i915->drm, "min GPU freq: %d MHz (%u)\n",
 		intel_gpu_freq(rps, rps->min_freq), rps->min_freq);
 
-	vlv_iosf_sb_put(i915,
+	vlv_iosf_sb_put(&i915->drm,
 			BIT(VLV_IOSF_SB_PUNIT) |
 			BIT(VLV_IOSF_SB_NC) |
 			BIT(VLV_IOSF_SB_CCK));
@@ -1730,12 +1735,12 @@ static void chv_rps_init(struct intel_rps *rps)
 {
 	struct drm_i915_private *i915 = rps_to_i915(rps);
 
-	vlv_iosf_sb_get(i915,
+	vlv_init_gpll_ref_freq(rps);
+
+	vlv_iosf_sb_get(&i915->drm,
 			BIT(VLV_IOSF_SB_PUNIT) |
 			BIT(VLV_IOSF_SB_NC) |
 			BIT(VLV_IOSF_SB_CCK));
-
-	vlv_init_gpll_ref_freq(rps);
 
 	rps->max_freq = chv_rps_max_freq(rps);
 	rps->rp0_freq = rps->max_freq;
@@ -1754,7 +1759,7 @@ static void chv_rps_init(struct intel_rps *rps)
 	drm_dbg(&i915->drm, "min GPU freq: %d MHz (%u)\n",
 		intel_gpu_freq(rps, rps->min_freq), rps->min_freq);
 
-	vlv_iosf_sb_put(i915,
+	vlv_iosf_sb_put(&i915->drm,
 			BIT(VLV_IOSF_SB_PUNIT) |
 			BIT(VLV_IOSF_SB_NC) |
 			BIT(VLV_IOSF_SB_CCK));
@@ -1773,6 +1778,7 @@ static void vlv_c0_read(struct intel_uncore *uncore, struct intel_rps_ei *ei)
 
 static u32 vlv_wa_c0_ei(struct intel_rps *rps, u32 pm_iir)
 {
+	struct drm_i915_private *i915 = rps_to_i915(rps);
 	struct intel_uncore *uncore = rps_to_uncore(rps);
 	const struct intel_rps_ei *prev = &rps->ei;
 	struct intel_rps_ei now;
@@ -1789,7 +1795,7 @@ static u32 vlv_wa_c0_ei(struct intel_rps *rps, u32 pm_iir)
 
 		time = ktime_us_delta(now.ktime, prev->ktime);
 
-		time *= rps_to_i915(rps)->czclk_freq;
+		time *= vlv_clock_get_czclk(&i915->drm);
 
 		/* Workload can be split between render + media,
 		 * e.g. SwapBuffers being blitted in X after being rendered in
@@ -2119,9 +2125,9 @@ static u32 __read_cagf(struct intel_rps *rps, bool take_fw)
 	} else if (GRAPHICS_VER(i915) >= 12) {
 		r = GEN12_RPSTAT1;
 	} else if (IS_VALLEYVIEW(i915) || IS_CHERRYVIEW(i915)) {
-		vlv_punit_get(i915);
-		freq = vlv_punit_read(i915, PUNIT_REG_GPU_FREQ_STS);
-		vlv_punit_put(i915);
+		vlv_iosf_sb_get(&i915->drm, BIT(VLV_IOSF_SB_PUNIT));
+		freq = vlv_iosf_sb_read(&i915->drm, VLV_IOSF_SB_PUNIT, PUNIT_REG_GPU_FREQ_STS);
+		vlv_iosf_sb_put(&i915->drm, BIT(VLV_IOSF_SB_PUNIT));
 	} else if (GRAPHICS_VER(i915) >= 6) {
 		r = GEN6_RPSTAT1;
 	} else {
@@ -2908,6 +2914,39 @@ bool i915_gpu_turbo_disable(void)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(i915_gpu_turbo_disable);
+
+static void boost_if_not_started(struct dma_fence *fence)
+{
+	struct i915_request *rq;
+
+	if (!dma_fence_is_i915(fence))
+		return;
+
+	rq = to_request(fence);
+
+	if (!i915_request_started(rq))
+		intel_rps_boost(rq);
+}
+
+static void mark_interactive(struct drm_device *drm, bool interactive)
+{
+	struct drm_i915_private *i915 = to_i915(drm);
+
+	intel_rps_mark_interactive(&to_gt(i915)->rps, interactive);
+}
+
+static void ilk_irq_handler(struct drm_device *drm)
+{
+	struct drm_i915_private *i915 = to_i915(drm);
+
+	gen5_rps_irq_handler(&to_gt(i915)->rps);
+}
+
+const struct intel_display_rps_interface i915_display_rps_interface = {
+	.boost_if_not_started = boost_if_not_started,
+	.mark_interactive = mark_interactive,
+	.ilk_irq_handler = ilk_irq_handler,
+};
 
 #if IS_ENABLED(CONFIG_DRM_I915_SELFTEST)
 #include "selftest_rps.c"

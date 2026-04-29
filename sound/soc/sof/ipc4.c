@@ -15,6 +15,7 @@
 #include "sof-audio.h"
 #include "ipc4-fw-reg.h"
 #include "ipc4-priv.h"
+#include "ipc4-topology.h"
 #include "ipc4-telemetry.h"
 #include "ops.h"
 
@@ -237,6 +238,26 @@ static void sof_ipc4_log_header(struct device *dev, u8 *text, struct sof_ipc4_ms
 				msg->extension, str);
 	}
 }
+
+const char *sof_ipc4_pipeline_state_str(enum sof_ipc4_pipeline_state state)
+{
+	switch (state) {
+	case SOF_IPC4_PIPE_INVALID_STATE:
+		return " (INVALID_STATE)";
+	case SOF_IPC4_PIPE_UNINITIALIZED:
+		return " (UNINITIALIZED)";
+	case SOF_IPC4_PIPE_RESET:
+		return " (RESET)";
+	case SOF_IPC4_PIPE_PAUSED:
+		return " (PAUSED)";
+	case SOF_IPC4_PIPE_RUNNING:
+		return " (RUNNING)";
+	case SOF_IPC4_PIPE_EOS:
+		return " (EOS)";
+	default:
+		return " (<unknown>)";
+	}
+}
 #else /* CONFIG_SND_SOC_SOF_DEBUG_VERBOSE_IPC */
 static void sof_ipc4_log_header(struct device *dev, u8 *text, struct sof_ipc4_msg *msg,
 				bool data_size_valid)
@@ -253,6 +274,11 @@ static void sof_ipc4_log_header(struct device *dev, u8 *text, struct sof_ipc4_ms
 			msg->primary, msg->extension, msg->data_size);
 	else
 		dev_dbg(dev, "%s: %#x|%#x\n", text, msg->primary, msg->extension);
+}
+
+const char *sof_ipc4_pipeline_state_str(enum sof_ipc4_pipeline_state state)
+{
+	return "";
 }
 #endif
 
@@ -386,7 +412,7 @@ static int sof_ipc4_tx_msg(struct snd_sof_dev *sdev, void *msg_data, size_t msg_
 	}
 
 	/* Serialise IPC TX */
-	mutex_lock(&ipc->tx_mutex);
+	guard(mutex)(&ipc->tx_mutex);
 
 	ret = ipc4_tx_msg_unlocked(ipc, msg_data, msg_bytes, reply_data, reply_bytes);
 
@@ -403,9 +429,25 @@ static int sof_ipc4_tx_msg(struct snd_sof_dev *sdev, void *msg_data, size_t msg_
 			sof_ipc4_dump_payload(sdev, msg->data_ptr, msg->data_size);
 	}
 
-	mutex_unlock(&ipc->tx_mutex);
-
 	return ret;
+}
+
+static bool sof_ipc4_tx_payload_for_get_data(struct sof_ipc4_msg *tx)
+{
+	/*
+	 * Messages that require TX payload with LARGE_CONFIG_GET.
+	 * The TX payload is placed into the IPC message data section by caller,
+	 * which needs to be copied to temporary buffer since the received data
+	 * will overwrite it.
+	 */
+	switch (tx->extension & SOF_IPC4_MOD_EXT_MSG_PARAM_ID_MASK) {
+	case SOF_IPC4_MOD_EXT_MSG_PARAM_ID(SOF_IPC4_SWITCH_CONTROL_PARAM_ID):
+	case SOF_IPC4_MOD_EXT_MSG_PARAM_ID(SOF_IPC4_ENUM_CONTROL_PARAM_ID):
+	case SOF_IPC4_MOD_EXT_MSG_PARAM_ID(SOF_IPC4_BYTES_CONTROL_PARAM_ID):
+		return true;
+	default:
+		return false;
+	}
 }
 
 static int sof_ipc4_set_get_data(struct snd_sof_dev *sdev, void *data,
@@ -419,6 +461,8 @@ static int sof_ipc4_set_get_data(struct snd_sof_dev *sdev, void *data,
 	struct sof_ipc4_msg tx = {{ 0 }};
 	struct sof_ipc4_msg rx = {{ 0 }};
 	size_t remaining = payload_bytes;
+	void *tx_payload_for_get = NULL;
+	size_t tx_data_size = 0;
 	size_t offset = 0;
 	size_t chunk_size;
 	int ret;
@@ -444,13 +488,23 @@ static int sof_ipc4_set_get_data(struct snd_sof_dev *sdev, void *data,
 
 	tx.extension |= SOF_IPC4_MOD_EXT_MSG_FIRST_BLOCK(1);
 
+	if (sof_ipc4_tx_payload_for_get_data(&tx)) {
+		tx_data_size = min(ipc4_msg->data_size, payload_limit);
+		tx_payload_for_get = kmemdup(ipc4_msg->data_ptr, tx_data_size,
+					     GFP_KERNEL);
+		if (!tx_payload_for_get)
+			return -ENOMEM;
+	}
+
 	/* ensure the DSP is in D0i0 before sending IPC */
 	ret = snd_sof_dsp_set_power_state(sdev, &target_state);
-	if (ret < 0)
+	if (ret < 0) {
+		kfree(tx_payload_for_get);
 		return ret;
+	}
 
 	/* Serialise IPC TX */
-	mutex_lock(&sdev->ipc->tx_mutex);
+	guard(mutex)(&sdev->ipc->tx_mutex);
 
 	do {
 		size_t tx_size, rx_size;
@@ -481,7 +535,15 @@ static int sof_ipc4_set_get_data(struct snd_sof_dev *sdev, void *data,
 			rx.data_size = chunk_size;
 			rx.data_ptr = ipc4_msg->data_ptr + offset;
 
-			tx_size = 0;
+			if (tx_payload_for_get) {
+				tx_size = tx_data_size;
+				tx.data_size = tx_size;
+				tx.data_ptr = tx_payload_for_get;
+			} else {
+				tx_size = 0;
+				tx.data_size = 0;
+				tx.data_ptr = NULL;
+			}
 			rx_size = chunk_size;
 		}
 
@@ -526,7 +588,7 @@ out:
 	if (sof_debug_check_flag(SOF_DBG_DUMP_IPC_MESSAGE_PAYLOAD))
 		sof_ipc4_dump_payload(sdev, ipc4_msg->data_ptr, ipc4_msg->data_size);
 
-	mutex_unlock(&sdev->ipc->tx_mutex);
+	kfree(tx_payload_for_get);
 
 	return ret;
 }
@@ -576,9 +638,19 @@ EXPORT_SYMBOL(sof_ipc4_find_debug_slot_offset_by_type);
 
 static int ipc4_fw_ready(struct snd_sof_dev *sdev, struct sof_ipc4_msg *ipc4_msg)
 {
-	/* no need to re-check version/ABI for subsequent boots */
-	if (!sdev->first_boot)
+	if (!sdev->first_boot) {
+		struct sof_ipc4_fw_data *ipc4_data = sdev->private;
+
+		/*
+		 * After the initial boot only check if the libraries have been
+		 * restored when full context save is not enabled
+		 */
+		if (!ipc4_data->fw_context_save)
+			ipc4_data->libraries_restored = !!(ipc4_msg->primary &
+							   SOF_IPC4_FW_READY_LIB_RESTORED);
+
 		return 0;
+	}
 
 	sof_ipc4_create_exception_debugfs_node(sdev);
 
@@ -856,6 +928,19 @@ void sof_ipc4_mic_privacy_state_change(struct snd_sof_dev *sdev, bool state)
 {
 	struct sof_ipc4_msg msg;
 	u32 data = state;
+
+	/*
+	 * The mic privacy change notification's role is to notify the running
+	 * firmware that there is a change in mic privacy state from whatever
+	 * the state was before - since the firmware booted up or since the
+	 * previous change during runtime.
+	 *
+	 * If the firmware has not been booted up, there is no need to send
+	 * change notification (the firmware is not booted up).
+	 * The firmware checks the current state during its boot.
+	 */
+	if (sdev->fw_state != SOF_FW_BOOT_COMPLETE)
+		return;
 
 	msg.primary = SOF_IPC4_MSG_TARGET(SOF_IPC4_MODULE_MSG);
 	msg.primary |= SOF_IPC4_MSG_DIR(SOF_IPC4_MSG_REQUEST);

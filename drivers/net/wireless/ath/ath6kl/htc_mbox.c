@@ -938,7 +938,7 @@ static void ath6kl_htc_tx_from_queue(struct htc_target *target,
 
 		/*
 		 * if an AC has bundling disabled and no tx bundling
-		 * has occured continously for a certain number of TX,
+		 * has occurred continuously for a certain number of TX,
 		 * enable tx bundling for this AC
 		 */
 		if (!bundle_sent) {
@@ -2792,7 +2792,7 @@ static int ath6kl_htc_reset(struct htc_target *target)
 		      (HTC_MAX_CTRL_MSG_LEN + HTC_HDR_LENGTH);
 
 	for (i = 0; i < NUM_CONTROL_BUFFERS; i++) {
-		packet = kzalloc(sizeof(*packet), GFP_KERNEL);
+		packet = kzalloc_obj(*packet);
 		if (!packet)
 			return -ENOMEM;
 
@@ -2842,13 +2842,13 @@ static void *ath6kl_htc_mbox_create(struct ath6kl *ar)
 	struct htc_target *target = NULL;
 	int status = 0;
 
-	target = kzalloc(sizeof(*target), GFP_KERNEL);
+	target = kzalloc_obj(*target);
 	if (!target) {
 		ath6kl_err("unable to allocate memory\n");
 		return NULL;
 	}
 
-	target->dev = kzalloc(sizeof(*target->dev), GFP_KERNEL);
+	target->dev = kzalloc_obj(*target->dev);
 	if (!target->dev) {
 		ath6kl_err("unable to allocate memory\n");
 		kfree(target);

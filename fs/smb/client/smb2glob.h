@@ -30,10 +30,9 @@ enum smb2_compound_ops {
 	SMB2_OP_QUERY_DIR,
 	SMB2_OP_MKDIR,
 	SMB2_OP_RENAME,
-	SMB2_OP_DELETE,
 	SMB2_OP_HARDLINK,
 	SMB2_OP_SET_EOF,
-	SMB2_OP_RMDIR,
+	SMB2_OP_UNLINK,
 	SMB2_OP_POSIX_QUERY_INFO,
 	SMB2_OP_SET_REPARSE,
 	SMB2_OP_GET_REPARSE,
@@ -46,5 +45,17 @@ enum smb2_compound_ops {
 #define START_OF_CHAIN 2
 #define END_OF_CHAIN 4
 #define RELATED_REQUEST 8
+
+/*
+ *****************************************************************
+ * Struct definitions go here
+ *****************************************************************
+ */
+
+struct status_to_posix_error {
+	__u32 smb2_status;
+	int posix_error;
+	char *status_string;
+};
 
 #endif	/* _SMB2_GLOB_H */

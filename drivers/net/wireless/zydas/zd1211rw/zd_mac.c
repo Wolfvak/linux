@@ -722,8 +722,7 @@ static int zd_mac_config_beacon(struct ieee80211_hw *hw, struct sk_buff *beacon,
 
 	/* Alloc memory for full beacon write at once. */
 	num_cmds = 1 + zd_chip_is_zd1211b(&mac->chip) + full_len;
-	ioreqs = kmalloc_array(num_cmds, sizeof(struct zd_ioreq32),
-			       GFP_KERNEL);
+	ioreqs = kmalloc_objs(struct zd_ioreq32, num_cmds);
 	if (!ioreqs) {
 		r = -ENOMEM;
 		goto out_nofree;
@@ -1137,7 +1136,7 @@ static void zd_op_remove_interface(struct ieee80211_hw *hw,
 	zd_mac_free_cur_beacon(mac);
 }
 
-static int zd_op_config(struct ieee80211_hw *hw, u32 changed)
+static int zd_op_config(struct ieee80211_hw *hw, int radio_idx, u32 changed)
 {
 	struct zd_mac *mac = zd_hw_mac(hw);
 	struct ieee80211_conf *conf = &hw->conf;

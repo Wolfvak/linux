@@ -13,7 +13,7 @@ struct autofs_info *autofs_new_ino(struct autofs_sb_info *sbi)
 {
 	struct autofs_info *ino;
 
-	ino = kzalloc(sizeof(*ino), GFP_KERNEL);
+	ino = kzalloc_obj(*ino);
 	if (ino) {
 		INIT_LIST_HEAD(&ino->active);
 		INIT_LIST_HEAD(&ino->expiring);
@@ -55,7 +55,7 @@ void autofs_kill_sb(struct super_block *sb)
 	}
 
 	pr_debug("shutting down\n");
-	kill_litter_super(sb);
+	kill_anon_super(sb);
 	if (sbi)
 		kfree_rcu(sbi, rcu);
 }
@@ -242,7 +242,7 @@ static struct autofs_sb_info *autofs_alloc_sbi(void)
 {
 	struct autofs_sb_info *sbi;
 
-	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
+	sbi = kzalloc_obj(*sbi);
 	if (!sbi)
 		return NULL;
 
@@ -251,6 +251,7 @@ static struct autofs_sb_info *autofs_alloc_sbi(void)
 	sbi->min_proto = AUTOFS_MIN_PROTO_VERSION;
 	sbi->max_proto = AUTOFS_MAX_PROTO_VERSION;
 	sbi->pipefd = -1;
+	sbi->mnt_ns_id = to_ns_common(current->nsproxy->mnt_ns)->ns_id;
 
 	set_autofs_type_indirect(&sbi->type);
 	mutex_init(&sbi->wq_mutex);
@@ -311,7 +312,7 @@ static int autofs_fill_super(struct super_block *s, struct fs_context *fc)
 	s->s_blocksize_bits = 10;
 	s->s_magic = AUTOFS_SUPER_MAGIC;
 	s->s_op = &autofs_sops;
-	s->s_d_op = &autofs_dentry_operations;
+	set_default_d_op(s, &autofs_dentry_operations);
 	s->s_time_gran = 1;
 
 	/*
@@ -404,7 +405,7 @@ int autofs_init_fs_context(struct fs_context *fc)
 	struct autofs_fs_context *ctx;
 	struct autofs_sb_info *sbi;
 
-	ctx = kzalloc(sizeof(struct autofs_fs_context), GFP_KERNEL);
+	ctx = kzalloc_obj(struct autofs_fs_context);
 	if (!ctx)
 		goto nomem;
 

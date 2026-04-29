@@ -956,7 +956,7 @@ static ssize_t lg4ff_combine_show(struct device *dev, struct device_attribute *a
 		return 0;
 	}
 
-	count = scnprintf(buf, PAGE_SIZE, "%u\n", entry->wdata.combine);
+	count = sysfs_emit(buf, "%u\n", entry->wdata.combine);
 	return count;
 }
 
@@ -1009,7 +1009,7 @@ static ssize_t lg4ff_range_show(struct device *dev, struct device_attribute *att
 		return 0;
 	}
 
-	count = scnprintf(buf, PAGE_SIZE, "%u\n", entry->wdata.range);
+	count = sysfs_emit(buf, "%u\n", entry->wdata.range);
 	return count;
 }
 
@@ -1073,7 +1073,7 @@ static ssize_t lg4ff_real_id_show(struct device *dev, struct device_attribute *a
 		return 0;
 	}
 
-	count = scnprintf(buf, PAGE_SIZE, "%s: %s\n", entry->wdata.real_tag, entry->wdata.real_name);
+	count = sysfs_emit(buf, "%s: %s\n", entry->wdata.real_tag, entry->wdata.real_name);
 	return count;
 }
 
@@ -1288,7 +1288,7 @@ int lg4ff_init(struct hid_device *hid)
 		hid_err(hid, "Cannot add device, private driver data not allocated\n");
 		return -1;
 	}
-	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
+	entry = kzalloc_obj(*entry);
 	if (!entry)
 		return -ENOMEM;
 	spin_lock_init(&entry->report_lock);

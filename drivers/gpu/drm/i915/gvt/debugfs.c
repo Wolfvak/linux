@@ -20,10 +20,12 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+
 #include <linux/debugfs.h>
 #include <linux/list_sort.h>
-#include "i915_drv.h"
+
 #include "gvt.h"
+#include "i915_drv.h"
 
 struct mmio_diff_param {
 	struct intel_vgpu *vgpu;
@@ -66,7 +68,7 @@ static inline int mmio_diff_handler(struct intel_gvt *gvt,
 	vreg = vgpu_vreg(param->vgpu, offset);
 
 	if (preg != vreg) {
-		node = kmalloc(sizeof(*node), GFP_ATOMIC);
+		node = kmalloc_obj(*node, GFP_ATOMIC);
 		if (!node)
 			return -ENOMEM;
 
@@ -194,9 +196,9 @@ void intel_gvt_debugfs_add_vgpu(struct intel_vgpu *vgpu)
 void intel_gvt_debugfs_remove_vgpu(struct intel_vgpu *vgpu)
 {
 	struct intel_gvt *gvt = vgpu->gvt;
-	struct drm_minor *minor = gvt->gt->i915->drm.primary;
+	struct dentry *debugfs_root = gvt->gt->i915->drm.debugfs_root;
 
-	if (minor->debugfs_root && gvt->debugfs_root) {
+	if (debugfs_root && gvt->debugfs_root) {
 		debugfs_remove_recursive(vgpu->debugfs);
 		vgpu->debugfs = NULL;
 	}
@@ -208,9 +210,9 @@ void intel_gvt_debugfs_remove_vgpu(struct intel_vgpu *vgpu)
  */
 void intel_gvt_debugfs_init(struct intel_gvt *gvt)
 {
-	struct drm_minor *minor = gvt->gt->i915->drm.primary;
+	struct dentry *debugfs_root = gvt->gt->i915->drm.debugfs_root;
 
-	gvt->debugfs_root = debugfs_create_dir("gvt", minor->debugfs_root);
+	gvt->debugfs_root = debugfs_create_dir("gvt", debugfs_root);
 
 	debugfs_create_ulong("num_tracked_mmio", 0444, gvt->debugfs_root,
 			     &gvt->mmio.num_tracked_mmio);
@@ -222,9 +224,9 @@ void intel_gvt_debugfs_init(struct intel_gvt *gvt)
  */
 void intel_gvt_debugfs_clean(struct intel_gvt *gvt)
 {
-	struct drm_minor *minor = gvt->gt->i915->drm.primary;
+	struct dentry *debugfs_root = gvt->gt->i915->drm.debugfs_root;
 
-	if (minor->debugfs_root) {
+	if (debugfs_root) {
 		debugfs_remove_recursive(gvt->debugfs_root);
 		gvt->debugfs_root = NULL;
 	}

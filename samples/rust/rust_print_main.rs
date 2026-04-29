@@ -40,7 +40,7 @@ fn arc_print() -> Result {
         // behaviour, contract or protocol on both `i32` and `&str` into a single `Arc` of
         // type `Arc<dyn Display>`.
 
-        use core::fmt::Display;
+        use kernel::fmt::Display;
         fn arc_dyn_print(arc: &Arc<dyn Display>) {
             pr_info!("Arc<dyn Display> says {arc}");
         }
@@ -101,7 +101,7 @@ impl Drop for RustPrint {
 }
 
 mod trace {
-    use kernel::ffi::c_int;
+    use kernel::prelude::*;
 
     kernel::declare_trace! {
         /// # Safety

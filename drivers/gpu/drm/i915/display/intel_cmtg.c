@@ -9,13 +9,13 @@
 #include <drm/drm_device.h>
 #include <drm/drm_print.h>
 
-#include "i915_reg.h"
-#include "intel_crtc.h"
 #include "intel_cmtg.h"
 #include "intel_cmtg_regs.h"
+#include "intel_crtc.h"
 #include "intel_de.h"
 #include "intel_display_device.h"
 #include "intel_display_power.h"
+#include "intel_display_regs.h"
 
 /**
  * DOC: Common Primary Timing Generator (CMTG)
@@ -85,7 +85,6 @@ static bool intel_cmtg_transcoder_is_secondary(struct intel_display *display,
 					       enum transcoder trans)
 {
 	enum intel_display_power_domain power_domain;
-	intel_wakeref_t wakeref;
 	u32 val = 0;
 
 	if (!HAS_TRANSCODER(display, trans))
@@ -93,7 +92,7 @@ static bool intel_cmtg_transcoder_is_secondary(struct intel_display *display,
 
 	power_domain = POWER_DOMAIN_TRANSCODER(trans);
 
-	with_intel_display_power_if_enabled(display, power_domain, wakeref)
+	with_intel_display_power_if_enabled(display, power_domain)
 		val = intel_de_read(display, TRANS_DDI_FUNC_CTL2(display, trans));
 
 	return val & CMTG_SECONDARY_MODE;

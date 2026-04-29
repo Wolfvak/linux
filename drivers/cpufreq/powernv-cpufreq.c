@@ -21,7 +21,6 @@
 #include <linux/string_choices.h>
 #include <linux/cpu.h>
 #include <linux/hashtable.h>
-#include <trace/events/power.h>
 
 #include <asm/cputhreads.h>
 #include <asm/firmware.h>
@@ -29,6 +28,9 @@
 #include <asm/smp.h> /* Required for cpu_sibling_mask() in UP configs */
 #include <asm/opal.h>
 #include <linux/timer.h>
+
+#define CREATE_TRACE_POINTS
+#include "powernv-trace.h"
 
 #define POWERNV_MAX_PSTATES_ORDER  8
 #define POWERNV_MAX_PSTATES	(1UL << (POWERNV_MAX_PSTATES_ORDER))
@@ -321,7 +323,7 @@ next:
 		powernv_freqs[i].frequency = freq * 1000; /* kHz */
 		powernv_freqs[i].driver_data = id & 0xFF;
 
-		revmap_data = kmalloc(sizeof(*revmap_data), GFP_KERNEL);
+		revmap_data = kmalloc_obj(*revmap_data);
 		if (!revmap_data) {
 			rc = -ENOMEM;
 			goto out;
@@ -855,7 +857,7 @@ static int powernv_cpufreq_cpu_init(struct cpufreq_policy *policy)
 		return 0;
 
 	/* Initialise Gpstate ramp-down timer only on POWER8 */
-	gpstates =  kzalloc(sizeof(*gpstates), GFP_KERNEL);
+	gpstates = kzalloc_obj(*gpstates);
 	if (!gpstates)
 		return -ENOMEM;
 
@@ -1051,7 +1053,7 @@ static int init_chip_info(void)
 		return -ENOMEM;
 
 	/* Allocate a chip cpu mask large enough to fit mask for all chips */
-	chip_cpu_mask = kcalloc(MAX_NR_CHIPS, sizeof(cpumask_t), GFP_KERNEL);
+	chip_cpu_mask = kzalloc_objs(cpumask_t, MAX_NR_CHIPS);
 	if (!chip_cpu_mask) {
 		ret = -ENOMEM;
 		goto free_and_return;
@@ -1067,7 +1069,7 @@ static int init_chip_info(void)
 		cpumask_set_cpu(cpu, &chip_cpu_mask[nr_chips-1]);
 	}
 
-	chips = kcalloc(nr_chips, sizeof(struct chip), GFP_KERNEL);
+	chips = kzalloc_objs(struct chip, nr_chips);
 	if (!chips) {
 		ret = -ENOMEM;
 		goto out_free_chip_cpu_mask;

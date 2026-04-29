@@ -70,7 +70,7 @@ static const struct bin_attribute *const ryos_bin_attrs[] = {
 };
 
 static const struct attribute_group ryos_group = {
-	.bin_attrs_new = ryos_bin_attrs,
+	.bin_attrs = ryos_bin_attrs,
 };
 
 static const struct attribute_group *ryos_groups[] = {
@@ -96,7 +96,7 @@ static int ryos_init_specials(struct hid_device *hdev)
 		return 0;
 	}
 
-	ryos = kzalloc(sizeof(*ryos), GFP_KERNEL);
+	ryos = kzalloc_obj(*ryos);
 	if (!ryos) {
 		hid_err(hdev, "can't alloc device descriptor\n");
 		return -ENOMEM;

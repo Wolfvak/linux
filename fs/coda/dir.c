@@ -362,7 +362,7 @@ static int coda_venus_readdir(struct file *coda_file, struct dir_context *ctx)
 
 	cii = ITOC(file_inode(coda_file));
 
-	vdir = kmalloc(sizeof(*vdir), GFP_KERNEL);
+	vdir = kmalloc_obj(*vdir);
 	if (!vdir) return -ENOMEM;
 
 	if (!dir_emit_dots(coda_file, ctx))
@@ -429,17 +429,9 @@ static int coda_readdir(struct file *coda_file, struct dir_context *ctx)
 	cfi = coda_ftoc(coda_file);
 	host_file = cfi->cfi_container;
 
-	if (host_file->f_op->iterate_shared) {
-		struct inode *host_inode = file_inode(host_file);
-		ret = -ENOENT;
-		if (!IS_DEADDIR(host_inode)) {
-			inode_lock_shared(host_inode);
-			ret = host_file->f_op->iterate_shared(host_file, ctx);
-			file_accessed(host_file);
-			inode_unlock_shared(host_inode);
-		}
+	ret = iterate_dir(host_file, ctx);
+	if (ret != -ENOTDIR)
 		return ret;
-	}
 	/* Venus: we must read Venus dirents from a file */
 	return coda_venus_readdir(coda_file, ctx);
 }

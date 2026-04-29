@@ -1367,7 +1367,7 @@ int mvpp2_ethtool_cls_rule_ins(struct mvpp2_port *port,
 	if (info->fs.location >= MVPP2_N_RFS_ENTRIES_PER_FLOW)
 		return -EINVAL;
 
-	efs = kzalloc(sizeof(*efs), GFP_KERNEL);
+	efs = kzalloc_obj(*efs);
 	if (!efs)
 		return -ENOMEM;
 
@@ -1389,7 +1389,7 @@ int mvpp2_ethtool_cls_rule_ins(struct mvpp2_port *port,
 	efs->rule.flow_type = mvpp2_cls_ethtool_flow_to_type(info->fs.flow_type);
 	if (efs->rule.flow_type < 0) {
 		ret = efs->rule.flow_type;
-		goto clean_rule;
+		goto clean_eth_rule;
 	}
 
 	ret = mvpp2_cls_rfs_parse_rule(&efs->rule);
@@ -1503,8 +1503,7 @@ static int mvpp22_rss_context_create(struct mvpp2_port *port, u32 *rss_ctx)
 	if (ctx == MVPP22_N_RSS_TABLES)
 		return -EINVAL;
 
-	priv->rss_tables[ctx] = kzalloc(sizeof(*priv->rss_tables[ctx]),
-					GFP_KERNEL);
+	priv->rss_tables[ctx] = kzalloc_obj(*priv->rss_tables[ctx]);
 	if (!priv->rss_tables[ctx])
 		return -ENOMEM;
 
@@ -1618,7 +1617,8 @@ int mvpp22_port_rss_ctx_indir_get(struct mvpp2_port *port, u32 port_ctx,
 	return 0;
 }
 
-int mvpp2_ethtool_rxfh_set(struct mvpp2_port *port, struct ethtool_rxnfc *info)
+int mvpp2_ethtool_rxfh_set(struct mvpp2_port *port,
+			   const struct ethtool_rxfh_fields *info)
 {
 	u16 hash_opts = 0;
 	u32 flow_type;
@@ -1656,7 +1656,8 @@ int mvpp2_ethtool_rxfh_set(struct mvpp2_port *port, struct ethtool_rxnfc *info)
 	return mvpp2_port_rss_hash_opts_set(port, flow_type, hash_opts);
 }
 
-int mvpp2_ethtool_rxfh_get(struct mvpp2_port *port, struct ethtool_rxnfc *info)
+int mvpp2_ethtool_rxfh_get(struct mvpp2_port *port,
+			   struct ethtool_rxfh_fields *info)
 {
 	unsigned long hash_opts;
 	u32 flow_type;

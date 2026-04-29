@@ -65,7 +65,6 @@ ktime_t mlx5e_cqe_ts_to_ns(cqe_ts_to_ns func, struct mlx5_clock *clock, u64 cqe_
 enum mlx5e_icosq_wqe_type {
 	MLX5E_ICOSQ_WQE_NOP,
 	MLX5E_ICOSQ_WQE_UMR_RX,
-	MLX5E_ICOSQ_WQE_SHAMPO_HD_UMR,
 #ifdef CONFIG_MLX5_EN_TLS
 	MLX5E_ICOSQ_WQE_UMR_TLS,
 	MLX5E_ICOSQ_WQE_SET_PSV_TLS,
@@ -92,7 +91,7 @@ int mlx5e_poll_rx_cq(struct mlx5e_cq *cq, int budget);
 void mlx5e_free_rx_descs(struct mlx5e_rq *rq);
 void mlx5e_free_rx_missing_descs(struct mlx5e_rq *rq);
 
-static inline bool mlx5e_rx_hw_stamp(struct hwtstamp_config *config)
+static inline bool mlx5e_rx_hw_stamp(struct kernel_hwtstamp_config *config)
 {
 	return config->rx_filter == HWTSTAMP_FILTER_ALL;
 }
@@ -309,10 +308,7 @@ mlx5e_notify_hw(struct mlx5_wq_cyc *wq, u16 pc, void __iomem *uar_map,
 
 static inline void mlx5e_cq_arm(struct mlx5e_cq *cq)
 {
-	struct mlx5_core_cq *mcq;
-
-	mcq = &cq->mcq;
-	mlx5_cq_arm(mcq, MLX5_CQ_DB_REQ_NOT, mcq->uar->map, cq->wq.cc);
+	mlx5_cq_arm(&cq->mcq, MLX5_CQ_DB_REQ_NOT, cq->uar->map, cq->wq.cc);
 }
 
 static inline struct mlx5e_sq_dma *
@@ -322,14 +318,24 @@ mlx5e_dma_get(struct mlx5e_txqsq *sq, u32 i)
 }
 
 static inline void
-mlx5e_dma_push(struct mlx5e_txqsq *sq, dma_addr_t addr, u32 size,
-	       enum mlx5e_dma_map_type map_type)
+mlx5e_dma_push_single(struct mlx5e_txqsq *sq, dma_addr_t addr, u32 size)
 {
 	struct mlx5e_sq_dma *dma = mlx5e_dma_get(sq, sq->dma_fifo_pc++);
 
 	dma->addr = addr;
 	dma->size = size;
-	dma->type = map_type;
+	dma->type = MLX5E_DMA_MAP_SINGLE;
+}
+
+static inline void
+mlx5e_dma_push_netmem(struct mlx5e_txqsq *sq, netmem_ref netmem,
+		      dma_addr_t addr, u32 size)
+{
+	struct mlx5e_sq_dma *dma = mlx5e_dma_get(sq, sq->dma_fifo_pc++);
+
+	netmem_dma_unmap_addr_set(netmem, dma, addr, addr);
+	dma->size = size;
+	dma->type = MLX5E_DMA_MAP_PAGE;
 }
 
 static inline
@@ -362,7 +368,8 @@ mlx5e_tx_dma_unmap(struct device *pdev, struct mlx5e_sq_dma *dma)
 		dma_unmap_single(pdev, dma->addr, dma->size, DMA_TO_DEVICE);
 		break;
 	case MLX5E_DMA_MAP_PAGE:
-		dma_unmap_page(pdev, dma->addr, dma->size, DMA_TO_DEVICE);
+		netmem_dma_unmap_page_attrs(pdev, dma->addr, dma->size,
+					    DMA_TO_DEVICE, 0);
 		break;
 	default:
 		WARN_ONCE(true, "mlx5e_tx_dma_unmap unknown DMA type!\n");

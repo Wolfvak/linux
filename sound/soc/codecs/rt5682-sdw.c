@@ -474,7 +474,6 @@ reinit:
 	rt5682->first_hw_init = true;
 
 err_nodev:
-	pm_runtime_mark_last_busy(&slave->dev);
 	pm_runtime_put_autosuspend(&slave->dev);
 
 	dev_dbg(&slave->dev, "%s hw_init complete: %d\n", __func__, ret);
@@ -691,7 +690,7 @@ static int rt5682_sdw_probe(struct sdw_slave *slave,
 	return rt5682_sdw_init(&slave->dev, regmap, slave);
 }
 
-static int rt5682_sdw_remove(struct sdw_slave *slave)
+static void rt5682_sdw_remove(struct sdw_slave *slave)
 {
 	struct rt5682_priv *rt5682 = dev_get_drvdata(&slave->dev);
 
@@ -699,8 +698,6 @@ static int rt5682_sdw_remove(struct sdw_slave *slave)
 		cancel_delayed_work_sync(&rt5682->jack_detect_work);
 
 	pm_runtime_disable(&slave->dev);
-
-	return 0;
 }
 
 static const struct sdw_device_id rt5682_id[] = {

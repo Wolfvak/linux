@@ -8,10 +8,11 @@
 #include <linux/seq_file.h>
 #include <linux/shmem_fs.h>
 #include <linux/spinlock.h>
-#include <linux/pfn_t.h>
 #include <linux/vmalloc.h>
 
+#include <drm/drm_dumb_buffers.h>
 #include <drm/drm_prime.h>
+#include <drm/drm_print.h>
 #include <drm/drm_vma_manager.h>
 
 #include "omap_drv.h"
@@ -253,7 +254,7 @@ static int omap_gem_attach_pages(struct drm_gem_object *obj)
 	 * DSS, GPU, etc. are not cache coherent:
 	 */
 	if (omap_obj->flags & (OMAP_BO_WC|OMAP_BO_UNCACHED)) {
-		addrs = kmalloc_array(npages, sizeof(*addrs), GFP_KERNEL);
+		addrs = kmalloc_objs(*addrs, npages);
 		if (!addrs) {
 			ret = -ENOMEM;
 			goto free_pages;
@@ -277,7 +278,7 @@ static int omap_gem_attach_pages(struct drm_gem_object *obj)
 			}
 		}
 	} else {
-		addrs = kcalloc(npages, sizeof(*addrs), GFP_KERNEL);
+		addrs = kzalloc_objs(*addrs, npages);
 		if (!addrs) {
 			ret = -ENOMEM;
 			goto free_pages;
@@ -371,8 +372,7 @@ static vm_fault_t omap_gem_fault_1d(struct drm_gem_object *obj,
 	VERB("Inserting %p pfn %lx, pa %lx", (void *)vmf->address,
 			pfn, pfn << PAGE_SHIFT);
 
-	return vmf_insert_mixed(vma, vmf->address,
-			__pfn_to_pfn_t(pfn, PFN_DEV));
+	return vmf_insert_mixed(vma, vmf->address, pfn);
 }
 
 /* Special handling for the case of faulting in 2d tiled buffers */
@@ -467,8 +467,7 @@ static vm_fault_t omap_gem_fault_2d(struct drm_gem_object *obj,
 			pfn, pfn << PAGE_SHIFT);
 
 	for (i = n; i > 0; i--) {
-		ret = vmf_insert_mixed(vma,
-			vaddr, __pfn_to_pfn_t(pfn, PFN_DEV));
+		ret = vmf_insert_mixed(vma, vaddr, pfn);
 		if (ret & VM_FAULT_ERROR)
 			break;
 		pfn += priv->usergart[fmt].stride_pfn;
@@ -583,15 +582,13 @@ static int omap_gem_object_mmap(struct drm_gem_object *obj, struct vm_area_struc
 int omap_gem_dumb_create(struct drm_file *file, struct drm_device *dev,
 		struct drm_mode_create_dumb *args)
 {
-	union omap_gem_size gsize;
+	union omap_gem_size gsize = { };
+	int ret;
 
-	args->pitch = DIV_ROUND_UP(args->width * args->bpp, 8);
-
-	args->size = PAGE_ALIGN(args->pitch * args->height);
-
-	gsize = (union omap_gem_size){
-		.bytes = args->size,
-	};
+	ret = drm_mode_size_dumb(dev, args, SZ_8, 0);
+	if (ret)
+		return ret;
+	gsize.bytes = args->size;
 
 	return omap_gem_new_handle(dev, file, gsize,
 			OMAP_BO_SCANOUT | OMAP_BO_WC, &args->handle);
@@ -992,7 +989,7 @@ struct sg_table *omap_gem_get_sg(struct drm_gem_object *obj,
 	if (sgt)
 		goto out;
 
-	sgt = kzalloc(sizeof(*sgt), GFP_KERNEL);
+	sgt = kzalloc_obj(*sgt);
 	if (!sgt) {
 		ret = -ENOMEM;
 		goto err_unpin;
@@ -1322,7 +1319,7 @@ struct drm_gem_object *omap_gem_new(struct drm_device *dev,
 	}
 
 	/* Allocate the initialize the OMAP GEM object. */
-	omap_obj = kzalloc(sizeof(*omap_obj), GFP_KERNEL);
+	omap_obj = kzalloc_obj(*omap_obj);
 	if (!omap_obj)
 		return NULL;
 
@@ -1413,7 +1410,7 @@ struct drm_gem_object *omap_gem_new_dmabuf(struct drm_device *dev, size_t size,
 		unsigned int ret;
 
 		npages = DIV_ROUND_UP(size, PAGE_SIZE);
-		pages = kcalloc(npages, sizeof(*pages), GFP_KERNEL);
+		pages = kzalloc_objs(*pages, npages);
 		if (!pages) {
 			omap_gem_free_object(obj);
 			return ERR_PTR(-ENOMEM);
@@ -1473,7 +1470,7 @@ void omap_gem_init(struct drm_device *dev)
 		return;
 	}
 
-	usergart = kcalloc(3, sizeof(*usergart), GFP_KERNEL);
+	usergart = kzalloc_objs(*usergart, 3);
 	if (!usergart)
 		return;
 

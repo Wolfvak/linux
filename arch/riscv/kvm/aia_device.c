@@ -11,6 +11,7 @@
 #include <linux/irqchip/riscv-imsic.h>
 #include <linux/kvm_host.h>
 #include <linux/uaccess.h>
+#include <linux/cpufeature.h>
 
 static int aia_create(struct kvm_device *dev, u32 type)
 {
@@ -21,6 +22,9 @@ static int aia_create(struct kvm_device *dev, u32 type)
 
 	if (irqchip_in_kernel(kvm))
 		return -EEXIST;
+
+	if (!riscv_isa_extension_available(NULL, SSAIA))
+		return -ENODEV;
 
 	ret = -EBUSY;
 	if (kvm_trylock_all_vcpus(kvm))
@@ -437,7 +441,7 @@ static int aia_get_attr(struct kvm_device *dev, struct kvm_device_attr *attr)
 
 static int aia_has_attr(struct kvm_device *dev, struct kvm_device_attr *attr)
 {
-	int nr_vcpus;
+	int nr_vcpus, r = -ENXIO;
 
 	switch (attr->group) {
 	case KVM_DEV_RISCV_AIA_GRP_CONFIG:
@@ -466,12 +470,18 @@ static int aia_has_attr(struct kvm_device *dev, struct kvm_device_attr *attr)
 		}
 		break;
 	case KVM_DEV_RISCV_AIA_GRP_APLIC:
-		return kvm_riscv_aia_aplic_has_attr(dev->kvm, attr->attr);
+		mutex_lock(&dev->kvm->lock);
+		r = kvm_riscv_aia_aplic_has_attr(dev->kvm, attr->attr);
+		mutex_unlock(&dev->kvm->lock);
+		break;
 	case KVM_DEV_RISCV_AIA_GRP_IMSIC:
-		return kvm_riscv_aia_imsic_has_attr(dev->kvm, attr->attr);
+		mutex_lock(&dev->kvm->lock);
+		r = kvm_riscv_aia_imsic_has_attr(dev->kvm, attr->attr);
+		mutex_unlock(&dev->kvm->lock);
+		break;
 	}
 
-	return -ENXIO;
+	return r;
 }
 
 struct kvm_device_ops kvm_riscv_aia_device_ops = {
@@ -509,12 +519,12 @@ void kvm_riscv_vcpu_aia_reset(struct kvm_vcpu *vcpu)
 	kvm_riscv_vcpu_aia_imsic_reset(vcpu);
 }
 
-int kvm_riscv_vcpu_aia_init(struct kvm_vcpu *vcpu)
+void kvm_riscv_vcpu_aia_init(struct kvm_vcpu *vcpu)
 {
 	struct kvm_vcpu_aia *vaia = &vcpu->arch.aia_context;
 
 	if (!kvm_riscv_aia_available())
-		return 0;
+		return;
 
 	/*
 	 * We don't do any memory allocations over here because these
@@ -526,8 +536,6 @@ int kvm_riscv_vcpu_aia_init(struct kvm_vcpu *vcpu)
 	/* Initialize default values in AIA vcpu context */
 	vaia->imsic_addr = KVM_RISCV_AIA_UNDEF_ADDR;
 	vaia->hart_index = vcpu->vcpu_idx;
-
-	return 0;
 }
 
 void kvm_riscv_vcpu_aia_deinit(struct kvm_vcpu *vcpu)

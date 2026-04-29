@@ -35,6 +35,9 @@ properties:
       - description: Qcom SoCs implementing "qcom,smmu-500" and "arm,mmu-500"
         items:
           - enum:
+              - qcom,glymur-smmu-500
+              - qcom,kaanapali-smmu-500
+              - qcom,milos-smmu-500
               - qcom,qcm2290-smmu-500
               - qcom,qcs615-smmu-500
               - qcom,qcs8300-smmu-500
@@ -88,6 +91,9 @@ properties:
       - description: Qcom Adreno GPUs implementing "qcom,smmu-500" and "arm,mmu-500"
         items:
           - enum:
+              - qcom,glymur-smmu-500
+              - qcom,kaanapali-smmu-500
+              - qcom,milos-smmu-500
               - qcom,qcm2290-smmu-500
               - qcom,qcs615-smmu-500
               - qcom,qcs8300-smmu-500
@@ -131,10 +137,6 @@ properties:
               - qcom,sm6350-smmu-v2
               - qcom,sm7150-smmu-v2
           - const: qcom,adreno-smmu
-          - const: qcom,smmu-v2
-      - description: Qcom Adreno GPUs on Google Cheza platform
-        items:
-          - const: qcom,sdm845-smmu-v2
           - const: qcom,smmu-v2
       - description: Marvell SoCs implementing "arm,mmu-500"
         items:
@@ -534,6 +536,7 @@ allOf:
         compatible:
           items:
             - enum:
+                - qcom,milos-smmu-500
                 - qcom,sar2130p-smmu-500
                 - qcom,sm8550-smmu-500
                 - qcom,sm8650-smmu-500
@@ -639,7 +642,6 @@ examples:
                      <&smmu1 7>;
     };
 
-
     /* SMMU with stream matching */
     smmu2: iommu@ba5f0000 {
             compatible = "arm,smmu-v1";
@@ -665,7 +667,6 @@ examples:
             iommus = <&smmu2 1 0x30>;
     };
 
-
     /* ARM MMU-500 with 10-bit stream ID input configuration */
     smmu3: iommu@ba600000 {
             compatible = "arm,mmu-500", "arm,smmu-v2";
@@ -686,8 +687,6 @@ examples:
             /* bus whose child devices emit one unique 10-bit stream
                ID each, but may master through multiple SMMU TBUs */
             iommu-map = <0 &smmu3 0 0x400>;
-
-
     };
 
   - |+

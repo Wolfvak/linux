@@ -120,19 +120,19 @@ static void calculate_bandwidth(
 	int32_t number_of_displays_enabled_with_margin = 0;
 	int32_t number_of_aligned_displays_with_no_margin = 0;
 
-	yclk = kcalloc(3, sizeof(*yclk), GFP_KERNEL);
+	yclk = kzalloc_objs(*yclk, 3);
 	if (!yclk)
 		return;
 
-	sclk = kcalloc(8, sizeof(*sclk), GFP_KERNEL);
+	sclk = kzalloc_objs(*sclk, 8);
 	if (!sclk)
 		goto free_yclk;
 
-	tiling_mode = kcalloc(maximum_number_of_surfaces, sizeof(*tiling_mode), GFP_KERNEL);
+	tiling_mode = kzalloc_objs(*tiling_mode, maximum_number_of_surfaces);
 	if (!tiling_mode)
 		goto free_sclk;
 
-	surface_type = kcalloc(maximum_number_of_surfaces, sizeof(*surface_type), GFP_KERNEL);
+	surface_type = kzalloc_objs(*surface_type, maximum_number_of_surfaces);
 	if (!surface_type)
 		goto free_tiling_mode;
 
@@ -1136,7 +1136,7 @@ static void calculate_bandwidth(
 			}
 		}
 	}
-	data->total_dmifmc_urgent_trips = bw_ceil2(bw_div(data->total_requests_for_adjusted_dmif_size, (bw_add(dceip->dmif_request_buffer_size, bw_int_to_fixed(vbios->number_of_request_slots_gmc_reserves_for_dmif_per_channel * data->number_of_dram_channels)))), bw_int_to_fixed(1));
+	data->total_dmifmc_urgent_trips = bw_ceil2(bw_div(data->total_requests_for_adjusted_dmif_size, (bw_add(dceip->dmif_request_buffer_size, bw_int_to_fixed((uint64_t)vbios->number_of_request_slots_gmc_reserves_for_dmif_per_channel * data->number_of_dram_channels)))), bw_int_to_fixed(1));
 	data->total_dmifmc_urgent_latency = bw_mul(vbios->dmifmc_urgent_latency, data->total_dmifmc_urgent_trips);
 	data->total_display_reads_required_data = bw_int_to_fixed(0);
 	data->total_display_reads_required_dram_access_data = bw_int_to_fixed(0);
@@ -2049,11 +2049,11 @@ void bw_calcs_init(struct bw_calcs_dceip *bw_dceip,
 
 	enum bw_calcs_version version = bw_calcs_version_from_asic_id(asic_id);
 
-	dceip = kzalloc(sizeof(*dceip), GFP_KERNEL);
+	dceip = kzalloc_obj(*dceip);
 	if (!dceip)
 		return;
 
-	vbios = kzalloc(sizeof(*vbios), GFP_KERNEL);
+	vbios = kzalloc_obj(*vbios);
 	if (!vbios) {
 		kfree(dceip);
 		return;
@@ -3045,8 +3045,7 @@ bool bw_calcs(struct dc_context *ctx,
 	int pipe_count,
 	struct dce_bw_output *calcs_output)
 {
-	struct bw_calcs_data *data = kzalloc(sizeof(struct bw_calcs_data),
-					     GFP_KERNEL);
+	struct bw_calcs_data *data = kzalloc_obj(struct bw_calcs_data);
 	if (!data)
 		return false;
 

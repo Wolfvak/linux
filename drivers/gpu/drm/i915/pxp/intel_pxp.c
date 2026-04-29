@@ -2,15 +2,17 @@
 /*
  * Copyright(c) 2020 Intel Corporation.
  */
+
 #include <linux/workqueue.h>
 
-#include "gem/i915_gem_context.h"
+#include <drm/drm_print.h>
 
+#include "gem/i915_gem_context.h"
 #include "gt/intel_context.h"
 #include "gt/intel_gt.h"
 
 #include "i915_drv.h"
-
+#include "i915_wait_util.h"
 #include "intel_pxp.h"
 #include "intel_pxp_gsccs.h"
 #include "intel_pxp_irq.h"
@@ -220,7 +222,7 @@ int intel_pxp_init(struct drm_i915_private *i915)
 	 * including session and object management, or we will init the backend tee
 	 * channel for internal users such as HuC loading by GSC
 	 */
-	i915->pxp = kzalloc(sizeof(*i915->pxp), GFP_KERNEL);
+	i915->pxp = kzalloc_obj(*i915->pxp);
 	if (!i915->pxp)
 		return -ENOMEM;
 

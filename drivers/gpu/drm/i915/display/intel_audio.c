@@ -951,7 +951,7 @@ static int glk_force_audio_cdclk_commit(struct intel_atomic_state *state,
 	if (IS_ERR(cdclk_state))
 		return PTR_ERR(cdclk_state);
 
-	cdclk_state->force_min_cdclk = enable ? 2 * 96000 : 0;
+	intel_cdclk_force_min_cdclk(cdclk_state, enable ? 2 * 96000 : 0);
 
 	return drm_atomic_commit(&state->base);
 }
@@ -1042,10 +1042,10 @@ int intel_audio_min_cdclk(const struct intel_crtc_state *crtc_state)
 static unsigned long intel_audio_component_get_power(struct device *kdev)
 {
 	struct intel_display *display = to_intel_display(kdev);
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 
 	/* Catch potential impedance mismatches before they occur! */
-	BUILD_BUG_ON(sizeof(intel_wakeref_t) > sizeof(unsigned long));
+	BUILD_BUG_ON(sizeof(wakeref) > sizeof(unsigned long));
 
 	wakeref = intel_display_power_get(display, POWER_DOMAIN_AUDIO_PLAYBACK);
 
@@ -1074,7 +1074,7 @@ static void intel_audio_component_put_power(struct device *kdev,
 					    unsigned long cookie)
 {
 	struct intel_display *display = to_intel_display(kdev);
-	intel_wakeref_t wakeref = (intel_wakeref_t)cookie;
+	struct ref_tracker *wakeref = (struct ref_tracker *)cookie;
 
 	/* Stop forcing CDCLK to 2*BCLK if no need for audio to be powered. */
 	if (--display->audio.power_refcount == 0)

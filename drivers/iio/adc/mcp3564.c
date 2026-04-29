@@ -987,7 +987,7 @@ static int mcp3564_read_label(struct iio_dev *indio_dev,
 {
 	struct mcp3564_state *adc = iio_priv(indio_dev);
 
-	return sprintf(label, "%s\n", adc->labels[chan->scan_index]);
+	return sysfs_emit(label, "%s\n", adc->labels[chan->scan_index]);
 }
 
 static int mcp3564_parse_fw_children(struct iio_dev *indio_dev)
@@ -1019,7 +1019,7 @@ static int mcp3564_parse_fw_children(struct iio_dev *indio_dev)
 
 	channels = devm_kcalloc(dev, num_ch, sizeof(*channels), GFP_KERNEL);
 	if (!channels)
-		return dev_err_probe(dev, -ENOMEM, "Can't allocate memory\n");
+		return -ENOMEM;
 
 	device_for_each_child_node_scoped(dev, child) {
 		node_name = fwnode_get_name(child);

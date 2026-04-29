@@ -481,8 +481,7 @@ void aac_define_int_mode(struct aac_dev *dev)
 	    pci_find_capability(dev->pdev, PCI_CAP_ID_MSIX)) {
 		min_msix = 2;
 		i = pci_alloc_irq_vectors(dev->pdev,
-					  min_msix, msi_count,
-					  PCI_IRQ_MSIX | PCI_IRQ_AFFINITY);
+					  min_msix, msi_count, PCI_IRQ_MSIX);
 		if (i > 0) {
 			dev->msi_enabled = 1;
 			msi_count = i;
@@ -633,7 +632,7 @@ struct aac_dev *aac_init_adapter(struct aac_dev *dev)
 	 *	Ok now init the communication subsystem
 	 */
 
-	dev->queues = kzalloc(sizeof(struct aac_queue_block), GFP_KERNEL);
+	dev->queues = kzalloc_obj(struct aac_queue_block);
 	if (dev->queues == NULL) {
 		printk(KERN_ERR "Error could not allocate comm region.\n");
 		return NULL;

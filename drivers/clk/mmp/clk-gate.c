@@ -15,7 +15,7 @@
 #include "clk.h"
 
 /*
- * Some clocks will have mutiple bits to enable the clocks, and
+ * Some clocks will have multiple bits to enable the clocks, and
  * the bits to disable the clock is not same as enabling bits.
  */
 
@@ -99,7 +99,7 @@ struct clk *mmp_clk_register_gate(struct device *dev, const char *name,
 	struct clk_init_data init;
 
 	/* allocate the gate */
-	gate = kzalloc(sizeof(*gate), GFP_KERNEL);
+	gate = kzalloc_obj(*gate);
 	if (!gate)
 		return ERR_PTR(-ENOMEM);
 

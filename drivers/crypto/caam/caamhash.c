@@ -441,9 +441,10 @@ static int ahash_setkey(struct crypto_ahash *ahash,
 		if (aligned_len < keylen)
 			return -EOVERFLOW;
 
-		hashed_key = kmemdup(key, keylen, GFP_KERNEL);
+		hashed_key = kmalloc(aligned_len, GFP_KERNEL);
 		if (!hashed_key)
 			return -ENOMEM;
+		memcpy(hashed_key, key, keylen);
 		ret = hash_digest_key(ctx, &keylen, hashed_key, digestsize);
 		if (ret)
 			goto bad_free_key;
@@ -709,7 +710,7 @@ static struct ahash_edesc *ahash_edesc_alloc(struct ahash_request *req,
 	struct ahash_edesc *edesc;
 
 	sg_num = pad_sg_nents(sg_num);
-	edesc = kzalloc(struct_size(edesc, sec4_sg, sg_num), flags);
+	edesc = kzalloc_flex(*edesc, sec4_sg, sg_num, flags);
 	if (!edesc)
 		return NULL;
 
@@ -1904,7 +1905,7 @@ caam_hash_alloc(struct caam_hash_template *template,
 	struct ahash_alg *halg;
 	struct crypto_alg *alg;
 
-	t_alg = kzalloc(sizeof(*t_alg), GFP_KERNEL);
+	t_alg = kzalloc_obj(*t_alg);
 	if (!t_alg)
 		return ERR_PTR(-ENOMEM);
 

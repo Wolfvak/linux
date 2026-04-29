@@ -16,23 +16,24 @@
 #define DRV_NAME "netkit"
 
 struct netkit {
-	/* Needed in fast-path */
+	__cacheline_group_begin(netkit_fastpath);
 	struct net_device __rcu *peer;
 	struct bpf_mprog_entry __rcu *active;
 	enum netkit_action policy;
 	enum netkit_scrub scrub;
 	struct bpf_mprog_bundle	bundle;
+	__cacheline_group_end(netkit_fastpath);
 
-	/* Needed in slow-path */
+	__cacheline_group_begin(netkit_slowpath);
 	enum netkit_mode mode;
 	bool primary;
 	u32 headroom;
+	__cacheline_group_end(netkit_slowpath);
 };
 
 struct netkit_link {
 	struct bpf_link link;
 	struct net_device *dev;
-	u32 location;
 };
 
 static __always_inline int
@@ -733,8 +734,8 @@ static void netkit_link_fdinfo(const struct bpf_link *link, struct seq_file *seq
 
 	seq_printf(seq, "ifindex:\t%u\n", ifindex);
 	seq_printf(seq, "attach_type:\t%u (%s)\n",
-		   nkl->location,
-		   nkl->location == BPF_NETKIT_PRIMARY ? "primary" : "peer");
+		   link->attach_type,
+		   link->attach_type == BPF_NETKIT_PRIMARY ? "primary" : "peer");
 }
 
 static int netkit_link_fill_info(const struct bpf_link *link,
@@ -749,7 +750,7 @@ static int netkit_link_fill_info(const struct bpf_link *link,
 	rtnl_unlock();
 
 	info->netkit.ifindex = ifindex;
-	info->netkit.attach_type = nkl->location;
+	info->netkit.attach_type = link->attach_type;
 	return 0;
 }
 
@@ -775,8 +776,7 @@ static int netkit_link_init(struct netkit_link *nkl,
 			    struct bpf_prog *prog)
 {
 	bpf_link_init(&nkl->link, BPF_LINK_TYPE_NETKIT,
-		      &netkit_link_lops, prog);
-	nkl->location = attr->link_create.attach_type;
+		      &netkit_link_lops, prog, attr->link_create.attach_type);
 	nkl->dev = dev;
 	return bpf_link_prime(&nkl->link, link_primer);
 }
@@ -796,7 +796,7 @@ int netkit_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 		ret = PTR_ERR(dev);
 		goto out;
 	}
-	nkl = kzalloc(sizeof(*nkl), GFP_KERNEL_ACCOUNT);
+	nkl = kzalloc_obj(*nkl, GFP_KERNEL_ACCOUNT);
 	if (!nkl) {
 		ret = -ENOMEM;
 		goto out;

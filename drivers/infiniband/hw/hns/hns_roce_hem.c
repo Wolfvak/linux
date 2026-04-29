@@ -249,14 +249,11 @@ int hns_roce_calc_hem_mhop(struct hns_roce_dev *hr_dev,
 }
 
 static struct hns_roce_hem *hns_roce_alloc_hem(struct hns_roce_dev *hr_dev,
-					       unsigned long hem_alloc_size,
-					       gfp_t gfp_mask)
+					       unsigned long hem_alloc_size)
 {
 	struct hns_roce_hem *hem;
 	int order;
 	void *buf;
-
-	WARN_ON(gfp_mask & __GFP_HIGHMEM);
 
 	order = get_order(hem_alloc_size);
 	if (PAGE_SIZE << order != hem_alloc_size) {
@@ -265,13 +262,12 @@ static struct hns_roce_hem *hns_roce_alloc_hem(struct hns_roce_dev *hr_dev,
 		return NULL;
 	}
 
-	hem = kmalloc(sizeof(*hem),
-		      gfp_mask & ~(__GFP_HIGHMEM | __GFP_NOWARN));
+	hem = kmalloc_obj(*hem);
 	if (!hem)
 		return NULL;
 
 	buf = dma_alloc_coherent(hr_dev->dev, hem_alloc_size,
-				 &hem->dma, gfp_mask);
+				 &hem->dma, GFP_KERNEL);
 	if (!buf)
 		goto fail;
 
@@ -378,7 +374,6 @@ static int alloc_mhop_hem(struct hns_roce_dev *hr_dev,
 {
 	u32 bt_size = mhop->bt_chunk_size;
 	struct device *dev = hr_dev->dev;
-	gfp_t flag;
 	u64 bt_ba;
 	u32 size;
 	int ret;
@@ -417,8 +412,7 @@ static int alloc_mhop_hem(struct hns_roce_dev *hr_dev,
 	 * alloc bt space chunk for MTT/CQE.
 	 */
 	size = table->type < HEM_TYPE_MTT ? mhop->buf_chunk_size : bt_size;
-	flag = GFP_KERNEL | __GFP_NOWARN;
-	table->hem[index->buf] = hns_roce_alloc_hem(hr_dev, size, flag);
+	table->hem[index->buf] = hns_roce_alloc_hem(hr_dev, size);
 	if (!table->hem[index->buf]) {
 		ret = -ENOMEM;
 		goto err_alloc_hem;
@@ -546,9 +540,7 @@ int hns_roce_table_get(struct hns_roce_dev *hr_dev,
 		goto out;
 	}
 
-	table->hem[i] = hns_roce_alloc_hem(hr_dev,
-				       table->table_chunk_size,
-				       GFP_KERNEL | __GFP_NOWARN);
+	table->hem[i] = hns_roce_alloc_hem(hr_dev, table->table_chunk_size);
 	if (!table->hem[i]) {
 		ret = -ENOMEM;
 		goto out;
@@ -745,7 +737,7 @@ int hns_roce_init_hem_table(struct hns_roce_dev *hr_dev,
 		obj_per_chunk = table->table_chunk_size / obj_size;
 		num_hem = DIV_ROUND_UP(nobj, obj_per_chunk);
 
-		table->hem = kcalloc(num_hem, sizeof(*table->hem), GFP_KERNEL);
+		table->hem = kzalloc_objs(*table->hem, num_hem);
 		if (!table->hem)
 			return -ENOMEM;
 	} else {
@@ -771,8 +763,7 @@ int hns_roce_init_hem_table(struct hns_roce_dev *hr_dev,
 		if (type >= HEM_TYPE_MTT)
 			num_bt_l0 = bt_chunk_num;
 
-		table->hem = kcalloc(num_hem, sizeof(*table->hem),
-					 GFP_KERNEL);
+		table->hem = kzalloc_objs(*table->hem, num_hem);
 		if (!table->hem)
 			goto err_kcalloc_hem_buf;
 
@@ -786,9 +777,8 @@ int hns_roce_init_hem_table(struct hns_roce_dev *hr_dev,
 			if (!table->bt_l1)
 				goto err_kcalloc_bt_l1;
 
-			table->bt_l1_dma_addr = kcalloc(num_bt_l1,
-						 sizeof(*table->bt_l1_dma_addr),
-						 GFP_KERNEL);
+			table->bt_l1_dma_addr = kzalloc_objs(*table->bt_l1_dma_addr,
+							     num_bt_l1);
 
 			if (!table->bt_l1_dma_addr)
 				goto err_kcalloc_l1_dma;
@@ -801,9 +791,8 @@ int hns_roce_init_hem_table(struct hns_roce_dev *hr_dev,
 			if (!table->bt_l0)
 				goto err_kcalloc_bt_l0;
 
-			table->bt_l0_dma_addr = kcalloc(num_bt_l0,
-						 sizeof(*table->bt_l0_dma_addr),
-						 GFP_KERNEL);
+			table->bt_l0_dma_addr = kzalloc_objs(*table->bt_l0_dma_addr,
+							     num_bt_l0);
 			if (!table->bt_l0_dma_addr)
 				goto err_kcalloc_l0_dma;
 		}
@@ -947,7 +936,7 @@ hem_list_alloc_item(struct hns_roce_dev *hr_dev, int start, int end, int count,
 {
 	struct hns_roce_hem_item *hem;
 
-	hem = kzalloc(sizeof(*hem), GFP_KERNEL);
+	hem = kzalloc_obj(*hem);
 	if (!hem)
 		return NULL;
 

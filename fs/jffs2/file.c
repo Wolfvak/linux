@@ -14,6 +14,7 @@
 
 #include <linux/kernel.h>
 #include <linux/fs.h>
+#include <linux/filelock.h>
 #include <linux/time.h>
 #include <linux/pagemap.h>
 #include <linux/highmem.h>
@@ -21,12 +22,14 @@
 #include <linux/jffs2.h>
 #include "nodelist.h"
 
-static int jffs2_write_end(struct file *filp, struct address_space *mapping,
-			loff_t pos, unsigned len, unsigned copied,
-			struct folio *folio, void *fsdata);
-static int jffs2_write_begin(struct file *filp, struct address_space *mapping,
-			loff_t pos, unsigned len,
-			struct folio **foliop, void **fsdata);
+static int jffs2_write_end(const struct kiocb *iocb,
+			   struct address_space *mapping,
+			   loff_t pos, unsigned len, unsigned copied,
+			   struct folio *folio, void *fsdata);
+static int jffs2_write_begin(const struct kiocb *iocb,
+			     struct address_space *mapping,
+			     loff_t pos, unsigned len,
+			     struct folio **foliop, void **fsdata);
 static int jffs2_read_folio(struct file *filp, struct folio *folio);
 
 int jffs2_fsync(struct file *filp, loff_t start, loff_t end, int datasync)
@@ -54,10 +57,11 @@ const struct file_operations jffs2_file_operations =
  	.read_iter =	generic_file_read_iter,
  	.write_iter =	generic_file_write_iter,
 	.unlocked_ioctl=jffs2_ioctl,
-	.mmap =		generic_file_readonly_mmap,
+	.mmap_prepare =	generic_file_readonly_mmap_prepare,
 	.fsync =	jffs2_fsync,
 	.splice_read =	filemap_splice_read,
 	.splice_write = iter_file_splice_write,
+	.setlease =	generic_setlease,
 };
 
 /* jffs2_file_inode_operations */
@@ -121,9 +125,10 @@ static int jffs2_read_folio(struct file *file, struct folio *folio)
 	return ret;
 }
 
-static int jffs2_write_begin(struct file *filp, struct address_space *mapping,
-			loff_t pos, unsigned len,
-			struct folio **foliop, void **fsdata)
+static int jffs2_write_begin(const struct kiocb *iocb,
+			     struct address_space *mapping,
+			     loff_t pos, unsigned len,
+			     struct folio **foliop, void **fsdata)
 {
 	struct folio *folio;
 	struct inode *inode = mapping->host;
@@ -227,7 +232,7 @@ static int jffs2_write_begin(struct file *filp, struct address_space *mapping,
 			goto release_sem;
 		}
 	}
-	jffs2_dbg(1, "end write_begin(). folio->flags %lx\n", folio->flags);
+	jffs2_dbg(1, "end write_begin(). folio->flags %lx\n", folio->flags.f);
 
 release_sem:
 	mutex_unlock(&c->alloc_sem);
@@ -235,9 +240,10 @@ out_err:
 	return ret;
 }
 
-static int jffs2_write_end(struct file *filp, struct address_space *mapping,
-			loff_t pos, unsigned len, unsigned copied,
-			struct folio *folio, void *fsdata)
+static int jffs2_write_end(const struct kiocb *iocb,
+			   struct address_space *mapping,
+			   loff_t pos, unsigned len, unsigned copied,
+			   struct folio *folio, void *fsdata)
 {
 	/* Actually commit the write from the page cache page we're looking at.
 	 * For now, we write the full page out each time. It sucks, but it's simple
@@ -255,7 +261,7 @@ static int jffs2_write_end(struct file *filp, struct address_space *mapping,
 
 	jffs2_dbg(1, "%s(): ino #%lu, page at 0x%llx, range %d-%d, flags %lx\n",
 		  __func__, inode->i_ino, folio_pos(folio),
-		  start, end, folio->flags);
+		  start, end, folio->flags.f);
 
 	/* We need to avoid deadlock with page_cache_read() in
 	   jffs2_garbage_collect_pass(). So the folio must be

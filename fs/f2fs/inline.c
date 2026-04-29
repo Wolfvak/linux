@@ -33,9 +33,9 @@ bool f2fs_may_inline_data(struct inode *inode)
 	return !f2fs_post_read_required(inode);
 }
 
-static bool inode_has_blocks(struct inode *inode, struct page *ipage)
+static bool inode_has_blocks(struct inode *inode, struct folio *ifolio)
 {
-	struct f2fs_inode *ri = F2FS_INODE(ipage);
+	struct f2fs_inode *ri = F2FS_INODE(ifolio);
 	int i;
 
 	if (F2FS_HAS_BLOCKS(inode))
@@ -48,12 +48,12 @@ static bool inode_has_blocks(struct inode *inode, struct page *ipage)
 	return false;
 }
 
-bool f2fs_sanity_check_inline_data(struct inode *inode, struct page *ipage)
+bool f2fs_sanity_check_inline_data(struct inode *inode, struct folio *ifolio)
 {
 	if (!f2fs_has_inline_data(inode))
 		return false;
 
-	if (inode_has_blocks(inode, ipage))
+	if (inode_has_blocks(inode, ifolio))
 		return false;
 
 	if (!support_inline_data(inode))
@@ -150,7 +150,7 @@ int f2fs_convert_inline_folio(struct dnode_of_data *dn, struct folio *folio)
 		.type = DATA,
 		.op = REQ_OP_WRITE,
 		.op_flags = REQ_SYNC | REQ_PRIO,
-		.page = &folio->page,
+		.folio = folio,
 		.encrypted_page = NULL,
 		.io_type = FS_DATA_IO,
 	};
@@ -206,7 +206,7 @@ int f2fs_convert_inline_folio(struct dnode_of_data *dn, struct folio *folio)
 
 	/* clear inline data and flag after data writeback */
 	f2fs_truncate_inline_inode(dn->inode, dn->inode_folio, 0);
-	clear_page_private_inline(&dn->inode_folio->page);
+	folio_clear_f2fs_inline(dn->inode_folio);
 clear_out:
 	stat_dec_inline_inode(dn->inode);
 	clear_inode_flag(dn->inode, FI_INLINE_DATA);
@@ -218,6 +218,7 @@ int f2fs_convert_inline_inode(struct inode *inode)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct dnode_of_data dn;
+	struct f2fs_lock_context lc;
 	struct folio *ifolio, *folio;
 	int err = 0;
 
@@ -235,7 +236,7 @@ int f2fs_convert_inline_inode(struct inode *inode)
 	if (IS_ERR(folio))
 		return PTR_ERR(folio);
 
-	f2fs_lock_op(sbi);
+	f2fs_lock_op(sbi, &lc);
 
 	ifolio = f2fs_get_inode_folio(sbi, inode->i_ino);
 	if (IS_ERR(ifolio)) {
@@ -250,7 +251,7 @@ int f2fs_convert_inline_inode(struct inode *inode)
 
 	f2fs_put_dnode(&dn);
 out:
-	f2fs_unlock_op(sbi);
+	f2fs_unlock_op(sbi, &lc);
 
 	f2fs_folio_put(folio, true);
 
@@ -286,8 +287,8 @@ int f2fs_write_inline_data(struct inode *inode, struct folio *folio)
 	set_inode_flag(inode, FI_APPEND_WRITE);
 	set_inode_flag(inode, FI_DATA_EXIST);
 
-	clear_page_private_inline(&ifolio->page);
-	f2fs_folio_put(ifolio, 1);
+	folio_clear_f2fs_inline(ifolio);
+	f2fs_folio_put(ifolio, true);
 	return 0;
 }
 
@@ -305,8 +306,8 @@ int f2fs_recover_inline_data(struct inode *inode, struct folio *nfolio)
 	 *    x       o  -> remove data blocks, and then recover inline_data
 	 *    x       x  -> recover data blocks
 	 */
-	if (IS_INODE(&nfolio->page))
-		ri = F2FS_INODE(&nfolio->page);
+	if (IS_INODE(nfolio))
+		ri = F2FS_INODE(nfolio);
 
 	if (f2fs_has_inline_data(inode) &&
 			ri && (ri->i_inline & F2FS_INLINE_DATA)) {
@@ -577,7 +578,7 @@ recover:
 	f2fs_i_depth_write(dir, 0);
 	f2fs_i_size_write(dir, MAX_INLINE_DATA(dir));
 	folio_mark_dirty(ifolio);
-	f2fs_folio_put(ifolio, 1);
+	f2fs_folio_put(ifolio, true);
 
 	kfree(backup_dentry);
 	return err;
@@ -597,13 +598,14 @@ int f2fs_try_convert_inline_dir(struct inode *dir, struct dentry *dentry)
 	struct f2fs_sb_info *sbi = F2FS_I_SB(dir);
 	struct folio *ifolio;
 	struct f2fs_filename fname;
+	struct f2fs_lock_context lc;
 	void *inline_dentry = NULL;
 	int err = 0;
 
 	if (!f2fs_has_inline_dentry(dir))
 		return 0;
 
-	f2fs_lock_op(sbi);
+	f2fs_lock_op(sbi, &lc);
 
 	err = f2fs_setup_filename(dir, &dentry->d_name, 0, &fname);
 	if (err)
@@ -628,7 +630,7 @@ int f2fs_try_convert_inline_dir(struct inode *dir, struct dentry *dentry)
 out_fname:
 	f2fs_free_filename(&fname);
 out:
-	f2fs_unlock_op(sbi);
+	f2fs_unlock_op(sbi, &lc);
 	return err;
 }
 
@@ -825,7 +827,7 @@ int f2fs_inline_data_fiemap(struct inode *inode,
 
 	byteaddr = (__u64)ni.blk_addr << inode->i_sb->s_blocksize_bits;
 	byteaddr += (char *)inline_data_addr(inode, ifolio) -
-					(char *)F2FS_INODE(&ifolio->page);
+					(char *)F2FS_INODE(ifolio);
 	err = fiemap_fill_next_extent(fieinfo, start, byteaddr, ilen, flags);
 	trace_f2fs_fiemap(inode, start, byteaddr, ilen, flags, err);
 out:

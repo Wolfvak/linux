@@ -4,13 +4,18 @@
  */
 
 #include <linux/debugfs.h>
+#include <linux/iopoll.h>
+
+#include <drm/drm_print.h>
 
 #include "g4x_dp.h"
-#include "i915_drv.h"
 #include "i915_reg.h"
 #include "intel_de.h"
+#include "intel_display_jiffies.h"
 #include "intel_display_power_well.h"
+#include "intel_display_regs.h"
 #include "intel_display_types.h"
+#include "intel_display_utils.h"
 #include "intel_dp.h"
 #include "intel_dpio_phy.h"
 #include "intel_dpll.h"
@@ -62,10 +67,10 @@ static const char *pps_name(struct intel_dp *intel_dp)
 	return "PPS <invalid>";
 }
 
-intel_wakeref_t intel_pps_lock(struct intel_dp *intel_dp)
+struct ref_tracker *intel_pps_lock(struct intel_dp *intel_dp)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 
 	/*
 	 * See vlv_pps_reset_all() why we need a power domain reference here.
@@ -76,8 +81,7 @@ intel_wakeref_t intel_pps_lock(struct intel_dp *intel_dp)
 	return wakeref;
 }
 
-intel_wakeref_t intel_pps_unlock(struct intel_dp *intel_dp,
-				 intel_wakeref_t wakeref)
+struct ref_tracker *intel_pps_unlock(struct intel_dp *intel_dp, struct ref_tracker *wakeref)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 
@@ -605,6 +609,8 @@ static void wait_panel_status(struct intel_dp *intel_dp,
 	struct intel_display *display = to_intel_display(intel_dp);
 	struct intel_digital_port *dig_port = dp_to_dig_port(intel_dp);
 	i915_reg_t pp_stat_reg, pp_ctrl_reg;
+	int ret;
+	u32 val;
 
 	lockdep_assert_held(&display->pps.mutex);
 
@@ -621,13 +627,18 @@ static void wait_panel_status(struct intel_dp *intel_dp,
 		    intel_de_read(display, pp_stat_reg),
 		    intel_de_read(display, pp_ctrl_reg));
 
-	if (intel_de_wait(display, pp_stat_reg, mask, value, 5000))
+	ret = poll_timeout_us(val = intel_de_read(display, pp_stat_reg),
+			      (val & mask) == value,
+			      10 * 1000, 5000 * 1000, true);
+	if (ret) {
 		drm_err(display->drm,
 			"[ENCODER:%d:%s] %s panel status timeout: PP_STATUS: 0x%08x PP_CONTROL: 0x%08x\n",
 			dig_port->base.base.base.id, dig_port->base.base.name,
 			pps_name(intel_dp),
 			intel_de_read(display, pp_stat_reg),
 			intel_de_read(display, pp_ctrl_reg));
+		return;
+	}
 
 	drm_dbg_kms(display->drm, "Wait complete\n");
 }
@@ -685,12 +696,10 @@ static void wait_panel_power_cycle(struct intel_dp *intel_dp)
 
 void intel_pps_wait_power_cycle(struct intel_dp *intel_dp)
 {
-	intel_wakeref_t wakeref;
-
 	if (!intel_dp_is_edp(intel_dp))
 		return;
 
-	with_intel_pps_lock(intel_dp, wakeref)
+	with_intel_pps_lock(intel_dp)
 		wait_panel_power_cycle(intel_dp);
 }
 
@@ -799,14 +808,13 @@ bool intel_pps_vdd_on_unlocked(struct intel_dp *intel_dp)
 void intel_pps_vdd_on(struct intel_dp *intel_dp)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
-	intel_wakeref_t wakeref;
 	bool vdd;
 
 	if (!intel_dp_is_edp(intel_dp))
 		return;
 
 	vdd = false;
-	with_intel_pps_lock(intel_dp, wakeref)
+	with_intel_pps_lock(intel_dp)
 		vdd = intel_pps_vdd_on_unlocked(intel_dp);
 	INTEL_DISPLAY_STATE_WARN(display, !vdd, "[ENCODER:%d:%s] %s VDD already requested on\n",
 				 dp_to_dig_port(intel_dp)->base.base.base.id,
@@ -861,8 +869,6 @@ static void intel_pps_vdd_off_sync_unlocked(struct intel_dp *intel_dp)
 
 void intel_pps_vdd_off_sync(struct intel_dp *intel_dp)
 {
-	intel_wakeref_t wakeref;
-
 	if (!intel_dp_is_edp(intel_dp))
 		return;
 
@@ -871,7 +877,7 @@ void intel_pps_vdd_off_sync(struct intel_dp *intel_dp)
 	 * vdd might still be enabled due to the delayed vdd off.
 	 * Make sure vdd is actually turned off here.
 	 */
-	with_intel_pps_lock(intel_dp, wakeref)
+	with_intel_pps_lock(intel_dp)
 		intel_pps_vdd_off_sync_unlocked(intel_dp);
 }
 
@@ -880,9 +886,8 @@ static void edp_panel_vdd_work(struct work_struct *__work)
 	struct intel_pps *pps = container_of(to_delayed_work(__work),
 					     struct intel_pps, panel_vdd_work);
 	struct intel_dp *intel_dp = container_of(pps, struct intel_dp, pps);
-	intel_wakeref_t wakeref;
 
-	with_intel_pps_lock(intel_dp, wakeref) {
+	with_intel_pps_lock(intel_dp) {
 		if (!intel_dp->pps.want_panel_vdd)
 			intel_pps_vdd_off_sync_unlocked(intel_dp);
 	}
@@ -891,7 +896,6 @@ static void edp_panel_vdd_work(struct work_struct *__work)
 static void edp_panel_vdd_schedule_off(struct intel_dp *intel_dp)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
-	struct drm_i915_private *i915 = to_i915(display->drm);
 	unsigned long delay;
 
 	/*
@@ -907,7 +911,7 @@ static void edp_panel_vdd_schedule_off(struct intel_dp *intel_dp)
 	 * operations.
 	 */
 	delay = msecs_to_jiffies(intel_dp->pps.panel_power_cycle_delay * 5);
-	queue_delayed_work(i915->unordered_wq,
+	queue_delayed_work(display->wq.unordered,
 			   &intel_dp->pps.panel_vdd_work, delay);
 }
 
@@ -941,12 +945,10 @@ void intel_pps_vdd_off_unlocked(struct intel_dp *intel_dp, bool sync)
 
 void intel_pps_vdd_off(struct intel_dp *intel_dp)
 {
-	intel_wakeref_t wakeref;
-
 	if (!intel_dp_is_edp(intel_dp))
 		return;
 
-	with_intel_pps_lock(intel_dp, wakeref)
+	with_intel_pps_lock(intel_dp)
 		intel_pps_vdd_off_unlocked(intel_dp, false);
 }
 
@@ -1015,12 +1017,10 @@ void intel_pps_on_unlocked(struct intel_dp *intel_dp)
 
 void intel_pps_on(struct intel_dp *intel_dp)
 {
-	intel_wakeref_t wakeref;
-
 	if (!intel_dp_is_edp(intel_dp))
 		return;
 
-	with_intel_pps_lock(intel_dp, wakeref)
+	with_intel_pps_lock(intel_dp)
 		intel_pps_on_unlocked(intel_dp);
 }
 
@@ -1071,12 +1071,10 @@ void intel_pps_off_unlocked(struct intel_dp *intel_dp)
 
 void intel_pps_off(struct intel_dp *intel_dp)
 {
-	intel_wakeref_t wakeref;
-
 	if (!intel_dp_is_edp(intel_dp))
 		return;
 
-	with_intel_pps_lock(intel_dp, wakeref)
+	with_intel_pps_lock(intel_dp)
 		intel_pps_off_unlocked(intel_dp);
 }
 
@@ -1084,7 +1082,6 @@ void intel_pps_off(struct intel_dp *intel_dp)
 void intel_pps_backlight_on(struct intel_dp *intel_dp)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
-	intel_wakeref_t wakeref;
 
 	/*
 	 * If we enable the backlight right away following a panel power
@@ -1094,7 +1091,7 @@ void intel_pps_backlight_on(struct intel_dp *intel_dp)
 	 */
 	wait_backlight_on(intel_dp);
 
-	with_intel_pps_lock(intel_dp, wakeref) {
+	with_intel_pps_lock(intel_dp) {
 		i915_reg_t pp_ctrl_reg = _pp_ctrl_reg(intel_dp);
 		u32 pp;
 
@@ -1110,12 +1107,11 @@ void intel_pps_backlight_on(struct intel_dp *intel_dp)
 void intel_pps_backlight_off(struct intel_dp *intel_dp)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
-	intel_wakeref_t wakeref;
 
 	if (!intel_dp_is_edp(intel_dp))
 		return;
 
-	with_intel_pps_lock(intel_dp, wakeref) {
+	with_intel_pps_lock(intel_dp) {
 		i915_reg_t pp_ctrl_reg = _pp_ctrl_reg(intel_dp);
 		u32 pp;
 
@@ -1138,11 +1134,10 @@ void intel_pps_backlight_power(struct intel_connector *connector, bool enable)
 {
 	struct intel_display *display = to_intel_display(connector);
 	struct intel_dp *intel_dp = intel_attached_dp(connector);
-	intel_wakeref_t wakeref;
 	bool is_enabled;
 
 	is_enabled = false;
-	with_intel_pps_lock(intel_dp, wakeref)
+	with_intel_pps_lock(intel_dp)
 		is_enabled = ilk_get_pp_control(intel_dp) & EDP_BLC_ENABLE;
 	if (is_enabled == enable)
 		return;
@@ -1240,9 +1235,7 @@ void vlv_pps_pipe_init(struct intel_dp *intel_dp)
 /* Call on all DP, not just eDP */
 void vlv_pps_pipe_reset(struct intel_dp *intel_dp)
 {
-	intel_wakeref_t wakeref;
-
-	with_intel_pps_lock(intel_dp, wakeref)
+	with_intel_pps_lock(intel_dp)
 		intel_dp->pps.vlv_active_pipe = vlv_active_pipe(intel_dp);
 }
 
@@ -1318,9 +1311,7 @@ void vlv_pps_port_disable(struct intel_encoder *encoder,
 {
 	struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
 
-	intel_wakeref_t wakeref;
-
-	with_intel_pps_lock(intel_dp, wakeref)
+	with_intel_pps_lock(intel_dp)
 		intel_dp->pps.vlv_active_pipe = INVALID_PIPE;
 }
 
@@ -1351,10 +1342,9 @@ static void pps_vdd_init(struct intel_dp *intel_dp)
 
 bool intel_pps_have_panel_power_or_vdd(struct intel_dp *intel_dp)
 {
-	intel_wakeref_t wakeref;
 	bool have_power = false;
 
-	with_intel_pps_lock(intel_dp, wakeref) {
+	with_intel_pps_lock(intel_dp) {
 		have_power = edp_have_panel_power(intel_dp) ||
 			     edp_have_panel_vdd(intel_dp);
 	}
@@ -1681,12 +1671,11 @@ static void pps_init_registers(struct intel_dp *intel_dp, bool force_disable_vdd
 void intel_pps_encoder_reset(struct intel_dp *intel_dp)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
-	intel_wakeref_t wakeref;
 
 	if (!intel_dp_is_edp(intel_dp))
 		return;
 
-	with_intel_pps_lock(intel_dp, wakeref) {
+	with_intel_pps_lock(intel_dp) {
 		/*
 		 * Reinit the power sequencer also on the resume path, in case
 		 * BIOS did something nasty with it.
@@ -1705,7 +1694,6 @@ void intel_pps_encoder_reset(struct intel_dp *intel_dp)
 
 bool intel_pps_init(struct intel_dp *intel_dp)
 {
-	intel_wakeref_t wakeref;
 	bool ret;
 
 	intel_dp->pps.initializing = true;
@@ -1713,7 +1701,7 @@ bool intel_pps_init(struct intel_dp *intel_dp)
 
 	pps_init_timestamps(intel_dp);
 
-	with_intel_pps_lock(intel_dp, wakeref) {
+	with_intel_pps_lock(intel_dp) {
 		ret = pps_initial_setup(intel_dp);
 
 		pps_init_delays(intel_dp);
@@ -1749,9 +1737,7 @@ static void pps_init_late(struct intel_dp *intel_dp)
 
 void intel_pps_init_late(struct intel_dp *intel_dp)
 {
-	intel_wakeref_t wakeref;
-
-	with_intel_pps_lock(intel_dp, wakeref) {
+	with_intel_pps_lock(intel_dp) {
 		/* Reinit delays after per-panel info has been parsed from VBT */
 		pps_init_late(intel_dp);
 

@@ -13,18 +13,31 @@
 #include <drm/gpu_scheduler.h>
 #include <linux/iommu.h>
 #include <linux/pci.h>
-#include <linux/pm_runtime.h>
 
 #include "amdxdna_ctx.h"
 #include "amdxdna_gem.h"
 #include "amdxdna_pci_drv.h"
-
-#define AMDXDNA_AUTOSUSPEND_DELAY	5000 /* milliseconds */
+#include "amdxdna_pm.h"
 
 MODULE_FIRMWARE("amdnpu/1502_00/npu.sbin");
 MODULE_FIRMWARE("amdnpu/17f0_10/npu.sbin");
 MODULE_FIRMWARE("amdnpu/17f0_11/npu.sbin");
 MODULE_FIRMWARE("amdnpu/17f0_20/npu.sbin");
+MODULE_FIRMWARE("amdnpu/1502_00/npu_7.sbin");
+MODULE_FIRMWARE("amdnpu/17f0_10/npu_7.sbin");
+MODULE_FIRMWARE("amdnpu/17f0_11/npu_7.sbin");
+
+/*
+ * 0.0: Initial version
+ * 0.1: Support getting all hardware contexts by DRM_IOCTL_AMDXDNA_GET_ARRAY
+ * 0.2: Support getting last error hardware error
+ * 0.3: Support firmware debug buffer
+ * 0.4: Support getting resource information
+ * 0.5: Support getting telemetry data
+ * 0.6: Support preemption
+ */
+#define AMDXDNA_DRIVER_MAJOR		0
+#define AMDXDNA_DRIVER_MINOR		6
 
 /*
  * Bind the driver base on (vendor_id, device_id) pair and later use the
@@ -41,7 +54,6 @@ MODULE_DEVICE_TABLE(pci, pci_ids);
 
 static const struct amdxdna_device_id amdxdna_ids[] = {
 	{ 0x1502, 0x0,  &dev_npu1_info },
-	{ 0x17f0, 0x0,  &dev_npu2_info },
 	{ 0x17f0, 0x10, &dev_npu4_info },
 	{ 0x17f0, 0x11, &dev_npu5_info },
 	{ 0x17f0, 0x20, &dev_npu6_info },
@@ -54,17 +66,9 @@ static int amdxdna_drm_open(struct drm_device *ddev, struct drm_file *filp)
 	struct amdxdna_client *client;
 	int ret;
 
-	ret = pm_runtime_resume_and_get(ddev->dev);
-	if (ret) {
-		XDNA_ERR(xdna, "Failed to get rpm, ret %d", ret);
-		return ret;
-	}
-
-	client = kzalloc(sizeof(*client), GFP_KERNEL);
-	if (!client) {
-		ret = -ENOMEM;
-		goto put_rpm;
-	}
+	client = kzalloc_obj(*client);
+	if (!client)
+		return -ENOMEM;
 
 	client->pid = pid_nr(rcu_access_pointer(filp->pid));
 	client->xdna = xdna;
@@ -81,7 +85,8 @@ static int amdxdna_drm_open(struct drm_device *ddev, struct drm_file *filp)
 		ret = -ENODEV;
 		goto unbind_sva;
 	}
-	mutex_init(&client->hwctx_lock);
+	client->mm = current->mm;
+	mmgrab(client->mm);
 	init_srcu_struct(&client->hwctx_srcu);
 	xa_init_flags(&client->hwctx_xa, XA_FLAGS_ALLOC);
 	mutex_init(&client->mm_lock);
@@ -100,53 +105,43 @@ unbind_sva:
 	iommu_sva_unbind_device(client->sva);
 failed:
 	kfree(client);
-put_rpm:
-	pm_runtime_mark_last_busy(ddev->dev);
-	pm_runtime_put_autosuspend(ddev->dev);
 
 	return ret;
+}
+
+static void amdxdna_client_cleanup(struct amdxdna_client *client)
+{
+	list_del(&client->node);
+	amdxdna_hwctx_remove_all(client);
+	xa_destroy(&client->hwctx_xa);
+	cleanup_srcu_struct(&client->hwctx_srcu);
+	mutex_destroy(&client->mm_lock);
+
+	if (client->dev_heap)
+		drm_gem_object_put(to_gobj(client->dev_heap));
+
+	iommu_sva_unbind_device(client->sva);
+	mmdrop(client->mm);
+
+	kfree(client);
 }
 
 static void amdxdna_drm_close(struct drm_device *ddev, struct drm_file *filp)
 {
 	struct amdxdna_client *client = filp->driver_priv;
 	struct amdxdna_dev *xdna = to_xdna_dev(ddev);
+	int idx;
 
 	XDNA_DBG(xdna, "closing pid %d", client->pid);
 
-	xa_destroy(&client->hwctx_xa);
-	cleanup_srcu_struct(&client->hwctx_srcu);
-	mutex_destroy(&client->hwctx_lock);
-	mutex_destroy(&client->mm_lock);
-	if (client->dev_heap)
-		drm_gem_object_put(to_gobj(client->dev_heap));
-
-	iommu_sva_unbind_device(client->sva);
-
-	XDNA_DBG(xdna, "pid %d closed", client->pid);
-	kfree(client);
-	pm_runtime_mark_last_busy(ddev->dev);
-	pm_runtime_put_autosuspend(ddev->dev);
-}
-
-static int amdxdna_flush(struct file *f, fl_owner_t id)
-{
-	struct drm_file *filp = f->private_data;
-	struct amdxdna_client *client = filp->driver_priv;
-	struct amdxdna_dev *xdna = client->xdna;
-	int idx;
-
-	XDNA_DBG(xdna, "PID %d flushing...", client->pid);
 	if (!drm_dev_enter(&xdna->ddev, &idx))
-		return 0;
+		return;
 
 	mutex_lock(&xdna->dev_lock);
-	list_del_init(&client->node);
+	amdxdna_client_cleanup(client);
 	mutex_unlock(&xdna->dev_lock);
-	amdxdna_hwctx_remove_all(client);
 
 	drm_dev_exit(idx);
-	return 0;
 }
 
 static int amdxdna_drm_get_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
@@ -164,6 +159,23 @@ static int amdxdna_drm_get_info_ioctl(struct drm_device *dev, void *data, struct
 	ret = xdna->dev_info->ops->get_aie_info(client, args);
 	mutex_unlock(&xdna->dev_lock);
 	return ret;
+}
+
+static int amdxdna_drm_get_array_ioctl(struct drm_device *dev, void *data,
+				       struct drm_file *filp)
+{
+	struct amdxdna_client *client = filp->driver_priv;
+	struct amdxdna_dev *xdna = to_xdna_dev(dev);
+	struct amdxdna_drm_get_array *args = data;
+
+	if (!xdna->dev_info->ops->get_array)
+		return -EOPNOTSUPP;
+
+	if (args->pad || !args->num_element || !args->element_size)
+		return -EINVAL;
+
+	guard(mutex)(&xdna->dev_lock);
+	return xdna->dev_info->ops->get_array(client, args);
 }
 
 static int amdxdna_drm_set_state_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
@@ -197,6 +209,7 @@ static const struct drm_ioctl_desc amdxdna_drm_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(AMDXDNA_EXEC_CMD, amdxdna_drm_submit_cmd_ioctl, 0),
 	/* AIE hardware */
 	DRM_IOCTL_DEF_DRV(AMDXDNA_GET_INFO, amdxdna_drm_get_info_ioctl, 0),
+	DRM_IOCTL_DEF_DRV(AMDXDNA_GET_ARRAY, amdxdna_drm_get_array_ioctl, 0),
 	DRM_IOCTL_DEF_DRV(AMDXDNA_SET_STATE, amdxdna_drm_set_state_ioctl, DRM_ROOT_ONLY),
 };
 
@@ -204,7 +217,6 @@ static const struct file_operations amdxdna_fops = {
 	.owner		= THIS_MODULE,
 	.open		= accel_open,
 	.release	= drm_release,
-	.flush		= amdxdna_flush,
 	.unlocked_ioctl	= drm_ioctl,
 	.compat_ioctl	= drm_compat_ioctl,
 	.poll		= drm_poll,
@@ -220,6 +232,8 @@ const struct drm_driver amdxdna_drm_drv = {
 	.fops = &amdxdna_fops,
 	.name = "amdxdna_accel_driver",
 	.desc = "AMD XDNA DRM implementation",
+	.major = AMDXDNA_DRIVER_MAJOR,
+	.minor = AMDXDNA_DRIVER_MINOR,
 	.open = amdxdna_drm_open,
 	.postclose = amdxdna_drm_close,
 	.ioctls = amdxdna_drm_ioctls,
@@ -267,7 +281,7 @@ static int amdxdna_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		fs_reclaim_release(GFP_KERNEL);
 	}
 
-	xdna->notifier_wq = alloc_ordered_workqueue("notifier_wq", 0);
+	xdna->notifier_wq = alloc_ordered_workqueue("notifier_wq", WQ_MEM_RECLAIM);
 	if (!xdna->notifier_wq)
 		return -ENOMEM;
 
@@ -285,19 +299,12 @@ static int amdxdna_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto failed_dev_fini;
 	}
 
-	pm_runtime_set_autosuspend_delay(dev, AMDXDNA_AUTOSUSPEND_DELAY);
-	pm_runtime_use_autosuspend(dev);
-	pm_runtime_allow(dev);
-
 	ret = drm_dev_register(&xdna->ddev, 0);
 	if (ret) {
 		XDNA_ERR(xdna, "DRM register failed, ret %d", ret);
-		pm_runtime_forbid(dev);
 		goto failed_sysfs_fini;
 	}
 
-	pm_runtime_mark_last_busy(dev);
-	pm_runtime_put_autosuspend(dev);
 	return 0;
 
 failed_sysfs_fini:
@@ -314,13 +321,9 @@ destroy_notifier_wq:
 static void amdxdna_remove(struct pci_dev *pdev)
 {
 	struct amdxdna_dev *xdna = pci_get_drvdata(pdev);
-	struct device *dev = &pdev->dev;
 	struct amdxdna_client *client;
 
 	destroy_workqueue(xdna->notifier_wq);
-
-	pm_runtime_get_noresume(dev);
-	pm_runtime_forbid(dev);
 
 	drm_dev_unplug(&xdna->ddev);
 	amdxdna_sysfs_fini(xdna);
@@ -329,12 +332,8 @@ static void amdxdna_remove(struct pci_dev *pdev)
 	client = list_first_entry_or_null(&xdna->client_list,
 					  struct amdxdna_client, node);
 	while (client) {
-		list_del_init(&client->node);
-		mutex_unlock(&xdna->dev_lock);
+		amdxdna_client_cleanup(client);
 
-		amdxdna_hwctx_remove_all(client);
-
-		mutex_lock(&xdna->dev_lock);
 		client = list_first_entry_or_null(&xdna->client_list,
 						  struct amdxdna_client, node);
 	}
@@ -343,89 +342,9 @@ static void amdxdna_remove(struct pci_dev *pdev)
 	mutex_unlock(&xdna->dev_lock);
 }
 
-static int amdxdna_dev_suspend_nolock(struct amdxdna_dev *xdna)
-{
-	if (xdna->dev_info->ops->suspend)
-		xdna->dev_info->ops->suspend(xdna);
-
-	return 0;
-}
-
-static int amdxdna_dev_resume_nolock(struct amdxdna_dev *xdna)
-{
-	if (xdna->dev_info->ops->resume)
-		return xdna->dev_info->ops->resume(xdna);
-
-	return 0;
-}
-
-static int amdxdna_pmops_suspend(struct device *dev)
-{
-	struct amdxdna_dev *xdna = pci_get_drvdata(to_pci_dev(dev));
-	struct amdxdna_client *client;
-
-	mutex_lock(&xdna->dev_lock);
-	list_for_each_entry(client, &xdna->client_list, node)
-		amdxdna_hwctx_suspend(client);
-
-	amdxdna_dev_suspend_nolock(xdna);
-	mutex_unlock(&xdna->dev_lock);
-
-	return 0;
-}
-
-static int amdxdna_pmops_resume(struct device *dev)
-{
-	struct amdxdna_dev *xdna = pci_get_drvdata(to_pci_dev(dev));
-	struct amdxdna_client *client;
-	int ret;
-
-	XDNA_INFO(xdna, "firmware resuming...");
-	mutex_lock(&xdna->dev_lock);
-	ret = amdxdna_dev_resume_nolock(xdna);
-	if (ret) {
-		XDNA_ERR(xdna, "resume NPU firmware failed");
-		mutex_unlock(&xdna->dev_lock);
-		return ret;
-	}
-
-	XDNA_INFO(xdna, "hardware context resuming...");
-	list_for_each_entry(client, &xdna->client_list, node)
-		amdxdna_hwctx_resume(client);
-	mutex_unlock(&xdna->dev_lock);
-
-	return 0;
-}
-
-static int amdxdna_rpmops_suspend(struct device *dev)
-{
-	struct amdxdna_dev *xdna = pci_get_drvdata(to_pci_dev(dev));
-	int ret;
-
-	mutex_lock(&xdna->dev_lock);
-	ret = amdxdna_dev_suspend_nolock(xdna);
-	mutex_unlock(&xdna->dev_lock);
-
-	XDNA_DBG(xdna, "Runtime suspend done ret: %d", ret);
-	return ret;
-}
-
-static int amdxdna_rpmops_resume(struct device *dev)
-{
-	struct amdxdna_dev *xdna = pci_get_drvdata(to_pci_dev(dev));
-	int ret;
-
-	mutex_lock(&xdna->dev_lock);
-	ret = amdxdna_dev_resume_nolock(xdna);
-	mutex_unlock(&xdna->dev_lock);
-
-	XDNA_DBG(xdna, "Runtime resume done ret: %d", ret);
-	return ret;
-}
-
 static const struct dev_pm_ops amdxdna_pm_ops = {
-	SYSTEM_SLEEP_PM_OPS(amdxdna_pmops_suspend, amdxdna_pmops_resume)
-	RUNTIME_PM_OPS(amdxdna_rpmops_suspend, amdxdna_rpmops_resume, NULL)
+	SYSTEM_SLEEP_PM_OPS(amdxdna_pm_suspend, amdxdna_pm_resume)
+	RUNTIME_PM_OPS(amdxdna_pm_suspend, amdxdna_pm_resume, NULL)
 };
 
 static struct pci_driver amdxdna_pci_driver = {

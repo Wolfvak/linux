@@ -224,7 +224,7 @@ inline void flush_dcache_folio_impl(struct folio *folio)
 	((1UL<<ilog2(roundup_pow_of_two(NR_CPUS)))-1UL)
 
 #define dcache_dirty_cpu(folio) \
-	(((folio)->flags >> PG_dcache_cpu_shift) & PG_dcache_cpu_mask)
+	(((folio)->flags.f >> PG_dcache_cpu_shift) & PG_dcache_cpu_mask)
 
 static inline void set_dcache_dirty(struct folio *folio, int this_cpu)
 {
@@ -243,7 +243,7 @@ static inline void set_dcache_dirty(struct folio *folio, int this_cpu)
 			     "bne,pn	%%xcc, 1b\n\t"
 			     " nop"
 			     : /* no outputs */
-			     : "r" (mask), "r" (non_cpu_bits), "r" (&folio->flags)
+			     : "r" (mask), "r" (non_cpu_bits), "r" (&folio->flags.f)
 			     : "g1", "g7");
 }
 
@@ -265,7 +265,7 @@ static inline void clear_dcache_dirty_cpu(struct folio *folio, unsigned long cpu
 			     " nop\n"
 			     "2:"
 			     : /* no outputs */
-			     : "r" (cpu), "r" (mask), "r" (&folio->flags),
+			     : "r" (cpu), "r" (mask), "r" (&folio->flags.f),
 			       "i" (PG_dcache_cpu_mask),
 			       "i" (PG_dcache_cpu_shift)
 			     : "g1", "g7");
@@ -292,7 +292,7 @@ static void flush_dcache(unsigned long pfn)
 		struct folio *folio = page_folio(page);
 		unsigned long pg_flags;
 
-		pg_flags = folio->flags;
+		pg_flags = folio->flags.f;
 		if (pg_flags & (1UL << PG_dcache_dirty)) {
 			int cpu = ((pg_flags >> PG_dcache_cpu_shift) &
 				   PG_dcache_cpu_mask);
@@ -358,30 +358,24 @@ static void __init pud_huge_patch(void)
 bool __init arch_hugetlb_valid_size(unsigned long size)
 {
 	unsigned int hugepage_shift = ilog2(size);
-	unsigned short hv_pgsz_idx;
 	unsigned int hv_pgsz_mask;
 
 	switch (hugepage_shift) {
 	case HPAGE_16GB_SHIFT:
 		hv_pgsz_mask = HV_PGSZ_MASK_16GB;
-		hv_pgsz_idx = HV_PGSZ_IDX_16GB;
 		pud_huge_patch();
 		break;
 	case HPAGE_2GB_SHIFT:
 		hv_pgsz_mask = HV_PGSZ_MASK_2GB;
-		hv_pgsz_idx = HV_PGSZ_IDX_2GB;
 		break;
 	case HPAGE_256MB_SHIFT:
 		hv_pgsz_mask = HV_PGSZ_MASK_256MB;
-		hv_pgsz_idx = HV_PGSZ_IDX_256MB;
 		break;
 	case HPAGE_SHIFT:
 		hv_pgsz_mask = HV_PGSZ_MASK_4MB;
-		hv_pgsz_idx = HV_PGSZ_IDX_4MB;
 		break;
 	case HPAGE_64K_SHIFT:
 		hv_pgsz_mask = HV_PGSZ_MASK_64K;
-		hv_pgsz_idx = HV_PGSZ_IDX_64K;
 		break;
 	default:
 		hv_pgsz_mask = 0;
@@ -480,7 +474,7 @@ void flush_dcache_folio(struct folio *folio)
 
 	mapping = folio_flush_mapping(folio);
 	if (mapping && !mapping_mapped(mapping)) {
-		bool dirty = test_bit(PG_dcache_dirty, &folio->flags);
+		bool dirty = test_bit(PG_dcache_dirty, &folio->flags.f);
 		if (dirty) {
 			int dirty_cpu = dcache_dirty_cpu(folio);
 
@@ -1615,8 +1609,6 @@ static unsigned long __init bootmem_init(unsigned long phys_base)
 
 	/* XXX cpu notifier XXX */
 
-	sparse_init();
-
 	return end_pfn;
 }
 
@@ -2279,6 +2271,11 @@ static void __init reduce_memory(phys_addr_t limit_ram)
 	memblock_enforce_memory_limit(limit_ram);
 }
 
+void __init arch_zone_limits_init(unsigned long *max_zone_pfns)
+{
+	max_zone_pfns[ZONE_NORMAL] = last_valid_pfn;
+}
+
 void __init paging_init(void)
 {
 	unsigned long end_pfn, shift, phys_base;
@@ -2453,16 +2450,6 @@ void __init paging_init(void)
 	last_valid_pfn = end_pfn = bootmem_init(phys_base);
 
 	kernel_physical_mapping_init();
-
-	{
-		unsigned long max_zone_pfns[MAX_NR_ZONES];
-
-		memset(max_zone_pfns, 0, sizeof(max_zone_pfns));
-
-		max_zone_pfns[ZONE_NORMAL] = end_pfn;
-
-		free_area_init(max_zone_pfns);
-	}
 
 	printk("Booting Linux...\n");
 }
@@ -3083,7 +3070,7 @@ static int __init report_memory(void)
 	kernel_lds_init();
 
 	for (i = 0; i < pavail_ents; i++) {
-		res = kzalloc(sizeof(struct resource), GFP_KERNEL);
+		res = kzalloc_obj(struct resource);
 
 		if (!res) {
 			pr_warn("Failed to allocate source.\n");
@@ -3201,7 +3188,7 @@ void copy_highpage(struct page *to, struct page *from)
 }
 EXPORT_SYMBOL(copy_highpage);
 
-pgprot_t vm_get_page_prot(unsigned long vm_flags)
+pgprot_t vm_get_page_prot(vm_flags_t vm_flags)
 {
 	unsigned long prot = pgprot_val(protection_map[vm_flags &
 					(VM_READ|VM_WRITE|VM_EXEC|VM_SHARED)]);

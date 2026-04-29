@@ -72,7 +72,7 @@ struct ib_mr *pvrdma_get_dma_mr(struct ib_pd *pd, int acc)
 		return ERR_PTR(-EOPNOTSUPP);
 	}
 
-	mr = kzalloc(sizeof(*mr), GFP_KERNEL);
+	mr = kzalloc_obj(*mr);
 	if (!mr)
 		return ERR_PTR(-ENOMEM);
 
@@ -104,12 +104,14 @@ struct ib_mr *pvrdma_get_dma_mr(struct ib_pd *pd, int acc)
  * @length: length of region
  * @virt_addr: I/O virtual address
  * @access_flags: access flags for memory region
+ * @dmah: dma handle
  * @udata: user data
  *
  * @return: ib_mr pointer on success, otherwise returns an errno.
  */
 struct ib_mr *pvrdma_reg_user_mr(struct ib_pd *pd, u64 start, u64 length,
 				 u64 virt_addr, int access_flags,
+				 struct ib_dmah *dmah,
 				 struct ib_udata *udata)
 {
 	struct pvrdma_dev *dev = to_vdev(pd->device);
@@ -120,6 +122,9 @@ struct ib_mr *pvrdma_reg_user_mr(struct ib_pd *pd, u64 start, u64 length,
 	struct pvrdma_cmd_create_mr *cmd = &req.create_mr;
 	struct pvrdma_cmd_create_mr_resp *resp = &rsp.create_mr_resp;
 	int ret, npages;
+
+	if (dmah)
+		return ERR_PTR(-EOPNOTSUPP);
 
 	if (length == 0 || length > dev->dsr->caps.max_mr_size) {
 		dev_warn(&dev->pdev->dev, "invalid mem region length\n");
@@ -141,7 +146,7 @@ struct ib_mr *pvrdma_reg_user_mr(struct ib_pd *pd, u64 start, u64 length,
 		goto err_umem;
 	}
 
-	mr = kzalloc(sizeof(*mr), GFP_KERNEL);
+	mr = kzalloc_obj(*mr);
 	if (!mr) {
 		ret = -ENOMEM;
 		goto err_umem;
@@ -217,7 +222,7 @@ struct ib_mr *pvrdma_alloc_mr(struct ib_pd *pd, enum ib_mr_type mr_type,
 	    max_num_sg > PVRDMA_MAX_FAST_REG_PAGES)
 		return ERR_PTR(-EINVAL);
 
-	mr = kzalloc(sizeof(*mr), GFP_KERNEL);
+	mr = kzalloc_obj(*mr);
 	if (!mr)
 		return ERR_PTR(-ENOMEM);
 

@@ -634,7 +634,7 @@ static int get_union_kabi_status(Dwarf_Die *die, Dwarf_Die *placeholder,
 	 * Note that the user of this feature is responsible for ensuring
 	 * that the structure actually remains ABI compatible.
 	 */
-	memset(&state.kabi, 0, sizeof(struct kabi_state));
+	memset(&state.kabi, 0, sizeof(state.kabi));
 
 	res = checkp(process_die_container(&state, NULL, die,
 					   check_union_member_kabi_status,
@@ -750,6 +750,7 @@ static void process_enumerator_type(struct state *state, struct die *cache,
 				    Dwarf_Die *die)
 {
 	bool overridden = false;
+	unsigned long override;
 	Dwarf_Word value;
 
 	if (stable) {
@@ -761,7 +762,8 @@ static void process_enumerator_type(struct state *state, struct die *cache,
 			return;
 
 		overridden = kabi_get_enumerator_value(
-			state->expand.current_fqn, cache->fqn, &value);
+			state->expand.current_fqn, cache->fqn, &override);
+		value = override;
 	}
 
 	process_list_comma(state, cache);

@@ -139,7 +139,7 @@ static struct audit_parent *audit_init_parent(const struct path *path)
 	struct audit_parent *parent;
 	int ret;
 
-	parent = kzalloc(sizeof(*parent), GFP_KERNEL);
+	parent = kzalloc_obj(*parent);
 	if (unlikely(!parent))
 		return ERR_PTR(-ENOMEM);
 
@@ -161,7 +161,7 @@ static struct audit_watch *audit_init_watch(char *path)
 {
 	struct audit_watch *watch;
 
-	watch = kzalloc(sizeof(*watch), GFP_KERNEL);
+	watch = kzalloc_obj(*watch);
 	if (unlikely(!watch))
 		return ERR_PTR(-ENOMEM);
 
@@ -349,7 +349,7 @@ static int audit_get_nd(struct audit_watch *watch, struct path *parent)
 {
 	struct dentry *d;
 
-	d = kern_path_locked_negative(watch->path, parent);
+	d = kern_path_parent(watch->path, parent);
 	if (IS_ERR(d))
 		return PTR_ERR(d);
 
@@ -359,7 +359,6 @@ static int audit_get_nd(struct audit_watch *watch, struct path *parent)
 		watch->ino = d_backing_inode(d)->i_ino;
 	}
 
-	inode_unlock(d_backing_inode(parent->dentry));
 	dput(d);
 	return 0;
 }

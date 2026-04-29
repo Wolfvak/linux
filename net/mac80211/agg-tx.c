@@ -616,7 +616,8 @@ int ieee80211_start_tx_ba_session(struct ieee80211_sta *pubsta, u16 tid,
 	    !pubsta->deflink.ht_cap.ht_supported &&
 	    !pubsta->deflink.vht_cap.vht_supported &&
 	    !pubsta->deflink.he_cap.has_he &&
-	    !pubsta->deflink.eht_cap.has_eht)
+	    !pubsta->deflink.eht_cap.has_eht &&
+	    !pubsta->deflink.s1g_cap.s1g)
 		return -EINVAL;
 
 	if (WARN_ON_ONCE(!local->ops->ampdu_action))
@@ -709,7 +710,7 @@ int ieee80211_start_tx_ba_session(struct ieee80211_sta *pubsta, u16 tid,
 	}
 
 	/* prepare A-MPDU MLME for Tx aggregation */
-	tid_tx = kzalloc(sizeof(struct tid_ampdu_tx), GFP_ATOMIC);
+	tid_tx = kzalloc_obj(struct tid_ampdu_tx, GFP_ATOMIC);
 	if (!tid_tx) {
 		ret = -ENOMEM;
 		goto err_unlock_sta;

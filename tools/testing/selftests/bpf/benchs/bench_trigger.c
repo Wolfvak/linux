@@ -146,6 +146,7 @@ static void setup_ctx(void)
 	bpf_program__set_autoload(ctx.skel->progs.trigger_driver, true);
 
 	ctx.skel->rodata->batch_iters = args.batch_iters;
+	ctx.skel->rodata->stacktrace = env.stacktrace;
 }
 
 static void load_ctx(void)
@@ -180,10 +181,10 @@ static void trigger_kernel_count_setup(void)
 {
 	setup_ctx();
 	bpf_program__set_autoload(ctx.skel->progs.trigger_driver, false);
-	bpf_program__set_autoload(ctx.skel->progs.trigger_count, true);
+	bpf_program__set_autoload(ctx.skel->progs.trigger_kernel_count, true);
 	load_ctx();
 	/* override driver program */
-	ctx.driver_prog_fd = bpf_program__fd(ctx.skel->progs.trigger_count);
+	ctx.driver_prog_fd = bpf_program__fd(ctx.skel->progs.trigger_kernel_count);
 }
 
 static void trigger_kprobe_setup(void)
@@ -224,6 +225,67 @@ static void trigger_fentry_setup(void)
 	bpf_program__set_autoload(ctx.skel->progs.bench_trigger_fentry, true);
 	load_ctx();
 	attach_bpf(ctx.skel->progs.bench_trigger_fentry);
+}
+
+static void attach_ksyms_all(struct bpf_program *empty, bool kretprobe)
+{
+	LIBBPF_OPTS(bpf_kprobe_multi_opts, opts);
+	struct bpf_link *link = NULL;
+	struct ksyms *ksyms = NULL;
+
+	/* Some recursive functions will be skipped in
+	 * bpf_get_ksyms -> skip_entry, as they can introduce sufficient
+	 * overhead. However, it's difficut to skip all the recursive
+	 * functions for a debug kernel.
+	 *
+	 * So, don't run the kprobe-multi-all and kretprobe-multi-all on
+	 * a debug kernel.
+	 */
+	if (bpf_get_ksyms(&ksyms, true)) {
+		fprintf(stderr, "failed to get ksyms\n");
+		exit(1);
+	}
+
+	opts.syms = (const char **)ksyms->filtered_syms;
+	opts.cnt = ksyms->filtered_cnt;
+	opts.retprobe = kretprobe;
+	/* attach empty to all the kernel functions except bpf_get_numa_node_id. */
+	link = bpf_program__attach_kprobe_multi_opts(empty, NULL, &opts);
+	free_kallsyms_local(ksyms);
+	if (!link) {
+		fprintf(stderr, "failed to attach bpf_program__attach_kprobe_multi_opts to all\n");
+		exit(1);
+	}
+}
+
+static void trigger_kprobe_multi_all_setup(void)
+{
+	struct bpf_program *prog, *empty;
+
+	setup_ctx();
+	empty = ctx.skel->progs.bench_kprobe_multi_empty;
+	prog = ctx.skel->progs.bench_trigger_kprobe_multi;
+	bpf_program__set_autoload(empty, true);
+	bpf_program__set_autoload(prog, true);
+	load_ctx();
+
+	attach_ksyms_all(empty, false);
+	attach_bpf(prog);
+}
+
+static void trigger_kretprobe_multi_all_setup(void)
+{
+	struct bpf_program *prog, *empty;
+
+	setup_ctx();
+	empty = ctx.skel->progs.bench_kretprobe_multi_empty;
+	prog = ctx.skel->progs.bench_trigger_kretprobe_multi;
+	bpf_program__set_autoload(empty, true);
+	bpf_program__set_autoload(prog, true);
+	load_ctx();
+
+	attach_ksyms_all(empty, true);
+	attach_bpf(prog);
 }
 
 static void trigger_fexit_setup(void)
@@ -512,6 +574,8 @@ BENCH_TRIG_KERNEL(kretprobe, "kretprobe");
 BENCH_TRIG_KERNEL(kprobe_multi, "kprobe-multi");
 BENCH_TRIG_KERNEL(kretprobe_multi, "kretprobe-multi");
 BENCH_TRIG_KERNEL(fentry, "fentry");
+BENCH_TRIG_KERNEL(kprobe_multi_all, "kprobe-multi-all");
+BENCH_TRIG_KERNEL(kretprobe_multi_all, "kretprobe-multi-all");
 BENCH_TRIG_KERNEL(fexit, "fexit");
 BENCH_TRIG_KERNEL(fmodret, "fmodret");
 BENCH_TRIG_KERNEL(tp, "tp");

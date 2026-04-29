@@ -40,15 +40,6 @@
 
 #define IWL_MLD_TPT_COUNT_WINDOW (5 * HZ)
 
-/* OMI reduced BW thresholds (channel load percentage) */
-#define IWL_MLD_OMI_ENTER_CHAN_LOAD		10
-#define IWL_MLD_OMI_EXIT_CHAN_LOAD_160		20
-#define IWL_MLD_OMI_EXIT_CHAN_LOAD_320		30
-/* time (in milliseconds) to let AP "settle" the OMI */
-#define IWL_MLD_OMI_AP_SETTLE_DELAY		27
-/* time (in milliseconds) to not enter OMI reduced BW after leaving */
-#define IWL_MLD_OMI_EXIT_PROTECTION		5000
-
 #define IWL_MLD_DIS_RANDOM_FW_ID                false
 #define IWL_MLD_D3_DEBUG                        false
 #define IWL_MLD_NON_TRANSMITTING_AP	        false
@@ -84,5 +75,7 @@
 #define IWL_MLD_FTM_RESP_LMR_FEEDBACK_SUPPORT	true
 #define IWL_MLD_FTM_NON_TB_MIN_TIME_BETWEEN_MSR	7
 #define IWL_MLD_FTM_NON_TB_MAX_TIME_BETWEEN_MSR	1000
+#define IWL_MLD_STA_EXT_CAPA_SIZE		9
+#define IWL_MLD_EXT_CAPA_NUM_IFTYPES		1
 
 #endif /* __iwl_mld_constants_h__ */

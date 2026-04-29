@@ -81,7 +81,7 @@ bool kernel_initiated;
 
 static struct opalcore * __init get_new_element(void)
 {
-	return kzalloc(sizeof(struct opalcore), GFP_KERNEL);
+	return kzalloc_obj(struct opalcore);
 }
 
 static inline int is_opalcore_usable(void)
@@ -208,7 +208,7 @@ static ssize_t read_opalcore(struct file *file, struct kobject *kobj,
 
 static struct bin_attribute opal_core_attr __ro_after_init = {
 	.attr = {.name = "core", .mode = 0400},
-	.read_new = read_opalcore
+	.read = read_opalcore
 };
 
 /*
@@ -497,7 +497,7 @@ static void __init opalcore_config_init(void)
 	opalc_cpu_metadata = __va(addr);
 
 	/* Allocate memory for config buffer */
-	oc_conf = kzalloc(sizeof(struct opalcore_config), GFP_KERNEL);
+	oc_conf = kzalloc_obj(struct opalcore_config);
 	if (oc_conf == NULL)
 		goto error_out;
 
@@ -607,7 +607,7 @@ static const struct bin_attribute *const mpipl_bin_attr[] = {
 
 static const struct attribute_group mpipl_group = {
 	.attrs = mpipl_attr,
-	.bin_attrs_new =  mpipl_bin_attr,
+	.bin_attrs =  mpipl_bin_attr,
 };
 
 static int __init opalcore_init(void)

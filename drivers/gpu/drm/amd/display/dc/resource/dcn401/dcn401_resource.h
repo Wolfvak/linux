@@ -24,9 +24,11 @@ enum dc_status dcn401_patch_unknown_plane_state(struct dc_plane_state *plane_sta
 
 enum dc_status dcn401_validate_bandwidth(struct dc *dc,
 		struct dc_state *context,
-		bool fast_validate);
+		enum dc_validate_mode validate_mode);
 
 void dcn401_prepare_mcache_programming(struct dc *dc, struct dc_state *context);
+
+unsigned int dcn401_get_vstartup_for_pipe(struct pipe_ctx *pipe_ctx);
 
 /* Following are definitions for run time init of reg offsets */
 
@@ -140,7 +142,8 @@ void dcn401_prepare_mcache_programming(struct dc *dc, struct dc_state *context);
 	SRI_ARR(UCLK_PSTATE_FORCE, HUBPREQ, id),                                 \
 	HUBP_3DLUT_FL_REG_LIST_DCN401(id),                                       \
 	SRI_ARR(DCSURF_VIEWPORT_MCACHE_SPLIT_COORDINATE, HUBP, id),              \
-	SRI_ARR(DCHUBP_MCACHEID_CONFIG, HUBP, id)
+	SRI_ARR(DCHUBP_MCACHEID_CONFIG, HUBP, id),								 \
+	SRI_ARR(HUBPRET_READ_LINE_VALUE, HUBPRET, id)
 
 /* ABM */
 #define ABM_DCN401_REG_LIST_RI(id)                                            \
@@ -226,7 +229,8 @@ void dcn401_prepare_mcache_programming(struct dc *dc, struct dc_state *context);
 #define LE_DCN401_REG_LIST_RI(id)                                            \
 	LE_DCN3_REG_LIST_RI(id), \
 	SRI_ARR(DP_DPHY_INTERNAL_CTRL, DP, id), \
-	SRI_ARR(DIG_BE_CLK_CNTL, DIG, id)
+	SRI_ARR(DIG_BE_CLK_CNTL, DIG, id),\
+	SR_ARR(DIO_CLK_CNTL, id)
 
 /* DPP */
 #define DPP_REG_LIST_DCN401_COMMON_RI(id)                                    \
@@ -392,6 +396,7 @@ void dcn401_prepare_mcache_programming(struct dc *dc, struct dc_state *context);
 	SRI_ARR(DSCL_SC_MATRIX_C0C1, DSCL, id),                                  \
 	SRI_ARR(DSCL_SC_MATRIX_C2C3, DSCL, id),                                  \
 	SRI_ARR(ISHARP_MODE, DSCL, id),                                          \
+	SRI_ARR(ISHARP_DELTA_LUT_MEM_PWR_CTRL, DSCL, id),                                          \
 	SRI_ARR(ISHARP_NOISEDET_THRESHOLD, DSCL, id),                            \
 	SRI_ARR(ISHARP_NOISE_GAIN_PWL, DSCL, id),                                \
 	SRI_ARR(ISHARP_LBA_PWL_SEG0, DSCL, id),                                  \

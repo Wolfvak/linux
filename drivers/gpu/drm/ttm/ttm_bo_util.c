@@ -28,6 +28,8 @@
 /*
  * Authors: Thomas Hellstrom <thellstrom-at-vmware-dot-com>
  */
+
+#include <linux/export.h>
 #include <linux/swap.h>
 #include <linux/vmalloc.h>
 
@@ -36,6 +38,8 @@
 #include <drm/ttm/ttm_tt.h>
 
 #include <drm/drm_cache.h>
+
+#include "ttm_bo_internal.h"
 
 struct ttm_transfer_obj {
 	struct ttm_buffer_object base;
@@ -170,13 +174,13 @@ int ttm_bo_move_memcpy(struct ttm_buffer_object *bo,
 
 	dst_iter = ttm_kmap_iter_linear_io_init(&_dst_iter.io, bdev, dst_mem);
 	if (PTR_ERR(dst_iter) == -EINVAL && dst_man->use_tt)
-		dst_iter = ttm_kmap_iter_tt_init(&_dst_iter.tt, bo->ttm);
+		dst_iter = ttm_kmap_iter_tt_init(&_dst_iter.tt, ttm);
 	if (IS_ERR(dst_iter))
 		return PTR_ERR(dst_iter);
 
 	src_iter = ttm_kmap_iter_linear_io_init(&_src_iter.io, bdev, src_mem);
 	if (PTR_ERR(src_iter) == -EINVAL && src_man->use_tt)
-		src_iter = ttm_kmap_iter_tt_init(&_src_iter.tt, bo->ttm);
+		src_iter = ttm_kmap_iter_tt_init(&_src_iter.tt, ttm);
 	if (IS_ERR(src_iter)) {
 		ret = PTR_ERR(src_iter);
 		goto out_src_iter;
@@ -229,7 +233,7 @@ static int ttm_buffer_object_transfer(struct ttm_buffer_object *bo,
 	struct ttm_transfer_obj *fbo;
 	int ret;
 
-	fbo = kmalloc(sizeof(*fbo), GFP_KERNEL);
+	fbo = kmalloc_obj(*fbo);
 	if (!fbo)
 		return -ENOMEM;
 
@@ -254,7 +258,7 @@ static int ttm_buffer_object_transfer(struct ttm_buffer_object *bo,
 	ret = dma_resv_trylock(&fbo->base.base._resv);
 	WARN_ON(!ret);
 
-	ret = dma_resv_reserve_fences(&fbo->base.base._resv, 1);
+	ret = dma_resv_reserve_fences(&fbo->base.base._resv, TTM_NUM_MOVE_FENCES);
 	if (ret) {
 		dma_resv_unlock(&fbo->base.base._resv);
 		kfree(fbo);
@@ -314,11 +318,11 @@ static int ttm_bo_ioremap(struct ttm_buffer_object *bo,
 {
 	struct ttm_resource *mem = bo->resource;
 
-	if (bo->resource->bus.addr) {
+	if (mem->bus.addr) {
 		map->bo_kmap_type = ttm_bo_map_premapped;
-		map->virtual = ((u8 *)bo->resource->bus.addr) + offset;
+		map->virtual = ((u8 *)mem->bus.addr) + offset;
 	} else {
-		resource_size_t res = bo->resource->bus.offset + offset;
+		resource_size_t res = mem->bus.offset + offset;
 
 		map->bo_kmap_type = ttm_bo_map_iomap;
 		if (mem->bus.caching == ttm_write_combined)
@@ -339,13 +343,10 @@ static int ttm_bo_kmap_ttm(struct ttm_buffer_object *bo,
 			   struct ttm_bo_kmap_obj *map)
 {
 	struct ttm_resource *mem = bo->resource;
-	struct ttm_operation_ctx ctx = {
-		.interruptible = false,
-		.no_wait_gpu = false
-	};
+	struct ttm_operation_ctx ctx = { };
 	struct ttm_tt *ttm = bo->ttm;
 	struct ttm_resource_manager *man =
-			ttm_manager_type(bo->bdev, bo->resource->mem_type);
+			ttm_manager_type(bo->bdev, mem->mem_type);
 	pgprot_t prot;
 	int ret;
 
@@ -379,6 +380,32 @@ static int ttm_bo_kmap_ttm(struct ttm_buffer_object *bo,
 }
 
 /**
+ * ttm_bo_kmap_try_from_panic
+ *
+ * @bo: The buffer object
+ * @page: The page to map
+ *
+ * Sets up a kernel virtual mapping using kmap_local_page_try_from_panic().
+ * This should only be called from the panic handler, if you make sure the bo
+ * is the one being displayed, so is properly allocated, and protected.
+ *
+ * Returns the vaddr, that you can use to write to the bo, and that you should
+ * pass to kunmap_local() when you're done with this page, or NULL if the bo
+ * is in iomem.
+ */
+void *ttm_bo_kmap_try_from_panic(struct ttm_buffer_object *bo, unsigned long page)
+{
+	if (page + 1 > PFN_UP(bo->resource->size))
+		return NULL;
+
+	if (!bo->resource->bus.is_iomem && bo->ttm->pages && bo->ttm->pages[page])
+		return kmap_local_page_try_from_panic(bo->ttm->pages[page]);
+
+	return NULL;
+}
+EXPORT_SYMBOL(ttm_bo_kmap_try_from_panic);
+
+/**
  * ttm_bo_kmap
  *
  * @bo: The buffer object.
@@ -398,20 +425,21 @@ int ttm_bo_kmap(struct ttm_buffer_object *bo,
 		unsigned long start_page, unsigned long num_pages,
 		struct ttm_bo_kmap_obj *map)
 {
+	struct ttm_resource *res = bo->resource;
 	unsigned long offset, size;
 	int ret;
 
 	map->virtual = NULL;
 	map->bo = bo;
-	if (num_pages > PFN_UP(bo->resource->size))
+	if (num_pages > PFN_UP(res->size))
 		return -EINVAL;
-	if ((start_page + num_pages) > PFN_UP(bo->resource->size))
+	if ((start_page + num_pages) > PFN_UP(res->size))
 		return -EINVAL;
 
-	ret = ttm_mem_io_reserve(bo->bdev, bo->resource);
+	ret = ttm_mem_io_reserve(bo->bdev, res);
 	if (ret)
 		return ret;
-	if (!bo->resource->bus.is_iomem) {
+	if (!res->bus.is_iomem) {
 		return ttm_bo_kmap_ttm(bo, start_page, num_pages, map);
 	} else {
 		offset = start_page << PAGE_SHIFT;
@@ -500,10 +528,7 @@ int ttm_bo_vmap(struct ttm_buffer_object *bo, struct iosys_map *map)
 		iosys_map_set_vaddr_iomem(map, vaddr_iomem);
 
 	} else {
-		struct ttm_operation_ctx ctx = {
-			.interruptible = false,
-			.no_wait_gpu = false
-		};
+		struct ttm_operation_ctx ctx = { };
 		struct ttm_tt *ttm = bo->ttm;
 		pgprot_t prot;
 		void *vaddr;
@@ -551,7 +576,7 @@ void ttm_bo_vunmap(struct ttm_buffer_object *bo, struct iosys_map *map)
 		iounmap(map->vaddr_iomem);
 	iosys_map_clear(map);
 
-	ttm_mem_io_free(bo->bdev, bo->resource);
+	ttm_mem_io_free(bo->bdev, mem);
 }
 EXPORT_SYMBOL(ttm_bo_vunmap);
 
@@ -614,22 +639,45 @@ static int ttm_bo_move_to_ghost(struct ttm_buffer_object *bo,
 static void ttm_bo_move_pipeline_evict(struct ttm_buffer_object *bo,
 				       struct dma_fence *fence)
 {
-	struct ttm_device *bdev = bo->bdev;
 	struct ttm_resource_manager *from;
+	struct dma_fence *tmp;
+	int i;
 
-	from = ttm_manager_type(bdev, bo->resource->mem_type);
+	from = ttm_manager_type(bo->bdev, bo->resource->mem_type);
 
 	/**
 	 * BO doesn't have a TTM we need to bind/unbind. Just remember
-	 * this eviction and free up the allocation
+	 * this eviction and free up the allocation.
+	 * The fence will be saved in the first free slot or in the slot
+	 * already used to store a fence from the same context. Since
+	 * drivers can't use more than TTM_NUM_MOVE_FENCES contexts for
+	 * evictions we should always find a slot to use.
 	 */
-	spin_lock(&from->move_lock);
-	if (!from->move || dma_fence_is_later(fence, from->move)) {
-		dma_fence_put(from->move);
-		from->move = dma_fence_get(fence);
+	spin_lock(&from->eviction_lock);
+	for (i = 0; i < TTM_NUM_MOVE_FENCES; i++) {
+		tmp = from->eviction_fences[i];
+		if (!tmp)
+			break;
+		if (fence->context != tmp->context)
+			continue;
+		if (dma_fence_is_later(fence, tmp)) {
+			dma_fence_put(tmp);
+			break;
+		}
+		goto unlock;
 	}
-	spin_unlock(&from->move_lock);
+	if (i < TTM_NUM_MOVE_FENCES) {
+		from->eviction_fences[i] = dma_fence_get(fence);
+	} else {
+		WARN(1, "not enough fence slots for all fence contexts");
+		spin_unlock(&from->eviction_lock);
+		dma_fence_wait(fence, false);
+		goto end;
+	}
 
+unlock:
+	spin_unlock(&from->eviction_lock);
+end:
 	ttm_resource_free(bo, &bo->resource);
 }
 
@@ -689,8 +737,8 @@ EXPORT_SYMBOL(ttm_bo_move_accel_cleanup);
 void ttm_bo_move_sync_cleanup(struct ttm_buffer_object *bo,
 			      struct ttm_resource *new_mem)
 {
-	struct ttm_device *bdev = bo->bdev;
-	struct ttm_resource_manager *man = ttm_manager_type(bdev, new_mem->mem_type);
+	struct ttm_resource_manager *man =
+		ttm_manager_type(bo->bdev, new_mem->mem_type);
 	int ret;
 
 	ret = ttm_bo_wait_free_node(bo, man->use_tt);
@@ -770,14 +818,15 @@ error_destroy_tt:
 	return ret;
 }
 
-static bool ttm_lru_walk_trylock(struct ttm_operation_ctx *ctx,
-				 struct ttm_buffer_object *bo,
-				 bool *needs_unlock)
+static bool ttm_lru_walk_trylock(struct ttm_bo_lru_cursor *curs,
+				 struct ttm_buffer_object *bo)
 {
-	*needs_unlock = false;
+	struct ttm_operation_ctx *ctx = curs->arg->ctx;
+
+	curs->needs_unlock = false;
 
 	if (dma_resv_trylock(bo->base.resv)) {
-		*needs_unlock = true;
+		curs->needs_unlock = true;
 		return true;
 	}
 
@@ -789,39 +838,32 @@ static bool ttm_lru_walk_trylock(struct ttm_operation_ctx *ctx,
 	return false;
 }
 
-static int ttm_lru_walk_ticketlock(struct ttm_lru_walk *walk,
-				   struct ttm_buffer_object *bo,
-				   bool *needs_unlock)
+static int ttm_lru_walk_ticketlock(struct ttm_bo_lru_cursor *curs,
+				   struct ttm_buffer_object *bo)
 {
-	struct dma_resv *resv = bo->base.resv;
+	struct ttm_lru_walk_arg *arg = curs->arg;
 	int ret;
 
-	if (walk->ctx->interruptible)
-		ret = dma_resv_lock_interruptible(resv, walk->ticket);
+	if (arg->ctx->interruptible)
+		ret = dma_resv_lock_interruptible(bo->base.resv, arg->ticket);
 	else
-		ret = dma_resv_lock(resv, walk->ticket);
+		ret = dma_resv_lock(bo->base.resv, arg->ticket);
 
 	if (!ret) {
-		*needs_unlock = true;
+		curs->needs_unlock = true;
 		/*
 		 * Only a single ticketlock per loop. Ticketlocks are prone
 		 * to return -EDEADLK causing the eviction to fail, so
 		 * after waiting for the ticketlock, revert back to
 		 * trylocking for this walk.
 		 */
-		walk->ticket = NULL;
+		arg->ticket = NULL;
 	} else if (ret == -EDEADLK) {
 		/* Caller needs to exit the ww transaction. */
 		ret = -ENOSPC;
 	}
 
 	return ret;
-}
-
-static void ttm_lru_walk_unlock(struct ttm_buffer_object *bo, bool locked)
-{
-	if (locked)
-		dma_resv_unlock(bo->base.resv);
 }
 
 /**
@@ -858,64 +900,21 @@ static void ttm_lru_walk_unlock(struct ttm_buffer_object *bo, bool locked)
 s64 ttm_lru_walk_for_evict(struct ttm_lru_walk *walk, struct ttm_device *bdev,
 			   struct ttm_resource_manager *man, s64 target)
 {
-	struct ttm_resource_cursor cursor;
-	struct ttm_resource *res;
+	struct ttm_bo_lru_cursor cursor;
+	struct ttm_buffer_object *bo;
 	s64 progress = 0;
 	s64 lret;
 
-	spin_lock(&bdev->lru_lock);
-	ttm_resource_cursor_init(&cursor, man);
-	ttm_resource_manager_for_each_res(&cursor, res) {
-		struct ttm_buffer_object *bo = res->bo;
-		bool bo_needs_unlock = false;
-		bool bo_locked = false;
-		int mem_type;
-
-		/*
-		 * Attempt a trylock before taking a reference on the bo,
-		 * since if we do it the other way around, and the trylock fails,
-		 * we need to drop the lru lock to put the bo.
-		 */
-		if (ttm_lru_walk_trylock(walk->ctx, bo, &bo_needs_unlock))
-			bo_locked = true;
-		else if (!walk->ticket || walk->ctx->no_wait_gpu ||
-			 walk->trylock_only)
-			continue;
-
-		if (!ttm_bo_get_unless_zero(bo)) {
-			ttm_lru_walk_unlock(bo, bo_needs_unlock);
-			continue;
-		}
-
-		mem_type = res->mem_type;
-		spin_unlock(&bdev->lru_lock);
-
-		lret = 0;
-		if (!bo_locked)
-			lret = ttm_lru_walk_ticketlock(walk, bo, &bo_needs_unlock);
-
-		/*
-		 * Note that in between the release of the lru lock and the
-		 * ticketlock, the bo may have switched resource,
-		 * and also memory type, since the resource may have been
-		 * freed and allocated again with a different memory type.
-		 * In that case, just skip it.
-		 */
-		if (!lret && bo->resource && bo->resource->mem_type == mem_type)
-			lret = walk->ops->process_bo(walk, bo);
-
-		ttm_lru_walk_unlock(bo, bo_needs_unlock);
-		ttm_bo_put(bo);
+	ttm_bo_lru_for_each_reserved_guarded(&cursor, man, &walk->arg, bo) {
+		lret = walk->ops->process_bo(walk, bo);
 		if (lret == -EBUSY || lret == -EALREADY)
 			lret = 0;
 		progress = (lret < 0) ? lret : progress + lret;
-
-		spin_lock(&bdev->lru_lock);
 		if (progress < 0 || progress >= target)
 			break;
 	}
-	ttm_resource_cursor_fini(&cursor);
-	spin_unlock(&bdev->lru_lock);
+	if (IS_ERR(bo))
+		return PTR_ERR(bo);
 
 	return progress;
 }
@@ -953,44 +952,87 @@ EXPORT_SYMBOL(ttm_bo_lru_cursor_fini);
  * ttm_bo_lru_cursor_init() - Initialize a struct ttm_bo_lru_cursor
  * @curs: The ttm_bo_lru_cursor to initialize.
  * @man: The ttm resource_manager whose LRU lists to iterate over.
- * @ctx: The ttm_operation_ctx to govern the locking.
+ * @arg: The ttm_lru_walk_arg to govern the walk.
  *
- * Initialize a struct ttm_bo_lru_cursor. Currently only trylocking
- * or prelocked buffer objects are available as detailed by
- * @ctx::resv and @ctx::allow_res_evict. Ticketlocking is not
- * supported.
+ * Initialize a struct ttm_bo_lru_cursor.
  *
  * Return: Pointer to @curs. The function does not fail.
  */
 struct ttm_bo_lru_cursor *
 ttm_bo_lru_cursor_init(struct ttm_bo_lru_cursor *curs,
 		       struct ttm_resource_manager *man,
-		       struct ttm_operation_ctx *ctx)
+		       struct ttm_lru_walk_arg *arg)
 {
 	memset(curs, 0, sizeof(*curs));
 	ttm_resource_cursor_init(&curs->res_curs, man);
-	curs->ctx = ctx;
+	curs->arg = arg;
 
 	return curs;
 }
 EXPORT_SYMBOL(ttm_bo_lru_cursor_init);
 
 static struct ttm_buffer_object *
-ttm_bo_from_res_reserved(struct ttm_resource *res, struct ttm_bo_lru_cursor *curs)
+__ttm_bo_lru_cursor_next(struct ttm_bo_lru_cursor *curs)
 {
-	struct ttm_buffer_object *bo = res->bo;
+	spinlock_t *lru_lock = &curs->res_curs.man->bdev->lru_lock;
+	struct ttm_resource *res = NULL;
+	struct ttm_buffer_object *bo;
+	struct ttm_lru_walk_arg *arg = curs->arg;
+	bool first = !curs->bo;
 
-	if (!ttm_lru_walk_trylock(curs->ctx, bo, &curs->needs_unlock))
-		return NULL;
+	ttm_bo_lru_cursor_cleanup_bo(curs);
 
-	if (!ttm_bo_get_unless_zero(bo)) {
-		if (curs->needs_unlock)
-			dma_resv_unlock(bo->base.resv);
-		return NULL;
+	spin_lock(lru_lock);
+	for (;;) {
+		int mem_type, ret = 0;
+		bool bo_locked = false;
+
+		if (first) {
+			res = ttm_resource_manager_first(&curs->res_curs);
+			first = false;
+		} else {
+			res = ttm_resource_manager_next(&curs->res_curs);
+		}
+		if (!res)
+			break;
+
+		bo = res->bo;
+		if (ttm_lru_walk_trylock(curs, bo))
+			bo_locked = true;
+		else if (!arg->ticket || arg->ctx->no_wait_gpu || arg->trylock_only)
+			continue;
+
+		if (!ttm_bo_get_unless_zero(bo)) {
+			if (curs->needs_unlock)
+				dma_resv_unlock(bo->base.resv);
+			continue;
+		}
+
+		mem_type = res->mem_type;
+		spin_unlock(lru_lock);
+		if (!bo_locked)
+			ret = ttm_lru_walk_ticketlock(curs, bo);
+
+		/*
+		 * Note that in between the release of the lru lock and the
+		 * ticketlock, the bo may have switched resource,
+		 * and also memory type, since the resource may have been
+		 * freed and allocated again with a different memory type.
+		 * In that case, just skip it.
+		 */
+		curs->bo = bo;
+		if (!ret && bo->resource && bo->resource->mem_type == mem_type)
+			return bo;
+
+		ttm_bo_lru_cursor_cleanup_bo(curs);
+		if (ret && ret != -EALREADY)
+			return ERR_PTR(ret);
+
+		spin_lock(lru_lock);
 	}
 
-	curs->bo = bo;
-	return bo;
+	spin_unlock(lru_lock);
+	return res ? bo : NULL;
 }
 
 /**
@@ -1004,25 +1046,7 @@ ttm_bo_from_res_reserved(struct ttm_resource *res, struct ttm_bo_lru_cursor *cur
  */
 struct ttm_buffer_object *ttm_bo_lru_cursor_next(struct ttm_bo_lru_cursor *curs)
 {
-	spinlock_t *lru_lock = &curs->res_curs.man->bdev->lru_lock;
-	struct ttm_resource *res = NULL;
-	struct ttm_buffer_object *bo;
-
-	ttm_bo_lru_cursor_cleanup_bo(curs);
-
-	spin_lock(lru_lock);
-	for (;;) {
-		res = ttm_resource_manager_next(&curs->res_curs);
-		if (!res)
-			break;
-
-		bo = ttm_bo_from_res_reserved(res, curs);
-		if (bo)
-			break;
-	}
-
-	spin_unlock(lru_lock);
-	return res ? bo : NULL;
+	return __ttm_bo_lru_cursor_next(curs);
 }
 EXPORT_SYMBOL(ttm_bo_lru_cursor_next);
 
@@ -1036,21 +1060,8 @@ EXPORT_SYMBOL(ttm_bo_lru_cursor_next);
  */
 struct ttm_buffer_object *ttm_bo_lru_cursor_first(struct ttm_bo_lru_cursor *curs)
 {
-	spinlock_t *lru_lock = &curs->res_curs.man->bdev->lru_lock;
-	struct ttm_buffer_object *bo;
-	struct ttm_resource *res;
-
-	spin_lock(lru_lock);
-	res = ttm_resource_manager_first(&curs->res_curs);
-	if (!res) {
-		spin_unlock(lru_lock);
-		return NULL;
-	}
-
-	bo = ttm_bo_from_res_reserved(res, curs);
-	spin_unlock(lru_lock);
-
-	return bo ? bo : ttm_bo_lru_cursor_next(curs);
+	ttm_bo_lru_cursor_cleanup_bo(curs);
+	return __ttm_bo_lru_cursor_next(curs);
 }
 EXPORT_SYMBOL(ttm_bo_lru_cursor_first);
 
@@ -1080,7 +1091,7 @@ long ttm_bo_shrink(struct ttm_operation_ctx *ctx, struct ttm_buffer_object *bo,
 		.num_placement = 1,
 		.placement = &sys_placement_flags,
 	};
-	struct ttm_tt *tt = bo->ttm;
+	struct ttm_device *bdev = bo->bdev;
 	long lret;
 
 	dma_resv_assert_held(bo->base.resv);
@@ -1102,19 +1113,19 @@ long ttm_bo_shrink(struct ttm_operation_ctx *ctx, struct ttm_buffer_object *bo,
 		return lret;
 
 	if (bo->bulk_move) {
-		spin_lock(&bo->bdev->lru_lock);
+		spin_lock(&bdev->lru_lock);
 		ttm_resource_del_bulk_move(bo->resource, bo);
-		spin_unlock(&bo->bdev->lru_lock);
+		spin_unlock(&bdev->lru_lock);
 	}
 
-	lret = ttm_tt_backup(bo->bdev, tt, (struct ttm_backup_flags)
+	lret = ttm_tt_backup(bdev, bo->ttm, (struct ttm_backup_flags)
 			     {.purge = flags.purge,
 			      .writeback = flags.writeback});
 
 	if (lret <= 0 && bo->bulk_move) {
-		spin_lock(&bo->bdev->lru_lock);
+		spin_lock(&bdev->lru_lock);
 		ttm_resource_add_bulk_move(bo->resource, bo);
-		spin_unlock(&bo->bdev->lru_lock);
+		spin_unlock(&bdev->lru_lock);
 	}
 
 	if (lret < 0 && lret != -EINTR)

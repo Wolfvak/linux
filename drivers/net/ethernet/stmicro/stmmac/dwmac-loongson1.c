@@ -38,30 +38,54 @@
 #define GMAC_SHUT		BIT(6)
 
 #define PHY_INTF_SELI		GENMASK(30, 28)
-#define PHY_INTF_MII		FIELD_PREP(PHY_INTF_SELI, 0)
-#define PHY_INTF_RMII		FIELD_PREP(PHY_INTF_SELI, 4)
 
 struct ls1x_dwmac {
 	struct plat_stmmacenet_data *plat_dat;
 	struct regmap *regmap;
+	unsigned int id;
 };
 
-static int ls1b_dwmac_syscon_init(struct platform_device *pdev, void *priv)
+struct ls1x_data {
+	int (*setup)(struct platform_device *pdev,
+		     struct plat_stmmacenet_data *plat_dat);
+	int (*init)(struct device *dev, void *bsp_priv);
+};
+
+static int ls1b_dwmac_setup(struct platform_device *pdev,
+			    struct plat_stmmacenet_data *plat_dat)
+{
+	struct ls1x_dwmac *dwmac = plat_dat->bsp_priv;
+	struct resource *res;
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res) {
+		/* This shouldn't fail - stmmac_get_platform_resources()
+		 * already mapped this resource.
+		 */
+		dev_err(&pdev->dev, "Could not get IO_MEM resources\n");
+		return -EINVAL;
+	}
+
+	if (res->start == LS1B_GMAC0_BASE) {
+		dwmac->id = 0;
+	} else if (res->start == LS1B_GMAC1_BASE) {
+		dwmac->id = 1;
+	} else {
+		dev_err(&pdev->dev, "Invalid Ethernet MAC base address %pR",
+			res);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int ls1b_dwmac_syscon_init(struct device *dev, void *priv)
 {
 	struct ls1x_dwmac *dwmac = priv;
 	struct plat_stmmacenet_data *plat = dwmac->plat_dat;
 	struct regmap *regmap = dwmac->regmap;
-	struct resource *res;
-	unsigned long reg_base;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res) {
-		dev_err(&pdev->dev, "Could not get IO_MEM resources\n");
-		return -EINVAL;
-	}
-	reg_base = (unsigned long)res->start;
-
-	if (reg_base == LS1B_GMAC0_BASE) {
+	if (dwmac->id == 0) {
 		switch (plat->phy_interface) {
 		case PHY_INTERFACE_MODE_RGMII_ID:
 			regmap_update_bits(regmap, LS1X_SYSCON0,
@@ -74,13 +98,13 @@ static int ls1b_dwmac_syscon_init(struct platform_device *pdev, void *priv)
 					   GMAC0_USE_TXCLK | GMAC0_USE_PWM01);
 			break;
 		default:
-			dev_err(&pdev->dev, "Unsupported PHY mode %u\n",
+			dev_err(dev, "Unsupported PHY mode %u\n",
 				plat->phy_interface);
 			return -EOPNOTSUPP;
 		}
 
 		regmap_update_bits(regmap, LS1X_SYSCON0, GMAC0_SHUT, 0);
-	} else if (reg_base == LS1B_GMAC1_BASE) {
+	} else if (dwmac->id == 1) {
 		regmap_update_bits(regmap, LS1X_SYSCON0,
 				   GMAC1_USE_UART1 | GMAC1_USE_UART0,
 				   GMAC1_USE_UART1 | GMAC1_USE_UART0);
@@ -98,42 +122,34 @@ static int ls1b_dwmac_syscon_init(struct platform_device *pdev, void *priv)
 					   GMAC1_USE_TXCLK | GMAC1_USE_PWM23);
 			break;
 		default:
-			dev_err(&pdev->dev, "Unsupported PHY mode %u\n",
+			dev_err(dev, "Unsupported PHY mode %u\n",
 				plat->phy_interface);
 			return -EOPNOTSUPP;
 		}
 
 		regmap_update_bits(regmap, LS1X_SYSCON1, GMAC1_SHUT, 0);
-	} else {
-		dev_err(&pdev->dev, "Invalid Ethernet MAC base address %lx",
-			reg_base);
-		return -EINVAL;
 	}
 
 	return 0;
 }
 
-static int ls1c_dwmac_syscon_init(struct platform_device *pdev, void *priv)
+static int ls1c_dwmac_syscon_init(struct device *dev, void *priv)
 {
 	struct ls1x_dwmac *dwmac = priv;
 	struct plat_stmmacenet_data *plat = dwmac->plat_dat;
 	struct regmap *regmap = dwmac->regmap;
+	int phy_intf_sel;
 
-	switch (plat->phy_interface) {
-	case PHY_INTERFACE_MODE_MII:
-		regmap_update_bits(regmap, LS1X_SYSCON1, PHY_INTF_SELI,
-				   PHY_INTF_MII);
-		break;
-	case PHY_INTERFACE_MODE_RMII:
-		regmap_update_bits(regmap, LS1X_SYSCON1, PHY_INTF_SELI,
-				   PHY_INTF_RMII);
-		break;
-	default:
-		dev_err(&pdev->dev, "Unsupported PHY-mode %u\n",
+	phy_intf_sel = stmmac_get_phy_intf_sel(plat->phy_interface);
+	if (phy_intf_sel != PHY_INTF_SEL_GMII_MII &&
+	    phy_intf_sel != PHY_INTF_SEL_RMII) {
+		dev_err(dev, "Unsupported PHY-mode %u\n",
 			plat->phy_interface);
 		return -EOPNOTSUPP;
 	}
 
+	regmap_update_bits(regmap, LS1X_SYSCON1, PHY_INTF_SELI,
+			   FIELD_PREP(PHY_INTF_SELI, phy_intf_sel));
 	regmap_update_bits(regmap, LS1X_SYSCON0, GMAC0_SHUT, 0);
 
 	return 0;
@@ -143,9 +159,9 @@ static int ls1x_dwmac_probe(struct platform_device *pdev)
 {
 	struct plat_stmmacenet_data *plat_dat;
 	struct stmmac_resources stmmac_res;
+	const struct ls1x_data *data;
 	struct regmap *regmap;
 	struct ls1x_dwmac *dwmac;
-	int (*init)(struct platform_device *pdev, void *priv);
 	int ret;
 
 	ret = stmmac_get_platform_resources(pdev, &stmmac_res);
@@ -159,8 +175,8 @@ static int ls1x_dwmac_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, PTR_ERR(regmap),
 				     "Unable to find syscon\n");
 
-	init = of_device_get_match_data(&pdev->dev);
-	if (!init) {
+	data = of_device_get_match_data(&pdev->dev);
+	if (!data) {
 		dev_err(&pdev->dev, "No of match data provided\n");
 		return -EINVAL;
 	}
@@ -175,21 +191,36 @@ static int ls1x_dwmac_probe(struct platform_device *pdev)
 				     "dt configuration failed\n");
 
 	plat_dat->bsp_priv = dwmac;
-	plat_dat->init = init;
+	plat_dat->init = data->init;
 	dwmac->plat_dat = plat_dat;
 	dwmac->regmap = regmap;
+
+	if (data->setup) {
+		ret = data->setup(pdev, plat_dat);
+		if (ret)
+			return ret;
+	}
 
 	return devm_stmmac_pltfr_probe(pdev, plat_dat, &stmmac_res);
 }
 
+static const struct ls1x_data ls1b_dwmac_data = {
+	.setup = ls1b_dwmac_setup,
+	.init = ls1b_dwmac_syscon_init,
+};
+
+static const struct ls1x_data ls1c_dwmac_data = {
+	.init = ls1c_dwmac_syscon_init,
+};
+
 static const struct of_device_id ls1x_dwmac_match[] = {
 	{
 		.compatible = "loongson,ls1b-gmac",
-		.data = &ls1b_dwmac_syscon_init,
+		.data = &ls1b_dwmac_data,
 	},
 	{
 		.compatible = "loongson,ls1c-emac",
-		.data = &ls1c_dwmac_syscon_init,
+		.data = &ls1c_dwmac_data,
 	},
 	{ }
 };

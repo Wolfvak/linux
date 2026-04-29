@@ -107,7 +107,7 @@ static int do_readpage(struct folio *folio)
 	size_t offset = 0;
 
 	dbg_gen("ino %lu, pg %lu, i_size %lld, flags %#lx",
-		inode->i_ino, folio->index, i_size, folio->flags);
+		inode->i_ino, folio->index, i_size, folio->flags.f);
 	ubifs_assert(c, !folio_test_checked(folio));
 	ubifs_assert(c, !folio->private);
 
@@ -404,7 +404,8 @@ static int allocate_budget(struct ubifs_info *c, struct folio *folio,
  * there is a plenty of flash space and the budget will be acquired quickly,
  * without forcing write-back. The slow path does not make this assumption.
  */
-static int ubifs_write_begin(struct file *file, struct address_space *mapping,
+static int ubifs_write_begin(const struct kiocb *iocb,
+			     struct address_space *mapping,
 			     loff_t pos, unsigned len,
 			     struct folio **foliop, void **fsdata)
 {
@@ -514,8 +515,9 @@ static void cancel_budget(struct ubifs_info *c, struct folio *folio,
 	}
 }
 
-static int ubifs_write_end(struct file *file, struct address_space *mapping,
-			   loff_t pos, unsigned len, unsigned copied,
+static int ubifs_write_end(const struct kiocb *iocb,
+			   struct address_space *mapping, loff_t pos,
+			   unsigned len, unsigned copied,
 			   struct folio *folio, void *fsdata)
 {
 	struct inode *inode = mapping->host;
@@ -598,7 +600,7 @@ static int populate_page(struct ubifs_info *c, struct folio *folio,
 	pgoff_t end_index;
 
 	dbg_gen("ino %lu, pg %lu, i_size %lld, flags %#lx",
-		inode->i_ino, folio->index, i_size, folio->flags);
+		inode->i_ino, folio->index, i_size, folio->flags.f);
 
 	end_index = (i_size - 1) >> PAGE_SHIFT;
 	if (!i_size || folio->index > end_index) {
@@ -846,7 +848,7 @@ static int ubifs_bulk_read(struct folio *folio)
 	if (mutex_trylock(&c->bu_mutex))
 		bu = &c->bu;
 	else {
-		bu = kmalloc(sizeof(struct bu_info), GFP_NOFS | __GFP_NOWARN);
+		bu = kmalloc_obj(struct bu_info, GFP_NOFS | __GFP_NOWARN);
 		if (!bu)
 			goto out_unlock;
 
@@ -977,8 +979,7 @@ static int do_writepage(struct folio *folio, size_t len)
  * on the page lock and it would not write the truncated inode node to the
  * journal before we have finished.
  */
-static int ubifs_writepage(struct folio *folio, struct writeback_control *wbc,
-		void *data)
+static int ubifs_writepage(struct folio *folio, struct writeback_control *wbc)
 {
 	struct inode *inode = folio->mapping->host;
 	struct ubifs_info *c = inode->i_sb->s_fs_info;
@@ -987,7 +988,7 @@ static int ubifs_writepage(struct folio *folio, struct writeback_control *wbc,
 	int err, len = folio_size(folio);
 
 	dbg_gen("ino %lu, pg %lu, pg flags %#lx",
-		inode->i_ino, folio->index, folio->flags);
+		inode->i_ino, folio->index, folio->flags.f);
 	ubifs_assert(c, folio->private != NULL);
 
 	/* Is the folio fully outside @i_size? (truncate in progress) */
@@ -1050,7 +1051,12 @@ out_unlock:
 static int ubifs_writepages(struct address_space *mapping,
 		struct writeback_control *wbc)
 {
-	return write_cache_pages(mapping, wbc, ubifs_writepage, NULL);
+	struct folio *folio = NULL;
+	int error;
+
+	while ((folio = writeback_iter(mapping, wbc, folio, &error)))
+		error = ubifs_writepage(folio, wbc);
+	return error;
 }
 
 /**
@@ -1317,7 +1323,7 @@ int ubifs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 	inode_lock(inode);
 
 	/* Synchronize the inode unless this is a 'datasync()' call. */
-	if (!datasync || (inode->i_state & I_DIRTY_DATASYNC)) {
+	if (!datasync || (inode_state_read_once(inode) & I_DIRTY_DATASYNC)) {
 		err = inode->i_sb->s_op->write_inode(inode, NULL);
 		if (err)
 			goto out;
@@ -1355,17 +1361,8 @@ static inline int mctime_update_needed(const struct inode *inode,
 	return 0;
 }
 
-/**
- * ubifs_update_time - update time of inode.
- * @inode: inode to update
- * @flags: time updating control flag determines updating
- *	    which time fields of @inode
- *
- * This function updates time of the inode.
- *
- * Returns: %0 for success or a negative error code otherwise.
- */
-int ubifs_update_time(struct inode *inode, int flags)
+int ubifs_update_time(struct inode *inode, enum fs_update_time type,
+		unsigned int flags)
 {
 	struct ubifs_inode *ui = ubifs_inode(inode);
 	struct ubifs_info *c = inode->i_sb->s_fs_info;
@@ -1373,17 +1370,22 @@ int ubifs_update_time(struct inode *inode, int flags)
 			.dirtied_ino_d = ALIGN(ui->data_len, 8) };
 	int err, release;
 
-	if (!IS_ENABLED(CONFIG_UBIFS_ATIME_SUPPORT)) {
-		generic_update_time(inode, flags);
-		return 0;
-	}
+	/* ubifs sets S_NOCMTIME on all inodes, this should not happen. */
+	if (WARN_ON_ONCE(type != FS_UPD_ATIME))
+		return -EIO;
+
+	if (!IS_ENABLED(CONFIG_UBIFS_ATIME_SUPPORT))
+		return generic_update_time(inode, type, flags);
+
+	if (flags & IOCB_NOWAIT)
+		return -EAGAIN;
 
 	err = ubifs_budget_space(c, &req);
 	if (err)
 		return err;
 
 	mutex_lock(&ui->ui_mutex);
-	inode_update_timestamps(inode, flags);
+	inode_update_time(inode, type, flags);
 	release = ui->dirty;
 	__mark_inode_dirty(inode, I_DIRTY_SYNC);
 	mutex_unlock(&ui->ui_mutex);
@@ -1579,17 +1581,17 @@ static const struct vm_operations_struct ubifs_file_vm_ops = {
 	.page_mkwrite = ubifs_vm_page_mkwrite,
 };
 
-static int ubifs_file_mmap(struct file *file, struct vm_area_struct *vma)
+static int ubifs_file_mmap_prepare(struct vm_area_desc *desc)
 {
 	int err;
 
-	err = generic_file_mmap(file, vma);
+	err = generic_file_mmap_prepare(desc);
 	if (err)
 		return err;
-	vma->vm_ops = &ubifs_file_vm_ops;
+	desc->vm_ops = &ubifs_file_vm_ops;
 
 	if (IS_ENABLED(CONFIG_UBIFS_ATIME_SUPPORT))
-		file_accessed(file);
+		file_accessed(desc->file);
 
 	return 0;
 }
@@ -1652,7 +1654,7 @@ const struct file_operations ubifs_file_operations = {
 	.llseek         = generic_file_llseek,
 	.read_iter      = generic_file_read_iter,
 	.write_iter     = ubifs_write_iter,
-	.mmap           = ubifs_file_mmap,
+	.mmap_prepare   = ubifs_file_mmap_prepare,
 	.fsync          = ubifs_fsync,
 	.unlocked_ioctl = ubifs_ioctl,
 	.splice_read	= filemap_splice_read,

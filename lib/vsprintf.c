@@ -26,6 +26,7 @@
 #include <linux/types.h>
 #include <linux/string.h>
 #include <linux/ctype.h>
+#include <linux/hex.h>
 #include <linux/kernel.h>
 #include <linux/kallsyms.h>
 #include <linux/math64.h>
@@ -59,6 +60,20 @@
 /* Disable pointer hashing if requested */
 bool no_hash_pointers __ro_after_init;
 EXPORT_SYMBOL_GPL(no_hash_pointers);
+
+/*
+ * Hashed pointers policy selected by "hash_pointers=..." boot param
+ *
+ * `auto`   - Hashed pointers enabled unless disabled by slub_debug_enabled=true
+ * `always` - Hashed pointers enabled unconditionally
+ * `never`  - Hashed pointers disabled unconditionally
+ */
+enum hash_pointers_policy {
+	HASH_PTR_AUTO = 0,
+	HASH_PTR_ALWAYS,
+	HASH_PTR_NEVER
+};
+static enum hash_pointers_policy hash_pointers_mode __initdata;
 
 noinline
 static unsigned long long simple_strntoull(const char *startp, char **endp, unsigned int base, size_t max_chars)
@@ -568,17 +583,18 @@ char *number(char *buf, char *end, unsigned long long num,
 	return buf;
 }
 
+#define special_hex_spec(size)					\
+(struct printf_spec) {						\
+	.field_width = 2 + 2 * (size),		/* 0x + hex */	\
+	.flags = SPECIAL | SMALL | ZEROPAD,			\
+	.base = 16,						\
+	.precision = -1,					\
+}
+
 static noinline_for_stack
 char *special_hex_number(char *buf, char *end, unsigned long long num, int size)
 {
-	struct printf_spec spec;
-
-	spec.field_width = 2 + 2 * size;	/* 0x + hex */
-	spec.flags = SPECIAL | SMALL | ZEROPAD;
-	spec.base = 16;
-	spec.precision = -1;
-
-	return number(buf, end, num, spec);
+	return number(buf, end, num, special_hex_spec(size));
 }
 
 static void move_right(char *buf, char *end, unsigned len, unsigned spaces)
@@ -1150,18 +1166,11 @@ char *range_string(char *buf, char *end, const struct range *range,
 	char sym[sizeof("[range 0x0123456789abcdef-0x0123456789abcdef]")];
 	char *p = sym, *pend = sym + sizeof(sym);
 
-	struct printf_spec range_spec = {
-		.field_width = 2 + 2 * sizeof(range->start), /* 0x + 2 * 8 */
-		.flags = SPECIAL | SMALL | ZEROPAD,
-		.base = 16,
-		.precision = -1,
-	};
-
 	if (check_pointer(&buf, end, range, spec))
 		return buf;
 
 	p = string_nocheck(p, pend, "[range ", default_str_spec);
-	p = hex_range(p, pend, range->start, range->end, range_spec);
+	p = hex_range(p, pend, range->start, range->end, special_hex_spec(sizeof(range->start)));
 	*p++ = ']';
 	*p = '\0';
 
@@ -1699,10 +1708,9 @@ char *escaped_string(char *buf, char *end, u8 *addr, struct printf_spec spec,
 	return buf;
 }
 
-#pragma GCC diagnostic push
-#ifndef __clang__
-#pragma GCC diagnostic ignored "-Wsuggest-attribute=format"
-#endif
+__diag_push();
+__diag_ignore(GCC, all, "-Wsuggest-attribute=format",
+	      "Not a valid __printf() conversion candidate.");
 static char *va_format(char *buf, char *end, struct va_format *va_fmt,
 		       struct printf_spec spec)
 {
@@ -1717,7 +1725,7 @@ static char *va_format(char *buf, char *end, struct va_format *va_fmt,
 
 	return buf;
 }
-#pragma GCC diagnostic pop
+__diag_pop();
 
 static noinline_for_stack
 char *uuid_string(char *buf, char *end, const u8 *addr,
@@ -1915,9 +1923,6 @@ char *rtc_str(char *buf, char *end, const struct rtc_time *tm,
 	bool found = true;
 	int count = 2;
 
-	if (check_pointer(&buf, end, tm, spec))
-		return buf;
-
 	switch (fmt[count]) {
 	case 'd':
 		have_t = false;
@@ -1980,12 +1985,39 @@ char *time64_str(char *buf, char *end, const time64_t time,
 }
 
 static noinline_for_stack
+char *timespec64_str(char *buf, char *end, const struct timespec64 *ts,
+		     struct printf_spec spec, const char *fmt)
+{
+	static const struct printf_spec default_dec09_spec = {
+		.base = 10,
+		.field_width = 9,
+		.precision = -1,
+		.flags = ZEROPAD,
+	};
+
+	if (fmt[2] == 'p')
+		buf = number(buf, end, ts->tv_sec, default_dec_spec);
+	else
+		buf = time64_str(buf, end, ts->tv_sec, spec, fmt);
+	if (buf < end)
+		*buf = '.';
+	buf++;
+
+	return number(buf, end, ts->tv_nsec, default_dec09_spec);
+}
+
+static noinline_for_stack
 char *time_and_date(char *buf, char *end, void *ptr, struct printf_spec spec,
 		    const char *fmt)
 {
+	if (check_pointer(&buf, end, ptr, spec))
+		return buf;
+
 	switch (fmt[1]) {
 	case 'R':
 		return rtc_str(buf, end, (const struct rtc_time *)ptr, spec, fmt);
+	case 'S':
+		return timespec64_str(buf, end, (const struct timespec64 *)ptr, spec, fmt);
 	case 'T':
 		return time64_str(buf, end, *(const time64_t *)ptr, spec, fmt);
 	default:
@@ -2289,12 +2321,23 @@ char *resource_or_range(const char *fmt, char *buf, char *end, void *ptr,
 	return resource_string(buf, end, ptr, spec, fmt);
 }
 
-int __init no_hash_pointers_enable(char *str)
+void __init hash_pointers_finalize(bool slub_debug)
 {
-	if (no_hash_pointers)
-		return 0;
+	switch (hash_pointers_mode) {
+	case HASH_PTR_ALWAYS:
+		no_hash_pointers = false;
+		break;
+	case HASH_PTR_NEVER:
+		no_hash_pointers = true;
+		break;
+	case HASH_PTR_AUTO:
+	default:
+		no_hash_pointers = slub_debug;
+		break;
+	}
 
-	no_hash_pointers = true;
+	if (!no_hash_pointers)
+		return;
 
 	pr_warn("**********************************************************\n");
 	pr_warn("**   NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE   **\n");
@@ -2307,10 +2350,38 @@ int __init no_hash_pointers_enable(char *str)
 	pr_warn("** the kernel, report this immediately to your system   **\n");
 	pr_warn("** administrator!                                       **\n");
 	pr_warn("**                                                      **\n");
+	pr_warn("** Use hash_pointers=always to force this mode off      **\n");
+	pr_warn("**                                                      **\n");
 	pr_warn("**   NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE   **\n");
 	pr_warn("**********************************************************\n");
+}
+
+static int __init hash_pointers_mode_parse(char *str)
+{
+	if (!str) {
+		pr_warn("Hash pointers mode empty; falling back to auto.\n");
+		hash_pointers_mode = HASH_PTR_AUTO;
+	} else if (strncmp(str, "auto", 4) == 0)   {
+		pr_info("Hash pointers mode set to auto.\n");
+		hash_pointers_mode = HASH_PTR_AUTO;
+	} else if (strncmp(str, "never", 5) == 0) {
+		pr_info("Hash pointers mode set to never.\n");
+		hash_pointers_mode = HASH_PTR_NEVER;
+	} else if (strncmp(str, "always", 6) == 0) {
+		pr_info("Hash pointers mode set to always.\n");
+		hash_pointers_mode = HASH_PTR_ALWAYS;
+	} else {
+		pr_warn("Unknown hash_pointers mode '%s' specified; assuming auto.\n", str);
+		hash_pointers_mode = HASH_PTR_AUTO;
+	}
 
 	return 0;
+}
+early_param("hash_pointers", hash_pointers_mode_parse);
+
+static int __init no_hash_pointers_enable(char *str)
+{
+	return hash_pointers_mode_parse("never");
 }
 early_param("no_hash_pointers", no_hash_pointers_enable);
 
@@ -2410,9 +2481,11 @@ early_param("no_hash_pointers", no_hash_pointers_enable);
  * - 'd[234]' For a dentry name (optionally 2-4 last components)
  * - 'D[234]' Same as 'd' but for a struct file
  * - 'g' For block_device name (gendisk + partition number)
- * - 't[RT][dt][r][s]' For time and date as represented by:
+ * - 't[RST][dt][r][s]' For time and date as represented by:
  *      R    struct rtc_time
+ *      S    struct timespec64
  *      T    time64_t
+ * - 'tSp' For time represented by struct timespec64 printed as <seconds>.<nanoseconds>
  * - 'C' For a clock, it prints the name (Common Clock Framework) or address
  *       (legacy clock framework) of the clock
  * - 'G' For flags to be printed as a collection of symbolic strings that would
@@ -2831,10 +2904,11 @@ int vsnprintf(char *buf, size_t size, const char *fmt_str, va_list args)
 
 		case FORMAT_STATE_NUM: {
 			unsigned long long num;
-			if (fmt.size <= sizeof(int))
-				num = convert_num_spec(va_arg(args, int), fmt.size, spec);
-			else
+
+			if (fmt.size > sizeof(int))
 				num = va_arg(args, long long);
+			else
+				num = convert_num_spec(va_arg(args, int), fmt.size, spec);
 			str = number(str, end, num, spec);
 			continue;
 		}
@@ -3002,8 +3076,8 @@ EXPORT_SYMBOL(scnprintf);
  * @fmt: The format string to use
  * @args: Arguments for the format string
  *
- * The function returns the number of characters written
- * into @buf. Use vsnprintf() or vscnprintf() in order to avoid
+ * The return value is the number of characters written into @buf not including
+ * the trailing '\0'. Use vsnprintf() or vscnprintf() in order to avoid
  * buffer overflows.
  *
  * If you're not already dealing with a va_list consider using sprintf().
@@ -3022,8 +3096,8 @@ EXPORT_SYMBOL(vsprintf);
  * @fmt: The format string to use
  * @...: Arguments for the format string
  *
- * The function returns the number of characters written
- * into @buf. Use snprintf() or scnprintf() in order to avoid
+ * The return value is the number of characters written into @buf not including
+ * the trailing '\0'. Use snprintf() or scnprintf() in order to avoid
  * buffer overflows.
  *
  * See the vsnprintf() documentation for format string extensions over C99.
@@ -3342,11 +3416,10 @@ int bstr_printf(char *buf, size_t size, const char *fmt_str, const u32 *bin_buf)
 			goto out;
 
 		case FORMAT_STATE_NUM:
-			if (fmt.size > sizeof(int)) {
+			if (fmt.size > sizeof(int))
 				num = get_arg(long long);
-			} else {
+			else
 				num = convert_num_spec(get_arg(int), fmt.size, spec);
-			}
 			str = number(str, end, num, spec);
 			continue;
 		}

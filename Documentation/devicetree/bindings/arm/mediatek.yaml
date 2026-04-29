@@ -29,10 +29,16 @@ properties:
           - const: mediatek,mt2712
       - items:
           - enum:
+              - jty,d101
+              - lenovo,a369i
+          - const: mediatek,mt6572
+      - items:
+          - enum:
               - mediatek,mt6580-evbp1
           - const: mediatek,mt6580
       - items:
           - enum:
+              - alcatel,yarisxl
               - prestigio,pmt5008-3g
           - const: mediatek,mt6582
       - items:
@@ -107,6 +113,12 @@ properties:
       - items:
           - const: bananapi,bpi-r4-2g5
           - const: bananapi,bpi-r4
+          - const: mediatek,mt7988a
+      - items:
+          - enum:
+              - bananapi,bpi-r4-pro-4e
+              - bananapi,bpi-r4-pro-8x
+          - const: bananapi,bpi-r4-pro
           - const: mediatek,mt7988a
       - items:
           - enum:
@@ -302,6 +314,10 @@ properties:
           - const: google,steelix-sku196608
           - const: google,steelix
           - const: mediatek,mt8186
+      - description: Google Squirtle (Acer Chromebook Spin 311 (R724T)
+        items:
+          - const: google,squirtle
+          - const: mediatek,mt8186
       - description: Google Starmie (ASUS Chromebook Enterprise CM30 (CM3001))
         items:
           - const: google,starmie-sku0
@@ -350,9 +366,6 @@ properties:
           - const: mediatek,mt8186
       - description: Google Voltorb (Acer Chromebook 311 C723/C732T)
         items:
-          - enum:
-              - google,voltorb-sku589824
-              - google,voltorb-sku589825
           - const: google,voltorb
           - const: mediatek,mt8186
       - items:
@@ -425,11 +438,15 @@ properties:
           - const: mediatek,mt8365
       - items:
           - enum:
+              - ezurio,mt8370-tungsten-smarc
+              - grinn,genio-510-sbc
               - mediatek,mt8370-evk
           - const: mediatek,mt8370
           - const: mediatek,mt8188
       - items:
           - enum:
+              - ezurio,mt8390-tungsten-smarc
+              - grinn,genio-700-sbc
               - mediatek,mt8390-evk
           - const: mediatek,mt8390
           - const: mediatek,mt8188
@@ -437,6 +454,7 @@ properties:
           - enum:
               - kontron,3-5-sbc-i1200
               - mediatek,mt8395-evk
+              - mediatek,mt8395-evk-ufs
               - radxa,nio-12l
           - const: mediatek,mt8395
           - const: mediatek,mt8195

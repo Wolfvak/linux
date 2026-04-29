@@ -3,10 +3,13 @@
 
 . "$(cd "$(dirname "$0")" && pwd)"/test_common.sh
 
-TID="generic_12"
 ERR_CODE=0
 
 if ! _have_program bpftrace; then
+	exit "$UBLK_SKIP_CODE"
+fi
+
+if ! _have_program fio; then
 	exit "$UBLK_SKIP_CODE"
 fi
 

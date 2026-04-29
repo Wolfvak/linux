@@ -49,14 +49,16 @@ static int cpufreq_set(struct cpufreq_policy *policy, unsigned int freq)
 
 static ssize_t show_speed(struct cpufreq_policy *policy, char *buf)
 {
-	return sprintf(buf, "%u\n", policy->cur);
+	struct userspace_policy *userspace = policy->governor_data;
+
+	return sprintf(buf, "%u\n", userspace->setspeed);
 }
 
 static int cpufreq_userspace_policy_init(struct cpufreq_policy *policy)
 {
 	struct userspace_policy *userspace;
 
-	userspace = kzalloc(sizeof(*userspace), GFP_KERNEL);
+	userspace = kzalloc_obj(*userspace);
 	if (!userspace)
 		return -ENOMEM;
 
@@ -134,6 +136,7 @@ static struct cpufreq_governor cpufreq_gov_userspace = {
 	.store_setspeed	= cpufreq_set,
 	.show_setspeed	= show_speed,
 	.owner		= THIS_MODULE,
+	.flags		= CPUFREQ_GOV_STRICT_TARGET,
 };
 
 MODULE_AUTHOR("Dominik Brodowski <linux@brodo.de>, "

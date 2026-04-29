@@ -655,6 +655,7 @@
 			      <0x00 0x32800000 0x00 0x100000>;
 			interrupt-names = "rx_011";
 			interrupts = <GIC_SPI 37 IRQ_TYPE_LEVEL_HIGH>;
+			bootph-all;
 		};
 
 		hwspinlock: spinlock@30e00000 {
@@ -883,7 +884,7 @@
 		#address-cells = <3>;
 		#size-cells = <2>;
 		ranges = <0x81000000 0 0          0x0 0x10020000 0 0x00010000>,
-			 <0x82000000 0 0x10030000 0x0 0x10030000 0 0x07FD0000>;
+			 <0x82000000 0 0x10030000 0x0 0x10030000 0 0x07fd0000>;
 		ti,syscon-pcie-id = <&scm_conf 0x210>;
 		ti,syscon-pcie-mode = <&scm_conf 0x4060>;
 		bus-range = <0x0 0xff>;
@@ -904,7 +905,7 @@
 		#address-cells = <3>;
 		#size-cells = <2>;
 		ranges = <0x81000000 0 0          0x0   0x18020000 0 0x00010000>,
-			 <0x82000000 0 0x18030000 0x0   0x18030000 0 0x07FD0000>;
+			 <0x82000000 0 0x18030000 0x0   0x18030000 0 0x07fd0000>;
 		ti,syscon-pcie-id = <&scm_conf 0x210>;
 		ti,syscon-pcie-mode = <&scm_conf 0x4070>;
 		bus-range = <0x0 0xff>;

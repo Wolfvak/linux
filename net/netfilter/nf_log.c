@@ -89,7 +89,7 @@ int nf_log_register(u_int8_t pf, struct nf_logger *logger)
 	if (pf == NFPROTO_UNSPEC) {
 		for (i = NFPROTO_UNSPEC; i < NFPROTO_NUMPROTO; i++) {
 			if (rcu_access_pointer(loggers[i][logger->type])) {
-				ret = -EEXIST;
+				ret = -EBUSY;
 				goto unlock;
 			}
 		}
@@ -97,7 +97,7 @@ int nf_log_register(u_int8_t pf, struct nf_logger *logger)
 			rcu_assign_pointer(loggers[i][logger->type], logger);
 	} else {
 		if (rcu_access_pointer(loggers[pf][logger->type])) {
-			ret = -EEXIST;
+			ret = -EBUSY;
 			goto unlock;
 		}
 		rcu_assign_pointer(loggers[pf][logger->type], logger);
@@ -124,6 +124,32 @@ void nf_log_unregister(struct nf_logger *logger)
 	synchronize_rcu();
 }
 EXPORT_SYMBOL(nf_log_unregister);
+
+/**
+ * nf_log_is_registered - Check if any logger is registered for a given
+ * protocol family.
+ *
+ * @pf: Protocol family
+ *
+ * Returns: true if at least one logger is active for @pf, false otherwise.
+ */
+bool nf_log_is_registered(u_int8_t pf)
+{
+	int i;
+
+	if (pf >= NFPROTO_NUMPROTO) {
+		WARN_ON_ONCE(1);
+		return false;
+	}
+
+	for (i = 0; i < NF_LOG_TYPE_MAX; i++) {
+		if (rcu_access_pointer(loggers[pf][i]))
+			return true;
+	}
+
+	return false;
+}
+EXPORT_SYMBOL(nf_log_is_registered);
 
 int nf_log_bind_pf(struct net *net, u_int8_t pf,
 		   const struct nf_logger *logger)
@@ -291,7 +317,7 @@ EXPORT_SYMBOL_GPL(nf_log_buf_add);
 
 struct nf_log_buf *nf_log_buf_open(void)
 {
-	struct nf_log_buf *m = kmalloc(sizeof(*m), GFP_ATOMIC);
+	struct nf_log_buf *m = kmalloc_obj(*m, GFP_ATOMIC);
 
 	if (unlikely(!m)) {
 		local_bh_disable();

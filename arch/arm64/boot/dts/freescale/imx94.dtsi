@@ -108,6 +108,16 @@
 		};
 	};
 
+	mqs1: mqs1 {
+		compatible = "fsl,imx943-aonmix-mqs";
+		status = "disabled";
+	};
+
+	mqs2: mqs2 {
+		compatible = "fsl,imx943-wakeupmix-mqs";
+		status = "disabled";
+	};
+
 	pmu {
 		compatible = "arm,cortex-a55-pmu";
 		interrupts = <GIC_PPI 7 (GIC_CPU_MASK_SIMPLE(6) | IRQ_TYPE_LEVEL_HIGH)>;
@@ -202,7 +212,8 @@
 						      <&a55_irqsteer 88>, <&a55_irqsteer 89>,
 						      <&a55_irqsteer 90>, <&a55_irqsteer 91>,
 						      <&a55_irqsteer 92>, <&a55_irqsteer 93>,
-						      <&a55_irqsteer 94>, <&a55_irqsteer 95>;
+						      <&a55_irqsteer 94>, <&a55_irqsteer 95>,
+						      <&gic GIC_SPI 98 IRQ_TYPE_LEVEL_HIGH>;
 			};
 
 			mu10: mailbox@42430000 {
@@ -609,7 +620,8 @@
 						      <&a55_irqsteer 216>, <&a55_irqsteer 217>,
 						      <&a55_irqsteer 218>, <&a55_irqsteer 219>,
 						      <&a55_irqsteer 220>, <&a55_irqsteer 221>,
-						      <&a55_irqsteer 222>, <&a55_irqsteer 223>;
+						      <&a55_irqsteer 222>, <&a55_irqsteer 223>,
+						      <&gic GIC_SPI 206 IRQ_TYPE_LEVEL_HIGH>;
 			};
 		};
 
@@ -617,7 +629,7 @@
 			compatible = "fsl,aips-bus", "simple-bus";
 			reg = <0 0x42800000 0 0x800000>;
 			ranges = <0x42800000 0x0 0x42800000 0x800000>,
-				 <0x28000000 0x0 0x28000000 0x1000000>;
+				 <0x24000000 0x0 0x24000000 0xc000000>;
 			#address-cells = <1>;
 			#size-cells = <1>;
 
@@ -773,6 +785,38 @@
 				#mbox-cells = <2>;
 				status = "disabled";
 			};
+
+			xspi1: spi@42b90000 {
+				compatible = "nxp,imx94-xspi";
+				reg = <0x42b90000 0x50000>, <0x28000000 0x08000000>;
+				reg-names = "base", "mmap";
+				interrupts = <GIC_SPI 390 IRQ_TYPE_LEVEL_HIGH>,		// EENV0
+					     <GIC_SPI 391 IRQ_TYPE_LEVEL_HIGH>,		// EENV1
+					     <GIC_SPI 392 IRQ_TYPE_LEVEL_HIGH>,		// EENV2
+					     <GIC_SPI 393 IRQ_TYPE_LEVEL_HIGH>,		// EENV3
+					     <GIC_SPI 394 IRQ_TYPE_LEVEL_HIGH>;		// EENV4
+				#address-cells = <1>;
+				#size-cells = <0>;
+				clocks = <&scmi_clk IMX94_CLK_XSPI1>;
+				clock-names = "per";
+				status = "disabled";
+			};
+
+			xspi2: spi@42be0000 {
+				compatible = "nxp,imx94-xspi";
+				reg = <0x42be0000 0x50000>, <0x24000000 0x04000000>;
+				reg-names = "base", "mmap";
+				interrupts = <GIC_SPI 395 IRQ_TYPE_LEVEL_HIGH>,		// EENV0
+					     <GIC_SPI 396 IRQ_TYPE_LEVEL_HIGH>,		// EENV1
+					     <GIC_SPI 397 IRQ_TYPE_LEVEL_HIGH>,		// EENV2
+					     <GIC_SPI 398 IRQ_TYPE_LEVEL_HIGH>,		// EENV3
+					     <GIC_SPI 399 IRQ_TYPE_LEVEL_HIGH>;		// EENV4
+				#address-cells = <1>;
+				#size-cells = <0>;
+				clocks = <&scmi_clk IMX94_CLK_XSPI2>;
+				clock-names = "per";
+				status = "disabled";
+			};
 		};
 
 		gpio2: gpio@43810000 {
@@ -785,6 +829,7 @@
 			#gpio-cells = <2>;
 			gpio-controller;
 			gpio-ranges = <&scmi_iomuxc 0 4 32>;
+			ngpios = <32>;
 		};
 
 		gpio3: gpio@43820000 {
@@ -797,6 +842,7 @@
 			#gpio-cells = <2>;
 			gpio-controller;
 			gpio-ranges = <&scmi_iomuxc 0 36 26>;
+			ngpios = <26>;
 		};
 
 		gpio4: gpio@43840000 {
@@ -810,6 +856,7 @@
 			gpio-controller;
 			gpio-ranges = <&scmi_iomuxc 0 62 4>, <&scmi_iomuxc 4 0 4>,
 				      <&scmi_iomuxc 8 140 12>, <&scmi_iomuxc 20 164 12>;
+			ngpios = <32>;
 		};
 
 		gpio5: gpio@43850000 {
@@ -822,6 +869,7 @@
 			#gpio-cells = <2>;
 			gpio-controller;
 			gpio-ranges = <&scmi_iomuxc 0 108 32>;
+			ngpios = <32>;
 		};
 
 		gpio6: gpio@43860000 {
@@ -834,6 +882,7 @@
 			#gpio-cells = <2>;
 			gpio-controller;
 			gpio-ranges = <&scmi_iomuxc 0 66 32>;
+			ngpios = <32>;
 		};
 
 		gpio7: gpio@43870000 {
@@ -846,6 +895,8 @@
 			#gpio-cells = <2>;
 			gpio-controller;
 			gpio-ranges = <&scmi_iomuxc 0 98 10>, <&scmi_iomuxc 16 152 12>;
+			gpio-reserved-ranges = <10 6>;
+			ngpios = <28>;
 		};
 
 		aips1: bus@44000000 {
@@ -1028,6 +1079,13 @@
 				compatible = "fsl,imx94-flexcan", "fsl,imx95-flexcan";
 				reg = <0x443a0000 0x10000>;
 				interrupts = <GIC_SPI 10 IRQ_TYPE_LEVEL_HIGH>;
+				clocks = <&scmi_clk IMX94_CLK_BUSAON>,
+					 <&scmi_clk IMX94_CLK_CAN1>;
+				clock-names = "ipg", "per";
+				assigned-clocks = <&scmi_clk IMX94_CLK_CAN1>;
+				assigned-clock-parents = <&scmi_clk IMX94_CLK_SYSPLL1_PFD1_DIV2>;
+				assigned-clock-rates = <80000000>;
+				fsl,clk-source = /bits/ 8 <0>;
 				status = "disabled";
 			};
 
@@ -1041,6 +1099,26 @@
 				clock-names = "bus", "mclk0", "mclk1", "mclk2", "mclk3";
 				dmas = <&edma1 25 0 FSL_EDMA_RX>, <&edma1 24 0 0>;
 				dma-names = "rx", "tx";
+				#sound-dai-cells = <0>;
+				status = "disabled";
+			};
+
+			micfil: micfil@44520000 {
+				compatible = "fsl,imx943-micfil";
+				reg = <0x44520000 0x10000>;
+				interrupts = <GIC_SPI 115 IRQ_TYPE_LEVEL_HIGH>,
+					     <GIC_SPI 114 IRQ_TYPE_LEVEL_HIGH>,
+					     <GIC_SPI 113 IRQ_TYPE_LEVEL_HIGH>,
+					     <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH>;
+				clocks = <&scmi_clk IMX94_CLK_BUSAON>,
+					 <&scmi_clk IMX94_CLK_PDM>,
+					 <&scmi_clk IMX94_CLK_AUDIOPLL1>,
+					 <&scmi_clk IMX94_CLK_AUDIOPLL2>,
+					 <&dummy>;
+				clock-names = "ipg_clk", "ipg_clk_app",
+					      "pll8k", "pll11k", "clkext3";
+				dmas = <&edma1 6 0 (FSL_EDMA_MULTI_FIFO | FSL_EDMA_RX)>;
+				dma-names = "rx";
 				#sound-dai-cells = <0>;
 				status = "disabled";
 			};
@@ -1143,6 +1221,150 @@
 				fsl,ext-reset-output;
 				status = "disabled";
 			};
+		};
+
+		netc_blk_ctrl: system-controller@4ceb0000 {
+			compatible = "nxp,imx94-netc-blk-ctrl";
+			reg = <0x0 0x4ceb0000 0x0 0x10000>,
+			      <0x0 0x4cec0000 0x0 0x10000>,
+			      <0x0 0x4c810000 0x0 0x7C>;
+			reg-names = "ierb", "prb", "netcmix";
+			ranges;
+			#address-cells = <2>;
+			#size-cells = <2>;
+			clocks = <&scmi_clk IMX94_CLK_ENET>;
+			clock-names = "ipg";
+			power-domains = <&scmi_devpd IMX94_PD_NETC>;
+			status = "disabled";
+
+			netc_bus0: pcie@4ca00000 {
+				compatible = "pci-host-ecam-generic";
+				reg = <0x0 0x4ca00000 0x0 0x100000>;
+				#address-cells = <3>;
+				#size-cells = <2>;
+				device_type = "pci";
+				linux,pci-domain = <0>;
+				bus-range = <0x0 0x0>;
+				msi-map = <0x00 &its 0x68 0x1>, //ENETC3 PF
+					  <0x01 &its 0x61 0x1>, //Timer0
+					  <0x02 &its 0x64 0x1>, //Switch
+					  <0x40 &its 0x69 0x1>, //ENETC3 VF0
+					  <0x80 &its 0x6a 0x1>, //ENETC3 VF1
+					  <0xC0 &its 0x6b 0x1>; //ENETC3 VF2
+					 /* Switch BAR0 - non-prefetchable memory */
+				ranges = <0x02000000 0x0 0x4cc00000  0x0 0x4cc00000  0x0 0x80000
+					 /* ENETC 3 and Timer 0 BAR0 - non-prefetchable memory */
+					 0x02000000 0x0 0x4cd40000  0x0 0x4cd40000  0x0 0x60000
+					 /* Switch and Timer 0 BAR2 - prefetchable memory */
+					 0x42000000 0x0 0x4ce00000  0x0 0x4ce00000  0x0 0x20000
+					 /* ENETC 3 VF0-2 BAR0 - non-prefetchable memory */
+					 0x02000000 0x0 0x4ce50000  0x0 0x4ce50000  0x0 0x30000
+					 /* ENETC 3 VF0-2 BAR2 - prefetchable memory */
+					 0x42000000 0x0 0x4ce80000  0x0 0x4ce80000  0x0 0x30000>;
+				#interrupt-cells = <1>;
+				interrupt-map-mask = <0 0 0 7>;
+				interrupt-map = <0000 0 0 1 &gic 0 0
+						 GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>;
+
+				enetc3: ethernet@0,0 {
+					compatible = "pci1131,e110";
+					reg = <0x0 0 0 0 0>;
+					phy-mode = "internal";
+					status = "disabled";
+
+					fixed-link {
+						speed = <2500>;
+						full-duplex;
+						pause;
+					};
+				};
+
+				netc_timer0: ptp-timer@0,1 {
+					compatible = "pci1131,ee02";
+					reg = <0x100 0 0 0 0>;
+					status = "disabled";
+				};
+
+				rcec@1,0 {
+					reg = <0x800 0 0 0 0>;
+					interrupts = <1>;
+				};
+			};
+
+			netc_bus1: pcie@4cb00000 {
+				compatible = "pci-host-ecam-generic";
+				reg = <0x0 0x4cb00000 0x0 0x100000>;
+				#address-cells = <3>;
+				#size-cells = <2>;
+				device_type = "pci";
+				linux,pci-domain = <1>;
+				bus-range = <0x1 0x1>;
+				msi-map = <0x100 &its 0x65 0x1>, //ENETC0 PF
+					  <0x101 &its 0x62 0x1>, //Timer1
+					  <0x140 &its 0x66 0x1>, //ENETC1 PF
+					  <0x180 &its 0x67 0x1>, //ENETC2 PF
+					  <0x181 &its 0x63 0x1>, //Timer2
+					  <0x1C0 &its 0x60 0x1>; //EMDIO
+					 /* ENETC 0-2 BAR0 - non-prefetchable memory */
+				ranges = <0x02000000 0x0 0x4cC80000  0x0 0x4cc80000  0x0 0xc0000
+					 /* Timer 1-2 and EMDIO BAR0 - non-prefetchable memory */
+					 0x02000000 0x0 0x4cda0000  0x0 0x4cda0000  0x0 0x60000
+					 /* Timer 1-2 and EMDIO BAR2 - prefetchable memory */
+					 0x42000000 0x0 0x4ce20000  0x0 0x4ce20000  0x0 0x30000>;
+				#interrupt-cells = <1>;
+				interrupt-map-mask = <0 0 0 7>;
+				interrupt-map = <0000 0 0 1 &gic 0 0
+						 GIC_SPI 359 IRQ_TYPE_LEVEL_HIGH>;
+
+				enetc0: ethernet@0,0 {
+					compatible = "pci1131,e101";
+					reg = <0x10000 0 0 0 0>;
+					status = "disabled";
+				};
+
+				netc_timer1: ptp-timer@0,1 {
+					compatible = "pci1131,ee02";
+					reg = <0x10100 0 0 0 0>;
+					status = "disabled";
+				};
+
+				rcec@1,0 {
+					reg = <0x10800 0 0 0 0>;
+					interrupts = <1>;
+				};
+
+				enetc1: ethernet@8,0 {
+					compatible = "pci1131,e101";
+					reg = <0x14000 0 0 0 0>;
+					status = "disabled";
+				};
+
+				enetc2: ethernet@10,0 {
+					compatible = "pci1131,e101";
+					reg = <0x18000 0 0 0 0>;
+					status = "disabled";
+				};
+
+				netc_timer2: ptp-timer@10,1 {
+					compatible = "pci1131,ee02";
+					reg = <0x18100 0 0 0 0>;
+					status = "disabled";
+				};
+
+				netc_emdio: mdio@18,0 {
+					compatible = "pci1131,ee00";
+					reg = <0x1c000 0 0 0 0>;
+					#address-cells = <1>;
+					#size-cells = <0>;
+					status = "disabled";
+				};
+			};
+		};
+
+		ddr-pmu@4e090dc0 {
+			compatible = "fsl,imx94-ddr-pmu", "fsl,imx93-ddr-pmu";
+			reg = <0x0 0x4e090dc0 0x0 0x200>;
+			interrupts = <GIC_SPI 91 IRQ_TYPE_LEVEL_HIGH>;
 		};
 	};
 };

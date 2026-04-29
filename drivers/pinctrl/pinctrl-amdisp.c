@@ -80,7 +80,7 @@ static int amdisp_get_group_pins(struct pinctrl_dev *pctldev,
 	return 0;
 }
 
-const struct pinctrl_ops amdisp_pinctrl_ops = {
+static const struct pinctrl_ops amdisp_pinctrl_ops = {
 	.get_groups_count	= amdisp_get_groups_count,
 	.get_group_name		= amdisp_get_group_name,
 	.get_group_pins		= amdisp_get_group_pins,
@@ -117,7 +117,7 @@ static int amdisp_gpio_get(struct gpio_chip *gc, unsigned int gpio)
 	return !!(pin_reg & BIT(GPIO_CONTROL_PIN));
 }
 
-static void amdisp_gpio_set(struct gpio_chip *gc, unsigned int gpio, int value)
+static int amdisp_gpio_set(struct gpio_chip *gc, unsigned int gpio, int value)
 {
 	unsigned long flags;
 	u32 pin_reg;
@@ -131,6 +131,8 @@ static void amdisp_gpio_set(struct gpio_chip *gc, unsigned int gpio, int value)
 		pin_reg &= ~BIT(GPIO_CONTROL_PIN);
 	writel(pin_reg, pctrl->gpiobase + gpio_offset[gpio]);
 	raw_spin_unlock_irqrestore(&pctrl->lock, flags);
+
+	return 0;
 }
 
 static int amdisp_gpiochip_add(struct platform_device *pdev,

@@ -324,7 +324,7 @@ static void *xs_talkv(struct xenbus_transaction t,
 	unsigned int i;
 	int err;
 
-	req = kmalloc(sizeof(*req), GFP_NOIO | __GFP_HIGH);
+	req = kmalloc_obj(*req, GFP_NOIO | __GFP_HIGH);
 	if (!req)
 		return ERR_PTR(-ENOMEM);
 
@@ -407,10 +407,10 @@ static char *join(const char *dir, const char *name)
 		buffer = kasprintf(GFP_NOIO | __GFP_HIGH, "%s", dir);
 	else
 		buffer = kasprintf(GFP_NOIO | __GFP_HIGH, "%s/%s", dir, name);
-	return (!buffer) ? ERR_PTR(-ENOMEM) : buffer;
+	return buffer ?: ERR_PTR(-ENOMEM);
 }
 
-static char **split(char *strings, unsigned int len, unsigned int *num)
+static char **split_strings(char *strings, unsigned int len, unsigned int *num)
 {
 	char *p, **ret;
 
@@ -448,7 +448,7 @@ char **xenbus_directory(struct xenbus_transaction t,
 	if (IS_ERR(strings))
 		return ERR_CAST(strings);
 
-	return split(strings, len, num);
+	return split_strings(strings, len, num);
 }
 EXPORT_SYMBOL_GPL(xenbus_directory);
 
@@ -512,23 +512,6 @@ int xenbus_write(struct xenbus_transaction t,
 }
 EXPORT_SYMBOL_GPL(xenbus_write);
 
-/* Create a new directory. */
-int xenbus_mkdir(struct xenbus_transaction t,
-		 const char *dir, const char *node)
-{
-	char *path;
-	int ret;
-
-	path = join(dir, node);
-	if (IS_ERR(path))
-		return PTR_ERR(path);
-
-	ret = xs_error(xs_single(t, XS_MKDIR, path, NULL));
-	kfree(path);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(xenbus_mkdir);
-
 /* Destroy a file or directory (directories must be empty). */
 int xenbus_rm(struct xenbus_transaction t, const char *dir, const char *node)
 {
@@ -563,18 +546,12 @@ int xenbus_transaction_start(struct xenbus_transaction *t)
 EXPORT_SYMBOL_GPL(xenbus_transaction_start);
 
 /* End a transaction.
- * If abandon is true, transaction is discarded instead of committed.
+ * If abort is true, transaction is discarded instead of committed.
  */
-int xenbus_transaction_end(struct xenbus_transaction t, int abort)
+int xenbus_transaction_end(struct xenbus_transaction t, bool abort)
 {
-	char abortstr[2];
-
-	if (abort)
-		strcpy(abortstr, "F");
-	else
-		strcpy(abortstr, "T");
-
-	return xs_error(xs_single(t, XS_TRANSACTION_END, abortstr, NULL));
+	return xs_error(xs_single(t, XS_TRANSACTION_END, abort ? "F" : "T",
+				  NULL));
 }
 EXPORT_SYMBOL_GPL(xenbus_transaction_end);
 
@@ -735,34 +712,11 @@ int xs_watch_msg(struct xs_watch_event *event)
 	return 0;
 }
 
-/*
- * Certain older XenBus toolstack cannot handle reading values that are
- * not populated. Some Xen 3.4 installation are incapable of doing this
- * so if we are running on anything older than 4 do not attempt to read
- * control/platform-feature-xs_reset_watches.
- */
-static bool xen_strict_xenbus_quirk(void)
-{
-#ifdef CONFIG_X86
-	uint32_t eax, ebx, ecx, edx, base;
-
-	base = xen_cpuid_base();
-	cpuid(base + 1, &eax, &ebx, &ecx, &edx);
-
-	if ((eax >> 16) < 4)
-		return true;
-#endif
-	return false;
-
-}
 static void xs_reset_watches(void)
 {
 	int err;
 
 	if (!xen_hvm_domain() || xen_initial_domain())
-		return;
-
-	if (xen_strict_xenbus_quirk())
 		return;
 
 	if (!xenbus_read_unsigned("control",

@@ -30,6 +30,8 @@ static const char *ice_devlink_port_opt_speed_str(u8 speed)
 		return "10";
 	case ICE_AQC_PORT_OPT_MAX_LANE_25G:
 		return "25";
+	case ICE_AQC_PORT_OPT_MAX_LANE_40G:
+		return "40";
 	case ICE_AQC_PORT_OPT_MAX_LANE_50G:
 		return "50";
 	case ICE_AQC_PORT_OPT_MAX_LANE_100G:
@@ -56,8 +58,8 @@ static void ice_devlink_port_options_print(struct ice_pf *pf)
 	const char *str;
 	int status;
 
-	options = kcalloc(ICE_AQC_PORT_OPT_MAX * ICE_MAX_PORT_PER_PCI_DEV,
-			  sizeof(*options), GFP_KERNEL);
+	options = kzalloc_objs(*options,
+			       ICE_AQC_PORT_OPT_MAX * ICE_MAX_PORT_PER_PCI_DEV);
 	if (!options)
 		return;
 
@@ -918,7 +920,7 @@ ice_alloc_dynamic_port(struct ice_pf *pf,
 	if (err)
 		return err;
 
-	dyn_port = kzalloc(sizeof(*dyn_port), GFP_KERNEL);
+	dyn_port = kzalloc_obj(*dyn_port);
 	if (!dyn_port) {
 		err = -ENOMEM;
 		goto unroll_reserve_sf_num;

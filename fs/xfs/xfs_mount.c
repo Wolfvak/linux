@@ -3,7 +3,7 @@
  * Copyright (c) 2000-2005 Silicon Graphics, Inc.
  * All Rights Reserved.
  */
-#include "xfs.h"
+#include "xfs_platform.h"
 #include "xfs_fs.h"
 #include "xfs_shared.h"
 #include "xfs_format.h"
@@ -41,6 +41,7 @@
 #include "xfs_rtrefcount_btree.h"
 #include "scrub/stats.h"
 #include "xfs_zone_alloc.h"
+#include "xfs_healthmon.h"
 
 static DEFINE_MUTEX(xfs_uuid_table_mutex);
 static int xfs_uuid_table_size;
@@ -607,8 +608,9 @@ xfs_unmount_check(
  * have been retrying in the background.  This will prevent never-ending
  * retries in AIL pushing from hanging the unmount.
  *
- * Finally, we can push the AIL to clean all the remaining dirty objects, then
- * reclaim the remaining inodes that are still in memory at this point in time.
+ * Stop inodegc and background reclaim before pushing the AIL so that they
+ * are not running while the AIL is being flushed. Then push the AIL to
+ * clean all the remaining dirty objects and reclaim the remaining inodes.
  */
 static void
 xfs_unmount_flush_inodes(
@@ -620,11 +622,12 @@ xfs_unmount_flush_inodes(
 
 	xfs_set_unmounting(mp);
 
-	xfs_ail_push_all_sync(mp->m_ail);
 	xfs_inodegc_stop(mp);
 	cancel_delayed_work_sync(&mp->m_reclaim_work);
+	xfs_ail_push_all_sync(mp->m_ail);
 	xfs_reclaim_inodes(mp);
 	xfs_health_unmount(mp);
+	xfs_healthmon_unmount(mp);
 }
 
 static void
@@ -671,11 +674,6 @@ xfs_agbtree_compute_maxlevels(
 static inline xfs_extlen_t xfs_calc_atomic_write_max(struct xfs_mount *mp)
 {
 	return rounddown_pow_of_two(XFS_B_TO_FSB(mp, MAX_RW_COUNT));
-}
-
-static inline unsigned int max_pow_of_two_factor(const unsigned int nr)
-{
-	return 1 << (ffs(nr) - 1);
 }
 
 /*
@@ -781,6 +779,25 @@ xfs_set_max_atomic_write_opt(
  "max atomic write size of %lluk cannot be larger than max allocation group write size %lluk",
 				new_max_bytes >> 10,
 				XFS_FSB_TO_B(mp, max_group_write) >> 10);
+		return -EINVAL;
+	}
+
+	if (xfs_has_reflink(mp))
+		goto set_limit;
+
+	if (new_max_fsbs == 1) {
+		if (mp->m_ddev_targp->bt_awu_max ||
+		    (mp->m_rtdev_targp && mp->m_rtdev_targp->bt_awu_max)) {
+		} else {
+			xfs_warn(mp,
+ "cannot support atomic writes of size %lluk with no reflink or HW support",
+				new_max_bytes >> 10);
+			return -EINVAL;
+		}
+	} else {
+		xfs_warn(mp,
+ "cannot support atomic writes of size %lluk with no reflink support",
+				new_max_bytes >> 10);
 		return -EINVAL;
 	}
 
@@ -1042,19 +1059,6 @@ xfs_mountfs(
 	/* Enable background inode inactivation workers. */
 	xfs_inodegc_start(mp);
 	xfs_blockgc_start(mp);
-
-	/*
-	 * Now that we've recovered any pending superblock feature bit
-	 * additions, we can finish setting up the attr2 behaviour for the
-	 * mount. The noattr2 option overrides the superblock flag, so only
-	 * check the superblock feature flag if the mount option is not set.
-	 */
-	if (xfs_has_noattr2(mp)) {
-		mp->m_features &= ~XFS_FEAT_ATTR2;
-	} else if (!xfs_has_attr2(mp) &&
-		   (mp->m_sb.sb_features2 & XFS_SB_VERSION2_ATTR2BIT)) {
-		mp->m_features |= XFS_FEAT_ATTR2;
-	}
 
 	if (xfs_has_metadir(mp)) {
 		error = xfs_mount_setup_metadir(mp);

@@ -30,7 +30,6 @@
 #include "basics/conversion.h"
 #include "dcn10/dcn10_cm_common.h"
 #include "dc.h"
-#include "dcn401/dcn401_mpc.h"
 
 #define REG(reg)\
 	mpc30->mpc_regs->reg
@@ -725,8 +724,7 @@ bool mpc32_program_shaper(
 		return false;
 	}
 
-	if (mpc->ctx->dc->debug.enable_mem_low_power.bits.mpc)
-		mpc32_power_on_shaper_3dlut(mpc, mpcc_id, true);
+	mpc32_power_on_shaper_3dlut(mpc, mpcc_id, true);
 
 	current_mode = mpc32_get_shaper_current(mpc, mpcc_id);
 
@@ -879,7 +877,7 @@ void mpc32_set3dlut_ram10(
 }
 
 
-static void mpc32_set_3dlut_mode(
+void mpc32_set_3dlut_mode(
 		struct mpc *mpc,
 		enum dc_lut_mode mode,
 		bool is_color_channel_12bits,
@@ -1021,9 +1019,8 @@ static const struct mpc_funcs dcn32_mpc_funcs = {
 	.release_rmu = NULL,
 	.power_on_mpc_mem_pwr = mpc3_power_on_ogam_lut,
 	.get_mpc_out_mux = mpc1_get_mpc_out_mux,
+	.mpc_read_reg_state = mpc3_read_reg_state,
 	.set_bg_color = mpc1_set_bg_color,
-	.set_movable_cm_location = mpc401_set_movable_cm_location,
-	.populate_lut = mpc401_populate_lut,
 };
 
 

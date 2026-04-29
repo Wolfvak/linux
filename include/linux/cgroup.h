@@ -27,6 +27,7 @@
 #include <linux/kernel_stat.h>
 
 #include <linux/cgroup-defs.h>
+#include <linux/cgroup_namespace.h>
 
 struct kernel_clone_args;
 
@@ -136,9 +137,10 @@ extern void cgroup_cancel_fork(struct task_struct *p,
 			       struct kernel_clone_args *kargs);
 extern void cgroup_post_fork(struct task_struct *p,
 			     struct kernel_clone_args *kargs);
-void cgroup_exit(struct task_struct *p);
-void cgroup_release(struct task_struct *p);
-void cgroup_free(struct task_struct *p);
+void cgroup_task_exit(struct task_struct *p);
+void cgroup_task_dead(struct task_struct *p);
+void cgroup_task_release(struct task_struct *p);
+void cgroup_task_free(struct task_struct *p);
 
 int cgroup_init_early(void);
 int cgroup_init(void);
@@ -352,6 +354,11 @@ static inline u64 cgroup_id(const struct cgroup *cgrp)
 static inline bool css_is_dying(struct cgroup_subsys_state *css)
 {
 	return css->flags & CSS_DYING;
+}
+
+static inline bool css_is_online(struct cgroup_subsys_state *css)
+{
+	return css->flags & CSS_ONLINE;
 }
 
 static inline bool css_is_self(struct cgroup_subsys_state *css)
@@ -650,6 +657,7 @@ static inline void cgroup_kthread_ready(void)
 }
 
 void cgroup_path_from_kernfs_id(u64 id, char *buf, size_t buflen);
+struct cgroup *__cgroup_get_from_id(u64 id);
 struct cgroup *cgroup_get_from_id(u64 id);
 #else /* !CONFIG_CGROUPS */
 
@@ -673,9 +681,10 @@ static inline void cgroup_cancel_fork(struct task_struct *p,
 				      struct kernel_clone_args *kargs) {}
 static inline void cgroup_post_fork(struct task_struct *p,
 				    struct kernel_clone_args *kargs) {}
-static inline void cgroup_exit(struct task_struct *p) {}
-static inline void cgroup_release(struct task_struct *p) {}
-static inline void cgroup_free(struct task_struct *p) {}
+static inline void cgroup_task_exit(struct task_struct *p) {}
+static inline void cgroup_task_dead(struct task_struct *p) {}
+static inline void cgroup_task_release(struct task_struct *p) {}
+static inline void cgroup_task_free(struct task_struct *p) {}
 
 static inline int cgroup_init_early(void) { return 0; }
 static inline int cgroup_init(void) { return 0; }
@@ -782,52 +791,6 @@ static inline void cgroup_sk_clone(struct sock_cgroup_data *skcd) {}
 static inline void cgroup_sk_free(struct sock_cgroup_data *skcd) {}
 
 #endif	/* CONFIG_CGROUP_DATA */
-
-struct cgroup_namespace {
-	struct ns_common	ns;
-	struct user_namespace	*user_ns;
-	struct ucounts		*ucounts;
-	struct css_set          *root_cset;
-};
-
-extern struct cgroup_namespace init_cgroup_ns;
-
-#ifdef CONFIG_CGROUPS
-
-void free_cgroup_ns(struct cgroup_namespace *ns);
-
-struct cgroup_namespace *copy_cgroup_ns(unsigned long flags,
-					struct user_namespace *user_ns,
-					struct cgroup_namespace *old_ns);
-
-int cgroup_path_ns(struct cgroup *cgrp, char *buf, size_t buflen,
-		   struct cgroup_namespace *ns);
-
-static inline void get_cgroup_ns(struct cgroup_namespace *ns)
-{
-	refcount_inc(&ns->ns.count);
-}
-
-static inline void put_cgroup_ns(struct cgroup_namespace *ns)
-{
-	if (refcount_dec_and_test(&ns->ns.count))
-		free_cgroup_ns(ns);
-}
-
-#else /* !CONFIG_CGROUPS */
-
-static inline void free_cgroup_ns(struct cgroup_namespace *ns) { }
-static inline struct cgroup_namespace *
-copy_cgroup_ns(unsigned long flags, struct user_namespace *user_ns,
-	       struct cgroup_namespace *old_ns)
-{
-	return old_ns;
-}
-
-static inline void get_cgroup_ns(struct cgroup_namespace *ns) { }
-static inline void put_cgroup_ns(struct cgroup_namespace *ns) { }
-
-#endif /* !CONFIG_CGROUPS */
 
 #ifdef CONFIG_CGROUPS
 

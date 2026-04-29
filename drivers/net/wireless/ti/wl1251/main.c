@@ -589,7 +589,7 @@ static bool wl1251_can_do_pm(struct ieee80211_conf *conf, struct wl1251 *wl)
 	return (conf->flags & IEEE80211_CONF_PS) && !wl->monitor_present;
 }
 
-static int wl1251_op_config(struct ieee80211_hw *hw, u32 changed)
+static int wl1251_op_config(struct ieee80211_hw *hw, int radio_idx, u32 changed)
 {
 	struct wl1251 *wl = hw->priv;
 	struct ieee80211_conf *conf = &hw->conf;
@@ -725,7 +725,7 @@ static u64 wl1251_op_prepare_multicast(struct ieee80211_hw *hw,
 	if (unlikely(wl->state == WL1251_STATE_OFF))
 		return 0;
 
-	fp = kzalloc(sizeof(*fp), GFP_ATOMIC);
+	fp = kzalloc_obj(*fp, GFP_ATOMIC);
 	if (!fp) {
 		wl1251_error("Out of memory setting filters.");
 		return 0;
@@ -878,7 +878,7 @@ static int wl1251_op_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 
 	wl1251_debug(DEBUG_MAC80211, "mac80211 set key");
 
-	wl_cmd = kzalloc(sizeof(*wl_cmd), GFP_KERNEL);
+	wl_cmd = kzalloc_obj(*wl_cmd);
 	if (!wl_cmd) {
 		ret = -ENOMEM;
 		goto out;
@@ -1051,7 +1051,8 @@ out:
 	return ret;
 }
 
-static int wl1251_op_set_rts_threshold(struct ieee80211_hw *hw, u32 value)
+static int wl1251_op_set_rts_threshold(struct ieee80211_hw *hw, int radio_idx,
+				       u32 value)
 {
 	struct wl1251 *wl = hw->priv;
 	int ret;
@@ -1639,7 +1640,7 @@ struct ieee80211_hw *wl1251_alloc_hw(void)
 	wl->tx_mgmt_frm_rate = DEFAULT_HW_GEN_TX_RATE;
 	wl->tx_mgmt_frm_mod = DEFAULT_HW_GEN_MODULATION_TYPE;
 
-	wl->rx_descriptor = kmalloc(sizeof(*wl->rx_descriptor), GFP_KERNEL);
+	wl->rx_descriptor = kmalloc_obj(*wl->rx_descriptor);
 	if (!wl->rx_descriptor) {
 		wl1251_error("could not allocate memory for rx descriptor");
 		ieee80211_free_hw(hw);

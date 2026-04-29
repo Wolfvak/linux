@@ -82,6 +82,7 @@ struct drm_mode_config_funcs {
 	 */
 	struct drm_framebuffer *(*fb_create)(struct drm_device *dev,
 					     struct drm_file *file_priv,
+					     const struct drm_format_info *info,
 					     const struct drm_mode_fb_cmd2 *mode_cmd);
 
 	/**
@@ -95,7 +96,7 @@ struct drm_mode_config_funcs {
 	 * The format information specific to the given fb metadata, or
 	 * NULL if none is found.
 	 */
-	const struct drm_format_info *(*get_format_info)(const struct drm_mode_fb_cmd2 *mode_cmd);
+	const struct drm_format_info *(*get_format_info)(u32 pixel_format, u64 modifier);
 
 	/**
 	 * @mode_valid:
@@ -498,6 +499,24 @@ struct drm_mode_config {
 	 * drm_panic_lock() and drm_panic_unlock().
 	 */
 	struct raw_spinlock panic_lock;
+
+	/**
+	 * @num_colorop:
+	 *
+	 * Number of colorop objects on this device.
+	 * This is invariant over the lifetime of a device and hence doesn't
+	 * need any locks.
+	 */
+	int num_colorop;
+
+	/**
+	 * @colorop_list:
+	 *
+	 * List of colorop objects linked with &drm_colorop.head. This is
+	 * invariant over the lifetime of a device and hence doesn't need any
+	 * locks.
+	 */
+	struct list_head colorop_list;
 
 	/**
 	 * @num_crtc:

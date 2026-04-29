@@ -4,6 +4,8 @@
  *
  * membarrier system call
  */
+#include <uapi/linux/membarrier.h>
+#include "sched.h"
 
 /*
  * For documentation purposes, here are some membarrier ordering
@@ -197,7 +199,7 @@ static void ipi_rseq(void *info)
 	 * is negligible.
 	 */
 	smp_mb();
-	rseq_preempt(current);
+	rseq_sched_switch_event(current);
 }
 
 static void ipi_sync_rq_state(void *info)
@@ -405,9 +407,9 @@ static int membarrier_private_expedited(int flags, int cpu_id)
 		 * membarrier, we will end up with some thread in the mm
 		 * running without a core sync.
 		 *
-		 * For RSEQ, don't rseq_preempt() the caller.  User code
-		 * is not supposed to issue syscalls at all from inside an
-		 * rseq critical section.
+		 * For RSEQ, don't invoke rseq_sched_switch_event() on the
+		 * caller.  User code is not supposed to issue syscalls at
+		 * all from inside an rseq critical section.
 		 */
 		if (flags != MEMBARRIER_FLAG_SYNC_CORE) {
 			preempt_disable();

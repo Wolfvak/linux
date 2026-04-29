@@ -1653,7 +1653,7 @@ static int radeonfb_set_par(struct fb_info *info)
 	int depth = var_to_depth(mode);
 	int use_rmx = 0;
 
-	newmode = kmalloc(sizeof(struct radeon_regs), GFP_KERNEL);
+	newmode = kmalloc_obj(struct radeon_regs);
 	if (!newmode)
 		return -ENOMEM;
 
@@ -2227,7 +2227,7 @@ static const struct bin_attribute edid1_attr = {
 		.mode	= 0444,
 	},
 	.size	= EDID_LENGTH,
-	.read_new	= radeon_show_edid1,
+	.read	= radeon_show_edid1,
 };
 
 static const struct bin_attribute edid2_attr = {
@@ -2236,7 +2236,7 @@ static const struct bin_attribute edid2_attr = {
 		.mode	= 0444,
 	},
 	.size	= EDID_LENGTH,
-	.read_new	= radeon_show_edid2,
+	.read	= radeon_show_edid2,
 };
 
 static int radeonfb_pci_register(struct pci_dev *pdev,

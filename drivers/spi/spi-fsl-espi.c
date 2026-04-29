@@ -482,7 +482,7 @@ static int fsl_espi_setup(struct spi_device *spi)
 	struct fsl_espi_cs *cs = spi_get_ctldata(spi);
 
 	if (!cs) {
-		cs = kzalloc(sizeof(*cs), GFP_KERNEL);
+		cs = kzalloc_obj(*cs);
 		if (!cs)
 			return -ENOMEM;
 		spi_set_ctldata(spi, cs);
@@ -513,7 +513,6 @@ static int fsl_espi_setup(struct spi_device *spi)
 
 	fsl_espi_setup_transfer(spi, NULL);
 
-	pm_runtime_mark_last_busy(espi->dev);
 	pm_runtime_put_autosuspend(espi->dev);
 
 	return 0;
@@ -676,7 +675,6 @@ static int fsl_espi_probe(struct device *dev, struct resource *mem,
 
 	host->mode_bits = SPI_RX_DUAL | SPI_CPOL | SPI_CPHA | SPI_CS_HIGH |
 			  SPI_LSB_FIRST | SPI_LOOP;
-	host->dev.of_node = dev->of_node;
 	host->bits_per_word_mask = SPI_BPW_RANGE_MASK(4, 16);
 	host->setup = fsl_espi_setup;
 	host->cleanup = fsl_espi_cleanup;
@@ -726,7 +724,6 @@ static int fsl_espi_probe(struct device *dev, struct resource *mem,
 
 	dev_info(dev, "irq = %u\n", irq);
 
-	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 
 	return 0;

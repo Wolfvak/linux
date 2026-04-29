@@ -5,6 +5,7 @@
  * Copyright (C) 2020 Renesas Electronics Corporation
  */
 
+#include <linux/bitfield.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/io.h>
@@ -71,6 +72,7 @@ struct rcar_mipi_dsi {
 	} clocks;
 
 	enum mipi_dsi_pixel_format format;
+	unsigned long mode_flags;
 	unsigned int num_data_lanes;
 	unsigned int lanes;
 };
@@ -316,8 +318,8 @@ rcar_mipi_dsi_post_init_phtw_v4h(struct rcar_mipi_dsi *dsi,
 		WRITE_PHTW(0x01020100, 0x00000180);
 
 		ret = read_poll_timeout(rcar_mipi_dsi_read, status,
-					status & PHTR_TEST, 2000, 10000, false,
-					dsi, PHTR);
+					status & PHTR_TESTDOUT_TEST,
+					2000, 10000, false, dsi, PHTR);
 		if (ret < 0) {
 			dev_err(dsi->dev, "failed to test PHTR\n");
 			return ret;
@@ -457,29 +459,43 @@ static void rcar_mipi_dsi_set_display_timing(struct rcar_mipi_dsi *dsi,
 	u32 vprmset4r;
 
 	/* Configuration for Pixel Stream and Packet Header */
-	if (mipi_dsi_pixel_format_to_bpp(dsi->format) == 24)
+	switch (mipi_dsi_pixel_format_to_bpp(dsi->format)) {
+	case 24:
 		rcar_mipi_dsi_write(dsi, TXVMPSPHSETR, TXVMPSPHSETR_DT_RGB24);
-	else if (mipi_dsi_pixel_format_to_bpp(dsi->format) == 18)
+		break;
+	case 18:
 		rcar_mipi_dsi_write(dsi, TXVMPSPHSETR, TXVMPSPHSETR_DT_RGB18);
-	else if (mipi_dsi_pixel_format_to_bpp(dsi->format) == 16)
+		break;
+	case 16:
 		rcar_mipi_dsi_write(dsi, TXVMPSPHSETR, TXVMPSPHSETR_DT_RGB16);
-	else {
+		break;
+	default:
 		dev_warn(dsi->dev, "unsupported format");
 		return;
 	}
 
 	/* Configuration for Blanking sequence and Input Pixel */
-	setr = TXVMSETR_HSABPEN_EN | TXVMSETR_HBPBPEN_EN
-	     | TXVMSETR_HFPBPEN_EN | TXVMSETR_SYNSEQ_PULSES
-	     | TXVMSETR_PIXWDTH | TXVMSETR_VSTPM;
+	setr = TXVMSETR_PIXWDTH | TXVMSETR_VSTPM;
+
+	if (dsi->mode_flags & MIPI_DSI_MODE_VIDEO) {
+		if (!(dsi->mode_flags & MIPI_DSI_MODE_VIDEO_SYNC_PULSE))
+			setr |= TXVMSETR_SYNSEQ_EVENTS;
+		if (!(dsi->mode_flags & MIPI_DSI_MODE_VIDEO_NO_HFP))
+			setr |= TXVMSETR_HFPBPEN;
+		if (!(dsi->mode_flags & MIPI_DSI_MODE_VIDEO_NO_HBP))
+			setr |= TXVMSETR_HBPBPEN;
+		if (!(dsi->mode_flags & MIPI_DSI_MODE_VIDEO_NO_HSA))
+			setr |= TXVMSETR_HSABPEN;
+	}
+
 	rcar_mipi_dsi_write(dsi, TXVMSETR, setr);
 
-	/* Configuration for Video Parameters */
-	vprmset0r = (mode->flags & DRM_MODE_FLAG_PVSYNC ?
-		     TXVMVPRMSET0R_VSPOL_HIG : TXVMVPRMSET0R_VSPOL_LOW)
-		  | (mode->flags & DRM_MODE_FLAG_PHSYNC ?
-		     TXVMVPRMSET0R_HSPOL_HIG : TXVMVPRMSET0R_HSPOL_LOW)
-		  | TXVMVPRMSET0R_CSPC_RGB | TXVMVPRMSET0R_BPP_24;
+	/* Configuration for Video Parameters, input is always RGB888 */
+	vprmset0r = TXVMVPRMSET0R_BPP_24;
+	if (!(mode->flags & DRM_MODE_FLAG_PVSYNC))
+		vprmset0r |= TXVMVPRMSET0R_VSPOL_LOW;
+	if (!(mode->flags & DRM_MODE_FLAG_PHSYNC))
+		vprmset0r |= TXVMVPRMSET0R_HSPOL_LOW;
 
 	vprmset1r = TXVMVPRMSET1R_VACTIVE(mode->vdisplay)
 		  | TXVMVPRMSET1R_VSA(mode->vsync_end - mode->vsync_start);
@@ -576,7 +592,10 @@ static int rcar_mipi_dsi_startup(struct rcar_mipi_dsi *dsi,
 	udelay(10);
 	rcar_mipi_dsi_clr(dsi, CLOCKSET1, CLOCKSET1_UPDATEPLL);
 
-	ppisetr = PPISETR_DLEN_3 | PPISETR_CLEN;
+	rcar_mipi_dsi_clr(dsi, TXSETR, TXSETR_LANECNT_MASK);
+	rcar_mipi_dsi_set(dsi, TXSETR, dsi->lanes - 1);
+
+	ppisetr = ((BIT(dsi->lanes) - 1) & PPISETR_DLEN_MASK) | PPISETR_CLEN;
 	rcar_mipi_dsi_write(dsi, PPISETR, ppisetr);
 
 	rcar_mipi_dsi_set(dsi, PHYSETUP, PHYSETUP_SHUTDOWNZ);
@@ -617,6 +636,7 @@ static int rcar_mipi_dsi_startup(struct rcar_mipi_dsi *dsi,
 	vclkset = VCLKSET_CKEN;
 	rcar_mipi_dsi_write(dsi, VCLKSET, vclkset);
 
+	/* Output is always RGB, never YCbCr */
 	if (dsi_format == 24)
 		vclkset |= VCLKSET_BPP_24;
 	else if (dsi_format == 18)
@@ -628,7 +648,7 @@ static int rcar_mipi_dsi_startup(struct rcar_mipi_dsi *dsi,
 		return -EINVAL;
 	}
 
-	vclkset |= VCLKSET_COLOR_RGB | VCLKSET_LANE(dsi->lanes - 1);
+	vclkset |= VCLKSET_LANE(dsi->lanes - 1);
 
 	switch (dsi->info->model) {
 	case RCAR_DSI_V3U:
@@ -908,6 +928,7 @@ static int rcar_mipi_dsi_host_attach(struct mipi_dsi_host *host,
 
 	dsi->lanes = device->lanes;
 	dsi->format = device->format;
+	dsi->mode_flags = device->mode_flags;
 
 	dsi->next_bridge = devm_drm_of_get_bridge(dsi->dev, dsi->dev->of_node,
 						  1, 0);
@@ -918,7 +939,6 @@ static int rcar_mipi_dsi_host_attach(struct mipi_dsi_host *host,
 	}
 
 	/* Initialize the DRM bridge. */
-	dsi->bridge.funcs = &rcar_mipi_dsi_bridge_ops;
 	dsi->bridge.of_node = dsi->dev->of_node;
 	drm_bridge_add(&dsi->bridge);
 
@@ -935,9 +955,234 @@ static int rcar_mipi_dsi_host_detach(struct mipi_dsi_host *host,
 	return 0;
 }
 
+static ssize_t rcar_mipi_dsi_host_tx_transfer(struct mipi_dsi_host *host,
+					      const struct mipi_dsi_msg *msg,
+					      bool is_rx_xfer)
+{
+	const bool is_tx_long = mipi_dsi_packet_format_is_long(msg->type);
+	struct rcar_mipi_dsi *dsi = host_to_rcar_mipi_dsi(host);
+	struct mipi_dsi_packet packet;
+	u8 payload[16] = { 0 };
+	u32 status;
+	int ret;
+
+	ret = mipi_dsi_create_packet(&packet, msg);
+	if (ret)
+		return ret;
+
+	/* Configure LP or HS command transfer. */
+	rcar_mipi_dsi_write(dsi, TXCMSETR, (msg->flags & MIPI_DSI_MSG_USE_LPM) ?
+					   TXCMSETR_SPDTYP : 0);
+
+	/* Register access mode for RX transfer. */
+	if (is_rx_xfer)
+		rcar_mipi_dsi_write(dsi, RXPSETR, 0);
+
+	/* Do not use IRQ, poll for completion, the completion is quick. */
+	rcar_mipi_dsi_write(dsi, TXCMIER, 0);
+
+	/*
+	 * Send the header:
+	 * header[0] = Virtual Channel + Data Type
+	 * header[1] = Word Count LSB (LP) or first param (SP)
+	 * header[2] = Word Count MSB (LP) or second param (SP)
+	 */
+	rcar_mipi_dsi_write(dsi, TXCMPHDR,
+			    (is_tx_long ? TXCMPHDR_FMT : 0) |
+			    TXCMPHDR_VC(msg->channel) |
+			    TXCMPHDR_DT(msg->type) |
+			    TXCMPHDR_DATA1(packet.header[2]) |
+			    TXCMPHDR_DATA0(packet.header[1]));
+
+	if (is_tx_long) {
+		memcpy(payload, packet.payload,
+		       min(msg->tx_len, sizeof(payload)));
+
+		rcar_mipi_dsi_write(dsi, TXCMPPD0R,
+				    (payload[3] << 24) | (payload[2] << 16) |
+				    (payload[1] << 8) | payload[0]);
+		rcar_mipi_dsi_write(dsi, TXCMPPD1R,
+				    (payload[7] << 24) | (payload[6] << 16) |
+				    (payload[5] << 8) | payload[4]);
+		rcar_mipi_dsi_write(dsi, TXCMPPD2R,
+				    (payload[11] << 24) | (payload[10] << 16) |
+				    (payload[9] << 8) | payload[8]);
+		rcar_mipi_dsi_write(dsi, TXCMPPD3R,
+				    (payload[15] << 24) | (payload[14] << 16) |
+				    (payload[13] << 8) | payload[12]);
+	}
+
+	/* Start the transfer, RX with BTA, TX without BTA. */
+	if (is_rx_xfer) {
+		rcar_mipi_dsi_write(dsi, TXCMCR, TXCMCR_BTAREQ);
+
+		/* Wait until the transmission, BTA, reception completed. */
+		ret = read_poll_timeout(rcar_mipi_dsi_read, status,
+					(status & RXPSR_BTAREQEND),
+					2000, 50000, false, dsi, RXPSR);
+	} else {
+		rcar_mipi_dsi_write(dsi, TXCMCR, TXCMCR_TXREQ);
+
+		/* Wait until the transmission completed. */
+		ret = read_poll_timeout(rcar_mipi_dsi_read, status,
+					(status & TXCMSR_TXREQEND),
+					2000, 50000, false, dsi, TXCMSR);
+	}
+
+	if (ret < 0) {
+		dev_err(dsi->dev, "Command transfer timeout (0x%08x)\n",
+			status);
+		return ret;
+	}
+
+	return packet.size;
+}
+
+static ssize_t rcar_mipi_dsi_host_rx_transfer(struct mipi_dsi_host *host,
+					      const struct mipi_dsi_msg *msg)
+{
+	struct rcar_mipi_dsi *dsi = host_to_rcar_mipi_dsi(host);
+	u8 *rx_buf = (u8 *)(msg->rx_buf);
+	u32 reg, data, status, wc;
+	int i, ret;
+
+	/* RX transfer received data validation and parsing starts here. */
+	reg = rcar_mipi_dsi_read(dsi, TOSR);
+	if (reg & TOSR_TATO) {	/* Turn-Around TimeOut. */
+		/* Clear TATO Turn-Around TimeOut bit. */
+		rcar_mipi_dsi_write(dsi, TOSR, TOSR_TATO);
+		return -ETIMEDOUT;
+	}
+
+	reg = rcar_mipi_dsi_read(dsi, RXPSR);
+
+	if (msg->flags & MIPI_DSI_MSG_REQ_ACK) {
+		/* Transfer with zero-length RX. */
+		if (!(reg & RXPSR_RCVACK)) {
+			/* No ACK on RX response received. */
+			return -EINVAL;
+		}
+	} else {
+		/* Transfer with non-zero-length RX. */
+		if (!(reg & RXPSR_RCVRESP)) {
+			/* No packet header of RX response received. */
+			return -EINVAL;
+		}
+
+		if (reg & (RXPSR_CRCERR | RXPSR_WCERR | RXPSR_AXIERR | RXPSR_OVRERR)) {
+			/* Incorrect response payload. */
+			return -ENODATA;
+		}
+
+		data = rcar_mipi_dsi_read(dsi, RXPHDR);
+		if (data & RXPHDR_FMT) {	/* Long Packet Response. */
+			/* Read Long Packet Response length from packet header. */
+			wc = data & 0xffff;
+			if (wc > msg->rx_len) {
+				dev_warn(dsi->dev,
+					 "Long Packet Response longer than RX buffer (%d), limited to %zu Bytes\n",
+					 wc, msg->rx_len);
+				wc = msg->rx_len;
+			}
+
+			if (wc > 16) {
+				dev_warn(dsi->dev,
+					 "Long Packet Response too long (%d), limited to 16 Bytes\n",
+					 wc);
+				wc = 16;
+			}
+
+			for (i = 0; i < msg->rx_len; i++) {
+				if (!(i % 4))
+					data = rcar_mipi_dsi_read(dsi, RXPPD0R + i);
+
+				rx_buf[i] = data & 0xff;
+				data >>= 8;
+			}
+		} else {	/* Short Packet Response. */
+			if (msg->rx_len >= 1)
+				rx_buf[0] = data & 0xff;
+			if (msg->rx_len >= 2)
+				rx_buf[1] = (data >> 8) & 0xff;
+			if (msg->rx_len >= 3) {
+				dev_warn(dsi->dev,
+					 "Expected Short Packet Response too long (%zu), limited to 2 Bytes\n",
+					 msg->rx_len);
+			}
+		}
+	}
+
+	if (reg & RXPSR_RCVAKE) {
+		/* Acknowledge and Error report received. */
+		return -EFAULT;
+	}
+
+	/* Wait until the bus handover to host processor completed. */
+	ret = read_poll_timeout(rcar_mipi_dsi_read, status,
+				!(status & PPIDL0SR_DIR),
+				2000, 50000, false, dsi, PPIDL0SR);
+	if (ret < 0) {
+		dev_err(dsi->dev, "Command RX DIR timeout (0x%08x)\n", status);
+		return ret;
+	}
+
+	/* Wait until the data lane is in LP11 stop state. */
+	ret = read_poll_timeout(rcar_mipi_dsi_read, status,
+				status & PPIDL0SR_STPST,
+				2000, 50000, false, dsi, PPIDL0SR);
+	if (ret < 0) {
+		dev_err(dsi->dev, "Command RX STPST timeout (0x%08x)\n", status);
+		return ret;
+	}
+
+	return 0;
+}
+
+static ssize_t rcar_mipi_dsi_host_transfer(struct mipi_dsi_host *host,
+					   const struct mipi_dsi_msg *msg)
+{
+	const bool is_rx_xfer = (msg->flags & MIPI_DSI_MSG_REQ_ACK) || msg->rx_len;
+	struct rcar_mipi_dsi *dsi = host_to_rcar_mipi_dsi(host);
+	int ret;
+
+	if (msg->tx_len > 16 || msg->rx_len > 16) {
+		/* ToDo: Implement Memory on AXI bus command mode. */
+		dev_warn(dsi->dev,
+			 "Register-based command mode supports only up to 16 Bytes long payload\n");
+		return -EOPNOTSUPP;
+	}
+
+	ret = rcar_mipi_dsi_host_tx_transfer(host, msg, is_rx_xfer);
+
+	/* If TX transfer succeeded and this transfer has RX part. */
+	if (ret >= 0 && is_rx_xfer) {
+		ret = rcar_mipi_dsi_host_rx_transfer(host, msg);
+		if (ret)
+			return ret;
+
+		ret = msg->rx_len;
+	}
+
+	/*
+	 * Wait a bit between commands, otherwise panels based on ILI9881C
+	 * TCON may fail to correctly receive all commands sent to them.
+	 * Until we can actually test with another DSI device, keep the
+	 * delay here, but eventually this delay might have to be moved
+	 * into the ILI9881C panel driver.
+	 */
+	usleep_range(1000, 2000);
+
+	/* Clear the completion interrupt. */
+	if (!msg->rx_len)
+		rcar_mipi_dsi_write(dsi, TXCMSR, TXCMSR_TXREQEND);
+
+	return ret;
+}
+
 static const struct mipi_dsi_host_ops rcar_mipi_dsi_host_ops = {
 	.attach = rcar_mipi_dsi_host_attach,
 	.detach = rcar_mipi_dsi_host_detach,
+	.transfer = rcar_mipi_dsi_host_transfer
 };
 
 /* -----------------------------------------------------------------------------
@@ -1004,9 +1249,10 @@ static int rcar_mipi_dsi_probe(struct platform_device *pdev)
 	struct rcar_mipi_dsi *dsi;
 	int ret;
 
-	dsi = devm_kzalloc(&pdev->dev, sizeof(*dsi), GFP_KERNEL);
-	if (dsi == NULL)
-		return -ENOMEM;
+	dsi = devm_drm_bridge_alloc(&pdev->dev, struct rcar_mipi_dsi, bridge,
+				    &rcar_mipi_dsi_bridge_ops);
+	if (IS_ERR(dsi))
+		return PTR_ERR(dsi);
 
 	platform_set_drvdata(pdev, dsi);
 

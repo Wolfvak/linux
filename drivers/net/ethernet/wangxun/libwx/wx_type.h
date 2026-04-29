@@ -10,6 +10,7 @@
 #include <linux/netdevice.h>
 #include <linux/if_vlan.h>
 #include <linux/phylink.h>
+#include <linux/dim.h>
 #include <net/ip.h>
 
 #define WX_NCSI_SUP                             0x8000
@@ -82,8 +83,13 @@
 
 /*********************** Receive DMA registers **************************/
 #define WX_RDM_VF_RE(_i)             (0x12004 + ((_i) * 4))
+#define WX_RDM_RSC_CTL               0x1200C
+#define WX_RDM_RSC_CTL_FREE_CNT_DIS  BIT(8)
+#define WX_RDM_RSC_CTL_FREE_CTL      BIT(7)
 #define WX_RDM_PF_QDE(_i)            (0x12080 + ((_i) * 4))
 #define WX_RDM_VFRE_CLR(_i)          (0x120A0 + ((_i) * 4))
+#define WX_RDM_DCACHE_CTL            0x120A8
+#define WX_RDM_DCACHE_CTL_EN         BIT(0)
 #define WX_RDM_DRP_PKT               0x12500
 #define WX_RDM_PKT_CNT               0x12504
 #define WX_RDM_BYTE_CNT_LSB          0x12508
@@ -96,6 +102,8 @@
 #define WX_CFG_PORT_CTL_DRV_LOAD     BIT(3)
 #define WX_CFG_PORT_CTL_QINQ         BIT(2)
 #define WX_CFG_PORT_CTL_D_VLAN       BIT(0) /* double vlan*/
+#define WX_CFG_PORT_ST               0x14404
+#define WX_CFG_PORT_ST_LANID         GENMASK(9, 8)
 #define WX_CFG_TAG_TPID(_i)          (0x14430 + ((_i) * 4))
 #define WX_CFG_PORT_CTL_NUM_VT_MASK  GENMASK(13, 12) /* number of TVs */
 
@@ -167,9 +175,12 @@
 #define WX_RDB_PL_CFG_L2HDR          BIT(3)
 #define WX_RDB_PL_CFG_TUN_TUNHDR     BIT(4)
 #define WX_RDB_PL_CFG_TUN_OUTL2HDR   BIT(5)
+#define WX_RDB_PL_CFG_RSS_EN         BIT(24)
+#define WX_RDB_PL_CFG_RSS_MASK       GENMASK(23, 16)
 #define WX_RDB_RSSTBL(_i)            (0x19400 + ((_i) * 4))
 #define WX_RDB_RSSRK(_i)             (0x19480 + ((_i) * 4))
 #define WX_RDB_RA_CTL                0x194F4
+#define WX_RDB_RA_CTL_MULTI_RSS      BIT(0)
 #define WX_RDB_RA_CTL_RSS_EN         BIT(2) /* RSS Enable */
 #define WX_RDB_RA_CTL_RSS_IPV4_TCP   BIT(16)
 #define WX_RDB_RA_CTL_RSS_IPV4       BIT(17)
@@ -177,8 +188,12 @@
 #define WX_RDB_RA_CTL_RSS_IPV6_TCP   BIT(21)
 #define WX_RDB_RA_CTL_RSS_IPV4_UDP   BIT(22)
 #define WX_RDB_RA_CTL_RSS_IPV6_UDP   BIT(23)
+#define WX_RDB_RA_CTL_RSS_MASK       GENMASK(23, 16)
 #define WX_RDB_FDIR_MATCH            0x19558
 #define WX_RDB_FDIR_MISS             0x1955C
+/* VM RSS */
+#define WX_RDB_VMRSSRK(_i, _p)       (0x1A000 + ((_i) * 4) + ((_p) * 0x40))
+#define WX_RDB_VMRSSTBL(_i, _p)      (0x1B000 + ((_i) * 4) + ((_p) * 0x40))
 
 /******************************* PSR Registers *******************************/
 /* psr control */
@@ -411,6 +426,7 @@ enum WX_MSCA_CMD_value {
 #define WX_7K_ITR                    595
 #define WX_12K_ITR                   336
 #define WX_20K_ITR                   200
+#define WX_MIN_RSC_ITR               24
 #define WX_SP_MAX_EITR               0x00000FF8U
 #define WX_AML_MAX_EITR              0x00000FFFU
 #define WX_EM_MAX_EITR               0x00007FFCU
@@ -421,12 +437,15 @@ enum WX_MSCA_CMD_value {
 #define WX_PX_TR_WP(_i)              (0x03008 + ((_i) * 0x40))
 #define WX_PX_TR_RP(_i)              (0x0300C + ((_i) * 0x40))
 #define WX_PX_TR_CFG(_i)             (0x03010 + ((_i) * 0x40))
+#define WX_PX_TR_HEAD_ADDRL(_i)      (0x03028 + ((_i) * 0x40))
+#define WX_PX_TR_HEAD_ADDRH(_i)      (0x0302C + ((_i) * 0x40))
 /* Transmit Config masks */
 #define WX_PX_TR_CFG_ENABLE          BIT(0) /* Ena specific Tx Queue */
 #define WX_PX_TR_CFG_TR_SIZE_SHIFT   1 /* tx desc number per ring */
 #define WX_PX_TR_CFG_SWFLSH          BIT(26) /* Tx Desc. wr-bk flushing */
 #define WX_PX_TR_CFG_WTHRESH_SHIFT   16 /* shift to WTHRESH bits */
 #define WX_PX_TR_CFG_THRE_SHIFT      8
+#define WX_PX_TR_CFG_HEAD_WB         BIT(27)
 
 /* Receive DMA Registers */
 #define WX_PX_RR_BAL(_i)             (0x01000 + ((_i) * 0x40))
@@ -438,7 +457,10 @@ enum WX_MSCA_CMD_value {
 /* PX_RR_CFG bit definitions */
 #define WX_PX_RR_CFG_VLAN            BIT(31)
 #define WX_PX_RR_CFG_DROP_EN         BIT(30)
+#define WX_PX_RR_CFG_RSC             BIT(29)
 #define WX_PX_RR_CFG_SPLIT_MODE      BIT(26)
+#define WX_PX_RR_CFG_MAX_RSCBUF_16   FIELD_PREP(GENMASK(24, 23), 3)
+#define WX_PX_RR_CFG_DESC_MERGE      BIT(19)
 #define WX_PX_RR_CFG_RR_THER_SHIFT   16
 #define WX_PX_RR_CFG_RR_HDR_SZ       GENMASK(15, 12)
 #define WX_PX_RR_CFG_RR_BUF_SZ       GENMASK(11, 8)
@@ -534,13 +556,8 @@ enum WX_MSCA_CMD_value {
 /* Supported Rx Buffer Sizes */
 #define WX_RXBUFFER_256      256    /* Used for skb receive header */
 #define WX_RXBUFFER_2K       2048
+#define WX_RXBUFFER_3K       3072
 #define WX_MAX_RXBUFFER      16384  /* largest size for single descriptor */
-
-#if MAX_SKB_FRAGS < 8
-#define WX_RX_BUFSZ      ALIGN(WX_MAX_RXBUFFER / MAX_SKB_FRAGS, 1024)
-#else
-#define WX_RX_BUFSZ      WX_RXBUFFER_2K
-#endif
 
 #define WX_RX_BUFFER_WRITE   16      /* Must be power of 2 */
 
@@ -548,8 +565,6 @@ enum WX_MSCA_CMD_value {
 /* Tx Descriptors needed, worst case */
 #define TXD_USE_COUNT(S)     DIV_ROUND_UP((S), WX_MAX_DATA_PER_TXD)
 #define DESC_NEEDED          (MAX_SKB_FRAGS + 4)
-
-#define WX_CFG_PORT_ST               0x14404
 
 /******************* Receive Descriptor bit definitions **********************/
 #define WX_RXD_STAT_DD               BIT(0) /* Done */
@@ -635,6 +650,12 @@ enum wx_l2_ptypes {
 
 #define WX_RXD_PKTTYPE(_rxd) \
 	((le32_to_cpu((_rxd)->wb.lower.lo_dword.data) >> 9) & 0xFF)
+
+#define WX_RXD_RSCCNT_MASK           GENMASK(20, 17)
+#define WX_RXD_RSCCNT_SHIFT          17
+#define WX_RXD_NEXTP_MASK            GENMASK(19, 4)
+#define WX_RXD_NEXTP_SHIFT           4
+
 /*********************** Transmit Descriptor Config Masks ****************/
 #define WX_TXD_STAT_DD               BIT(0)  /* Descriptor Done */
 #define WX_TXD_DTYP_DATA             0       /* Adv Data Descriptor */
@@ -825,6 +846,11 @@ struct wx_bus_info {
 
 struct wx_mbx_info {
 	u16 size;
+	u32 mailbox;
+	u32 udelay;
+	u32 timeout;
+	/* lock mbx access */
+	spinlock_t mbx_lock;
 };
 
 struct wx_thermal_sensor_data {
@@ -992,6 +1018,7 @@ struct wx_tx_buffer {
 	DEFINE_DMA_UNMAP_LEN(len);
 	__be16 protocol;
 	u32 tx_flags;
+	u32 next_eop;
 };
 
 struct wx_rx_buffer {
@@ -1016,6 +1043,8 @@ struct wx_rx_queue_stats {
 	u64 csum_good_cnt;
 	u64 csum_err;
 	u64 alloc_rx_buff_failed;
+	u64 rsc_count;
+	u64 rsc_flush;
 };
 
 /* iterator for handling rings in ring container */
@@ -1028,6 +1057,7 @@ struct wx_ring_container {
 	unsigned int total_packets;     /* total packets processed this int */
 	u8 count;                       /* total number of rings in vector */
 	u8 itr;                         /* current ITR setting for ring */
+	struct dim dim;                 /* data for net_dim algorithm */
 };
 struct wx_ring {
 	struct wx_ring *next;           /* pointer to next ring in q_vector */
@@ -1042,6 +1072,8 @@ struct wx_ring {
 	};
 	u8 __iomem *tail;
 	dma_addr_t dma;                 /* phys. address of descriptor ring */
+	dma_addr_t headwb_dma;
+	u32 *headwb_mem;
 	unsigned int size;              /* length in bytes */
 
 	u16 count;                      /* amount of descriptors */
@@ -1055,6 +1087,7 @@ struct wx_ring {
 					 */
 	u16 next_to_use;
 	u16 next_to_clean;
+	u16 rx_buf_len;
 	union {
 		u16 next_to_alloc;
 		struct {
@@ -1083,6 +1116,8 @@ struct wx_q_vector {
 	struct wx_ring_container rx, tx;
 	struct napi_struct napi;
 	struct rcu_head rcu;    /* to avoid race with update stats on free */
+
+	u16 total_events;       /* number of interrupts processed */
 
 	char name[IFNAMSIZ + 17];
 
@@ -1183,6 +1218,21 @@ struct vf_macvlans {
 	u8 vf_macvlan[ETH_ALEN];
 };
 
+#define WX_RSS_FIELD_IPV4_TCP      BIT(0)
+#define WX_RSS_FIELD_IPV4          BIT(1)
+#define WX_RSS_FIELD_IPV4_SCTP     BIT(2)
+#define WX_RSS_FIELD_IPV6_SCTP     BIT(3)
+#define WX_RSS_FIELD_IPV6_TCP      BIT(4)
+#define WX_RSS_FIELD_IPV6          BIT(5)
+#define WX_RSS_FIELD_IPV4_UDP      BIT(6)
+#define WX_RSS_FIELD_IPV6_UDP      BIT(7)
+
+struct wx_rss_flow_map {
+	u8 flow_type;
+	u32 data;
+	u8 flag;
+};
+
 enum wx_pf_flags {
 	WX_FLAG_MULTI_64_FUNC,
 	WX_FLAG_SWFW_RING,
@@ -1194,11 +1244,16 @@ enum wx_pf_flags {
 	WX_FLAG_FDIR_HASH,
 	WX_FLAG_FDIR_PERFECT,
 	WX_FLAG_RSC_CAPABLE,
+	WX_FLAG_RSC_ENABLED,
 	WX_FLAG_RX_HWTSTAMP_ENABLED,
 	WX_FLAG_RX_HWTSTAMP_IN_REGISTER,
 	WX_FLAG_PTP_PPS_ENABLED,
 	WX_FLAG_NEED_LINK_CONFIG,
-	WX_FLAG_NEED_SFP_RESET,
+	WX_FLAG_NEED_MODULE_RESET,
+	WX_FLAG_NEED_UPDATE_LINK,
+	WX_FLAG_NEED_DO_RESET,
+	WX_FLAG_RX_MERGE_ENABLED,
+	WX_FLAG_TXHEAD_WB_ENABLED,
 	WX_PF_FLAGS_NBITS               /* must be last */
 };
 
@@ -1209,6 +1264,7 @@ struct wx {
 
 	void *priv;
 	u8 __iomem *hw_addr;
+	u8 __iomem *b4_addr; /* vf only */
 	struct pci_dev *pdev;
 	struct net_device *netdev;
 	struct wx_bus_info bus;
@@ -1237,8 +1293,6 @@ struct wx {
 
 	/* PHY stuff */
 	bool notify_down;
-	int adv_speed;
-	int adv_duplex;
 	unsigned int link;
 	int speed;
 	int duplex;
@@ -1260,6 +1314,7 @@ struct wx {
 	int num_rx_queues;
 	u16 rx_itr_setting;
 	u16 rx_work_limit;
+	bool adaptive_itr;
 
 	int num_q_vectors;      /* current number of q_vectors for device */
 	int max_q_vectors;      /* upper limit of q_vectors for device */
@@ -1283,10 +1338,13 @@ struct wx {
 	u32 *isb_mem;
 	u32 isb_tag[WX_ISB_MAX];
 	bool misc_irq_domain;
+	u32 eims_other;
+	u32 eims_enable_mask;
 
 #define WX_MAX_RETA_ENTRIES 128
 #define WX_RSS_INDIR_TBL_MAX 64
 	u8 rss_indir_tbl[WX_MAX_RETA_ENTRIES];
+	u8 rss_flags;
 	bool rss_enabled;
 #define WX_RSS_KEY_SIZE     40  /* size of RSS Hash Key in bytes */
 	u32 *rss_key;
@@ -1302,6 +1360,8 @@ struct wx {
 	u64 hw_csum_rx_good;
 	u64 hw_csum_rx_error;
 	u64 alloc_rx_buff_failed;
+	u64 rsc_count;
+	u64 rsc_flush;
 	unsigned int num_vfs;
 	struct vf_data_storage *vfinfo;
 	struct vf_macvlans vf_mvs;
@@ -1314,6 +1374,7 @@ struct wx {
 	int (*setup_tc)(struct net_device *netdev, u8 tc);
 	void (*do_reset)(struct net_device *netdev);
 	int (*ptp_setup_sdp)(struct wx *wx);
+	void (*set_num_queues)(struct wx *wx);
 
 	bool pps_enabled;
 	u64 pps_width;
@@ -1431,5 +1492,16 @@ static inline int wx_set_state_reset(struct wx *wx)
 
 	return 0;
 }
+
+static inline unsigned int wx_rx_pg_order(struct wx_ring *ring)
+{
+#if (PAGE_SIZE < 8192)
+	if (ring->rx_buf_len == WX_RXBUFFER_3K)
+		return 1;
+#endif
+	return 0;
+}
+
+#define wx_rx_pg_size(_ring) (PAGE_SIZE << wx_rx_pg_order(_ring))
 
 #endif /* _WX_TYPE_H_ */

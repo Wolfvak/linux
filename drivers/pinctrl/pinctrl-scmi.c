@@ -40,8 +40,6 @@ struct scmi_pinctrl {
 	struct pinctrl_desc pctl_desc;
 	struct pinfunction *functions;
 	unsigned int nr_functions;
-	struct pinctrl_pin_desc *pins;
-	unsigned int nr_pins;
 };
 
 static int pinctrl_scmi_get_groups_count(struct pinctrl_dev *pctldev)
@@ -253,7 +251,7 @@ static int pinctrl_scmi_map_pinconf_type(enum pin_config_param param,
 	case PIN_CONFIG_MODE_LOW_POWER:
 		*type = SCMI_PIN_LOW_POWER_MODE;
 		break;
-	case PIN_CONFIG_OUTPUT:
+	case PIN_CONFIG_LEVEL:
 		*type = SCMI_PIN_OUTPUT_VALUE;
 		break;
 	case PIN_CONFIG_OUTPUT_ENABLE:
@@ -321,7 +319,7 @@ pinctrl_scmi_alloc_configs(struct pinctrl_dev *pctldev, u32 num_configs,
 	if (!*p_config_value)
 		return -ENOMEM;
 
-	*p_config_type = kcalloc(num_configs, sizeof(**p_config_type), GFP_KERNEL);
+	*p_config_type = kzalloc_objs(**p_config_type, num_configs);
 	if (!*p_config_type) {
 		kfree(*p_config_value);
 		return -ENOMEM;
@@ -506,8 +504,9 @@ static int pinctrl_scmi_get_pins(struct scmi_pinctrl *pmx,
 }
 
 static const char * const scmi_pinctrl_blocklist[] = {
-	"fsl,imx95",
 	"fsl,imx94",
+	"fsl,imx95",
+	"fsl,imx952",
 	NULL
 };
 

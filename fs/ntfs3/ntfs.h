@@ -77,10 +77,14 @@ static_assert(sizeof(size_t) == 8);
 typedef u32 CLST;
 #endif
 
+/* On-disk sparsed cluster is marked as -1. */
 #define SPARSE_LCN64   ((u64)-1)
 #define SPARSE_LCN     ((CLST)-1)
+/* Below is virtual (not on-disk) values. */
 #define RESIDENT_LCN   ((CLST)-2)
 #define COMPRESSED_LCN ((CLST)-3)
+#define EOF_LCN       ((CLST)-4)
+#define DELALLOC_LCN   ((CLST)-5)
 
 enum RECORD_NUM {
 	MFT_REC_MFT		= 0,
@@ -561,8 +565,7 @@ struct NTFS_DUP_INFO {
 	__le64 alloc_size;	// 0x20: Data attribute allocated size, multiple of cluster size.
 	__le64 data_size;	// 0x28: Data attribute size <= Dataalloc_size.
 	enum FILE_ATTRIBUTE fa;	// 0x30: Standard DOS attributes & more.
-	__le16 ea_size;		// 0x34: Packed EAs.
-	__le16 reparse;		// 0x36: Used by Reparse.
+	__le32 extend_data;	// 0x34: Extended data.
 
 }; // 0x38
 

@@ -5,8 +5,7 @@
  *  Copyright IBM Corp. 2024
  */
 
-#define KMSG_COMPONENT "pkey"
-#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
+#define pr_fmt(fmt) "pkey: " fmt
 
 #include <linux/sysfs.h>
 
@@ -297,7 +296,7 @@ static const struct bin_attribute *const protkey_attrs[] = {
 
 static const struct attribute_group protkey_attr_group = {
 	.name	       = "protkey",
-	.bin_attrs_new = protkey_attrs,
+	.bin_attrs = protkey_attrs,
 };
 
 /*
@@ -406,7 +405,7 @@ static const struct bin_attribute *const ccadata_attrs[] = {
 
 static const struct attribute_group ccadata_attr_group = {
 	.name	       = "ccadata",
-	.bin_attrs_new = ccadata_attrs,
+	.bin_attrs = ccadata_attrs,
 };
 
 #define CCACIPHERTOKENSIZE	(sizeof(struct cipherkeytoken) + 80)
@@ -520,7 +519,7 @@ static const struct bin_attribute *const ccacipher_attrs[] = {
 
 static const struct attribute_group ccacipher_attr_group = {
 	.name	       = "ccacipher",
-	.bin_attrs_new = ccacipher_attrs,
+	.bin_attrs = ccacipher_attrs,
 };
 
 /*
@@ -635,7 +634,7 @@ static const struct bin_attribute *const ep11_attrs[] = {
 
 static const struct attribute_group ep11_attr_group = {
 	.name	   = "ep11",
-	.bin_attrs_new = ep11_attrs,
+	.bin_attrs = ep11_attrs,
 };
 
 const struct attribute_group *pkey_attr_groups[] = {

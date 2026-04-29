@@ -39,7 +39,7 @@
 #include "dev-sync-probe.h"
 
 #define GPIO_SIM_NGPIO_MAX	1024
-#define GPIO_SIM_PROP_MAX	4 /* Max 3 properties + sentinel. */
+#define GPIO_SIM_PROP_MAX	5 /* Max 4 properties + sentinel. */
 #define GPIO_SIM_NUM_ATTRS	3 /* value, pull and sentinel */
 
 static DEFINE_IDA(gpio_sim_ida);
@@ -262,8 +262,7 @@ static void gpio_sim_dbg_show(struct seq_file *seq, struct gpio_chip *gc)
 	guard(mutex)(&chip->lock);
 
 	for_each_hwgpio(gc, i, label)
-		seq_printf(seq, " gpio-%-3d (%s) %s,%s\n",
-			   gc->base + i,
+		seq_printf(seq, " gpio-%-3d (%s) %s,%s\n", i,
 			   label ?: "<unused>",
 			   test_bit(i, chip->direction_map) ? "input" :
 				test_bit(i, chip->value_map) ? "output-high" :
@@ -486,9 +485,9 @@ static int gpio_sim_add_bank(struct fwnode_handle *swnode, struct device *dev)
 	gc->parent = dev;
 	gc->fwnode = swnode;
 	gc->get = gpio_sim_get;
-	gc->set_rv = gpio_sim_set;
+	gc->set = gpio_sim_set;
 	gc->get_multiple = gpio_sim_get_multiple;
-	gc->set_multiple_rv = gpio_sim_set_multiple;
+	gc->set_multiple = gpio_sim_set_multiple;
 	gc->direction_output = gpio_sim_direction_output;
 	gc->direction_input = gpio_sim_direction_input;
 	gc->get_direction = gpio_sim_get_direction;
@@ -629,6 +628,7 @@ struct gpio_sim_line {
 
 	unsigned int offset;
 	char *name;
+	bool valid;
 
 	/* There can only be one hog per line. */
 	struct gpio_sim_hog *hog;
@@ -744,6 +744,36 @@ gpio_sim_set_line_names(struct gpio_sim_bank *bank, char **line_names)
 	}
 }
 
+static unsigned int gpio_sim_get_reserved_ranges_size(struct gpio_sim_bank *bank)
+{
+	struct gpio_sim_line *line;
+	unsigned int size = 0;
+
+	list_for_each_entry(line, &bank->line_list, siblings) {
+		if (line->valid)
+			continue;
+
+		size += 2;
+	}
+
+	return size;
+}
+
+static void gpio_sim_set_reserved_ranges(struct gpio_sim_bank *bank,
+					 u32 *ranges)
+{
+	struct gpio_sim_line *line;
+	int i = 0;
+
+	list_for_each_entry(line, &bank->line_list, siblings) {
+		if (line->valid)
+			continue;
+
+		ranges[i++] = line->offset;
+		ranges[i++] = 1;
+	}
+}
+
 static void gpio_sim_remove_hogs(struct gpio_sim_device *dev)
 {
 	struct gpiod_hog *hog;
@@ -783,7 +813,7 @@ static int gpio_sim_add_hogs(struct gpio_sim_device *dev)
 		return 0;
 
 	/* Allocate one more for the sentinel. */
-	dev->hogs = kcalloc(num_hogs + 1, sizeof(*dev->hogs), GFP_KERNEL);
+	dev->hogs = kzalloc_objs(*dev->hogs, num_hogs + 1);
 	if (!dev->hogs)
 		return -ENOMEM;
 
@@ -844,9 +874,10 @@ static struct fwnode_handle *
 gpio_sim_make_bank_swnode(struct gpio_sim_bank *bank,
 			  struct fwnode_handle *parent)
 {
+	unsigned int prop_idx = 0, line_names_size, ranges_size;
 	struct property_entry properties[GPIO_SIM_PROP_MAX];
-	unsigned int prop_idx = 0, line_names_size;
 	char **line_names __free(kfree) = NULL;
+	u32 *ranges __free(kfree) = NULL;
 
 	memset(properties, 0, sizeof(properties));
 
@@ -868,6 +899,19 @@ gpio_sim_make_bank_swnode(struct gpio_sim_bank *bank,
 		properties[prop_idx++] = PROPERTY_ENTRY_STRING_ARRAY_LEN(
 						"gpio-line-names",
 						line_names, line_names_size);
+	}
+
+	ranges_size = gpio_sim_get_reserved_ranges_size(bank);
+	if (ranges_size) {
+		ranges = kcalloc(ranges_size, sizeof(u32), GFP_KERNEL);
+		if (!ranges)
+			return ERR_PTR(-ENOMEM);
+
+		gpio_sim_set_reserved_ranges(bank, ranges);
+
+		properties[prop_idx++] = PROPERTY_ENTRY_U32_ARRAY_LEN(
+						"gpio-reserved-ranges",
+						ranges, ranges_size);
 	}
 
 	return fwnode_create_software_node(properties, parent);
@@ -1189,8 +1233,41 @@ static ssize_t gpio_sim_line_config_name_store(struct config_item *item,
 
 CONFIGFS_ATTR(gpio_sim_line_config_, name);
 
+static ssize_t
+gpio_sim_line_config_valid_show(struct config_item *item, char *page)
+{
+	struct gpio_sim_line *line = to_gpio_sim_line(item);
+	struct gpio_sim_device *dev = gpio_sim_line_get_device(line);
+
+	guard(mutex)(&dev->lock);
+
+	return sprintf(page, "%c\n", line->valid ? '1' : '0');
+}
+
+static ssize_t gpio_sim_line_config_valid_store(struct config_item *item,
+						const char *page, size_t count)
+{
+	struct gpio_sim_line *line = to_gpio_sim_line(item);
+	struct gpio_sim_device *dev = gpio_sim_line_get_device(line);
+	bool valid;
+	int ret;
+
+	ret = kstrtobool(page, &valid);
+	if (ret)
+		return ret;
+
+	guard(mutex)(&dev->lock);
+
+	line->valid = valid;
+
+	return count;
+}
+
+CONFIGFS_ATTR(gpio_sim_line_config_, valid);
+
 static struct configfs_attribute *gpio_sim_line_config_attrs[] = {
 	&gpio_sim_line_config_attr_name,
+	&gpio_sim_line_config_attr_valid,
 	NULL
 };
 
@@ -1307,7 +1384,7 @@ static void gpio_sim_hog_config_item_release(struct config_item *item)
 	kfree(hog);
 }
 
-static struct configfs_item_operations gpio_sim_hog_config_item_ops = {
+static const struct configfs_item_operations gpio_sim_hog_config_item_ops = {
 	.release	= gpio_sim_hog_config_item_release,
 };
 
@@ -1329,7 +1406,7 @@ gpio_sim_line_config_make_hog_item(struct config_group *group, const char *name)
 
 	guard(mutex)(&dev->lock);
 
-	hog = kzalloc(sizeof(*hog), GFP_KERNEL);
+	hog = kzalloc_obj(*hog);
 	if (!hog)
 		return ERR_PTR(-ENOMEM);
 
@@ -1356,11 +1433,11 @@ static void gpio_sim_line_config_group_release(struct config_item *item)
 	kfree(line);
 }
 
-static struct configfs_item_operations gpio_sim_line_config_item_ops = {
+static const struct configfs_item_operations gpio_sim_line_config_item_ops = {
 	.release	= gpio_sim_line_config_group_release,
 };
 
-static struct configfs_group_operations gpio_sim_line_config_group_ops = {
+static const struct configfs_group_operations gpio_sim_line_config_group_ops = {
 	.make_item	= gpio_sim_line_config_make_hog_item,
 };
 
@@ -1390,7 +1467,7 @@ gpio_sim_bank_config_make_line_group(struct config_group *group,
 	if (gpio_sim_device_is_live(dev))
 		return ERR_PTR(-EBUSY);
 
-	line = kzalloc(sizeof(*line), GFP_KERNEL);
+	line = kzalloc_obj(*line);
 	if (!line)
 		return ERR_PTR(-ENOMEM);
 
@@ -1399,6 +1476,7 @@ gpio_sim_bank_config_make_line_group(struct config_group *group,
 
 	line->parent = bank;
 	line->offset = offset;
+	line->valid = true;
 	list_add_tail(&line->siblings, &bank->line_list);
 
 	return &line->group;
@@ -1416,11 +1494,11 @@ static void gpio_sim_bank_config_group_release(struct config_item *item)
 	kfree(bank);
 }
 
-static struct configfs_item_operations gpio_sim_bank_config_item_ops = {
+static const struct configfs_item_operations gpio_sim_bank_config_item_ops = {
 	.release	= gpio_sim_bank_config_group_release,
 };
 
-static struct configfs_group_operations gpio_sim_bank_config_group_ops = {
+static const struct configfs_group_operations gpio_sim_bank_config_group_ops = {
 	.make_group	= gpio_sim_bank_config_make_line_group,
 };
 
@@ -1443,7 +1521,7 @@ gpio_sim_device_config_make_bank_group(struct config_group *group,
 	if (gpio_sim_device_is_live(dev))
 		return ERR_PTR(-EBUSY);
 
-	bank = kzalloc(sizeof(*bank), GFP_KERNEL);
+	bank = kzalloc_obj(*bank);
 	if (!bank)
 		return ERR_PTR(-ENOMEM);
 
@@ -1471,11 +1549,11 @@ static void gpio_sim_device_config_group_release(struct config_item *item)
 	kfree(dev);
 }
 
-static struct configfs_item_operations gpio_sim_device_config_item_ops = {
+static const struct configfs_item_operations gpio_sim_device_config_item_ops = {
 	.release	= gpio_sim_device_config_group_release,
 };
 
-static struct configfs_group_operations gpio_sim_device_config_group_ops = {
+static const struct configfs_group_operations gpio_sim_device_config_group_ops = {
 	.make_group	= gpio_sim_device_config_make_bank_group,
 };
 
@@ -1491,8 +1569,7 @@ gpio_sim_config_make_device_group(struct config_group *group, const char *name)
 {
 	int id;
 
-	struct gpio_sim_device *dev __free(kfree) = kzalloc(sizeof(*dev),
-							    GFP_KERNEL);
+	struct gpio_sim_device *dev __free(kfree) = kzalloc_obj(*dev);
 	if (!dev)
 		return ERR_PTR(-ENOMEM);
 
@@ -1511,7 +1588,7 @@ gpio_sim_config_make_device_group(struct config_group *group, const char *name)
 	return &no_free_ptr(dev)->group;
 }
 
-static struct configfs_group_operations gpio_sim_config_group_ops = {
+static const struct configfs_group_operations gpio_sim_config_group_ops = {
 	.make_group	= gpio_sim_config_make_device_group,
 };
 

@@ -384,7 +384,8 @@ EXPORT_SYMBOL_GPL(adf_isr_resource_alloc);
  */
 int __init adf_init_misc_wq(void)
 {
-	adf_misc_wq = alloc_workqueue("qat_misc_wq", WQ_MEM_RECLAIM, 0);
+	adf_misc_wq = alloc_workqueue("qat_misc_wq",
+				      WQ_MEM_RECLAIM | WQ_PERCPU, 0);
 
 	return !adf_misc_wq ? -ENOMEM : 0;
 }
@@ -406,4 +407,9 @@ bool adf_misc_wq_queue_delayed_work(struct delayed_work *work,
 				    unsigned long delay)
 {
 	return queue_delayed_work(adf_misc_wq, work, delay);
+}
+
+void adf_misc_wq_flush(void)
+{
+	flush_workqueue(adf_misc_wq);
 }

@@ -41,7 +41,7 @@ struct mock_phc {
 	spinlock_t lock;
 };
 
-static u64 mock_phc_cc_read(const struct cyclecounter *cc)
+static u64 mock_phc_cc_read(struct cyclecounter *cc)
 {
 	return ktime_get_raw_ns();
 }
@@ -120,7 +120,7 @@ struct mock_phc *mock_phc_create(struct device *dev)
 	struct mock_phc *phc;
 	int err;
 
-	phc = kzalloc(sizeof(*phc), GFP_KERNEL);
+	phc = kzalloc_obj(*phc);
 	if (!phc) {
 		err = -ENOMEM;
 		goto out;

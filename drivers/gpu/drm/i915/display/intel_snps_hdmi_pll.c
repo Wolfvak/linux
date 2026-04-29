@@ -106,7 +106,7 @@ static void get_ana_cp_int_prop(u64 vco_clk,
 		DIV64_U64_ROUND_CLOSEST(DIV_ROUND_DOWN_ULL(adjusted_vco_clk1, curve_2_scaled1),
 					CURVE2_MULTIPLIER);
 
-	*ana_cp_int = max(1, min(ana_cp_int_temp, 127));
+	*ana_cp_int = clamp(ana_cp_int_temp, 1, 127);
 
 	curve_2_scaled_int = curve_2_scaled1 * (*ana_cp_int);
 
@@ -125,7 +125,7 @@ static void get_ana_cp_int_prop(u64 vco_clk,
 						       curve_1_interpolated);
 
 	*ana_cp_prop = DIV64_U64_ROUND_UP(adjusted_vco_clk2, curve_2_scaled2);
-	*ana_cp_prop = max(1, min(*ana_cp_prop, 127));
+	*ana_cp_prop = clamp(*ana_cp_prop, 1, 127);
 }
 
 static void compute_hdmi_tmds_pll(u64 pixel_clock, u32 refclk,
@@ -331,6 +331,8 @@ void intel_snps_hdmi_pll_compute_c10pll(struct intel_c10pll_state *pll_state, u6
 			      c10_curve_freq_hz, c10_curve_0,
 			      c10_curve_1, c10_curve_2, prescaler_divider,
 			      &pll_params);
+
+	pll_state->clock = pixel_clock;
 
 	pll_state->tx = 0x10;
 	pll_state->cmn = 0x1;

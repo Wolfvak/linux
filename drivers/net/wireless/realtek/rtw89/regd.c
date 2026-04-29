@@ -38,7 +38,7 @@ static const struct rtw89_regd rtw89_regd_map[] = {
 	COUNTRY_REGD("MX", RTW89_MEXICO, RTW89_MEXICO, RTW89_FCC, 0x0),
 	COUNTRY_REGD("NI", RTW89_FCC, RTW89_FCC, RTW89_NA, 0x0),
 	COUNTRY_REGD("PA", RTW89_FCC, RTW89_FCC, RTW89_NA, 0x0),
-	COUNTRY_REGD("PY", RTW89_FCC, RTW89_FCC, RTW89_NA, 0x0),
+	COUNTRY_REGD("PY", RTW89_FCC, RTW89_FCC, RTW89_FCC, 0x0),
 	COUNTRY_REGD("PE", RTW89_FCC, RTW89_FCC, RTW89_FCC, 0x0),
 	COUNTRY_REGD("US", RTW89_FCC, RTW89_FCC, RTW89_FCC, 0x1),
 	COUNTRY_REGD("UY", RTW89_FCC, RTW89_FCC, RTW89_NA, 0x0),
@@ -95,7 +95,7 @@ static const struct rtw89_regd rtw89_regd_map[] = {
 	COUNTRY_REGD("MK", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
 	COUNTRY_REGD("MA", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("MZ", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
-	COUNTRY_REGD("NA", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
+	COUNTRY_REGD("NA", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("NG", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("OM", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("QA", RTW89_QATAR, RTW89_QATAR, RTW89_QATAR, 0x0),
@@ -111,12 +111,12 @@ static const struct rtw89_regd rtw89_regd_map[] = {
 	COUNTRY_REGD("AE", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("YE", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
 	COUNTRY_REGD("ZW", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
-	COUNTRY_REGD("BD", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
+	COUNTRY_REGD("BD", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("KH", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
 	COUNTRY_REGD("CN", RTW89_CN, RTW89_CN, RTW89_CN, 0x0),
 	COUNTRY_REGD("HK", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("IN", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
-	COUNTRY_REGD("ID", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
+	COUNTRY_REGD("ID", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("KR", RTW89_KCC, RTW89_KCC, RTW89_KCC, 0x1),
 	COUNTRY_REGD("MY", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("PK", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
@@ -125,7 +125,7 @@ static const struct rtw89_regd rtw89_regd_map[] = {
 	COUNTRY_REGD("LK", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
 	COUNTRY_REGD("TW", RTW89_FCC, RTW89_FCC, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("TH", RTW89_THAILAND, RTW89_THAILAND, RTW89_THAILAND, 0x0),
-	COUNTRY_REGD("VN", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
+	COUNTRY_REGD("VN", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("AU", RTW89_ACMA, RTW89_ACMA, RTW89_ACMA, 0x0),
 	COUNTRY_REGD("NZ", RTW89_ACMA, RTW89_ACMA, RTW89_ACMA, 0x0),
 	COUNTRY_REGD("PG", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
@@ -134,7 +134,7 @@ static const struct rtw89_regd rtw89_regd_map[] = {
 	COUNTRY_REGD("JM", RTW89_FCC, RTW89_FCC, RTW89_FCC, 0x0),
 	COUNTRY_REGD("AN", RTW89_FCC, RTW89_FCC, RTW89_FCC, 0x0),
 	COUNTRY_REGD("TT", RTW89_FCC, RTW89_FCC, RTW89_NA, 0x0),
-	COUNTRY_REGD("TN", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
+	COUNTRY_REGD("TN", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("AF", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
 	COUNTRY_REGD("DZ", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("AS", RTW89_FCC, RTW89_FCC, RTW89_NA, 0x0),
@@ -187,9 +187,9 @@ static const struct rtw89_regd rtw89_regd_map[] = {
 	COUNTRY_REGD("GM", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("GE", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("GI", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
-	COUNTRY_REGD("GL", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
+	COUNTRY_REGD("GL", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("GD", RTW89_FCC, RTW89_FCC, RTW89_FCC, 0x0),
-	COUNTRY_REGD("GP", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
+	COUNTRY_REGD("GP", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("GU", RTW89_FCC, RTW89_FCC, RTW89_FCC, 0x0),
 	COUNTRY_REGD("GG", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
 	COUNTRY_REGD("GN", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
@@ -214,7 +214,7 @@ static const struct rtw89_regd rtw89_regd_map[] = {
 	COUNTRY_REGD("MQ", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
 	COUNTRY_REGD("MR", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
 	COUNTRY_REGD("MU", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
-	COUNTRY_REGD("YT", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
+	COUNTRY_REGD("YT", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("FM", RTW89_FCC, RTW89_FCC, RTW89_FCC, 0x0),
 	COUNTRY_REGD("MD", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("MN", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
@@ -260,7 +260,7 @@ static const struct rtw89_regd rtw89_regd_map[] = {
 	COUNTRY_REGD("UZ", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("VU", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
 	COUNTRY_REGD("WF", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
-	COUNTRY_REGD("EH", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
+	COUNTRY_REGD("EH", RTW89_ETSI, RTW89_ETSI, RTW89_ETSI, 0x0),
 	COUNTRY_REGD("ZM", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
 	COUNTRY_REGD("CU", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
 	COUNTRY_REGD("IR", RTW89_ETSI, RTW89_ETSI, RTW89_NA, 0x0),
@@ -360,15 +360,13 @@ static void rtw89_regd_setup_unii4(struct rtw89_dev *rtwdev,
 				   struct wiphy *wiphy)
 {
 	struct rtw89_regulatory_info *regulatory = &rtwdev->regulatory;
-	const struct rtw89_regd_ctrl *regd_ctrl = &regulatory->ctrl;
 	const struct rtw89_chip_info *chip = rtwdev->chip;
 	struct ieee80211_supported_band *sband;
 	struct rtw89_acpi_dsm_result res = {};
-	bool enable_by_fcc;
-	bool enable_by_ic;
+	bool enable;
+	u8 index;
 	int ret;
 	u8 val;
-	int i;
 
 	sband = wiphy->bands[NL80211_BAND_5GHZ];
 	if (!sband)
@@ -385,35 +383,25 @@ static void rtw89_regd_setup_unii4(struct rtw89_dev *rtwdev,
 	if (ret) {
 		rtw89_debug(rtwdev, RTW89_DBG_REGD,
 			    "acpi: cannot eval unii 4: %d\n", ret);
-		enable_by_fcc = true;
-		enable_by_ic = false;
+		val = u8_encode_bits(1, RTW89_ACPI_CONF_UNII4_US);
 		goto bottom;
 	}
 
 	val = res.u.value;
-	enable_by_fcc = u8_get_bits(val, RTW89_ACPI_CONF_UNII4_FCC);
-	enable_by_ic = u8_get_bits(val, RTW89_ACPI_CONF_UNII4_IC);
 
 	rtw89_debug(rtwdev, RTW89_DBG_REGD,
 		    "acpi: eval if allow unii-4: 0x%x\n", val);
 
 bottom:
-	for (i = 0; i < regd_ctrl->nr; i++) {
-		const struct rtw89_regd *regd = &regd_ctrl->map[i];
+	index = rtw89_regd_get_index_by_name(rtwdev, "US");
+	enable = u8_get_bits(val, RTW89_ACPI_CONF_UNII4_US);
+	if (enable && index != RTW89_REGD_MAX_COUNTRY_NUM)
+		clear_bit(index, regulatory->block_unii4);
 
-		switch (regd->txpwr_regd[RTW89_BAND_5G]) {
-		case RTW89_FCC:
-			if (enable_by_fcc)
-				clear_bit(i, regulatory->block_unii4);
-			break;
-		case RTW89_IC:
-			if (enable_by_ic)
-				clear_bit(i, regulatory->block_unii4);
-			break;
-		default:
-			break;
-		}
-	}
+	index = rtw89_regd_get_index_by_name(rtwdev, "CA");
+	enable = u8_get_bits(val, RTW89_ACPI_CONF_UNII4_CA);
+	if (enable && index != RTW89_REGD_MAX_COUNTRY_NUM)
+		clear_bit(index, regulatory->block_unii4);
 }
 
 static void __rtw89_regd_setup_policy_6ghz(struct rtw89_dev *rtwdev, bool block,
@@ -490,12 +478,11 @@ out:
 static void rtw89_regd_setup_policy_6ghz_sp(struct rtw89_dev *rtwdev)
 {
 	struct rtw89_regulatory_info *regulatory = &rtwdev->regulatory;
-	const struct rtw89_regd_ctrl *regd_ctrl = &regulatory->ctrl;
 	const struct rtw89_acpi_policy_6ghz_sp *ptr;
 	struct rtw89_acpi_dsm_result res = {};
-	bool enable_by_us;
+	bool enable;
+	u8 index;
 	int ret;
-	int i;
 
 	ret = rtw89_acpi_evaluate_dsm(rtwdev, RTW89_ACPI_DSM_FUNC_6GHZ_SP_SUP, &res);
 	if (ret) {
@@ -520,16 +507,66 @@ static void rtw89_regd_setup_policy_6ghz_sp(struct rtw89_dev *rtwdev)
 
 	bitmap_fill(regulatory->block_6ghz_sp, RTW89_REGD_MAX_COUNTRY_NUM);
 
-	enable_by_us = u8_get_bits(ptr->conf, RTW89_ACPI_CONF_6GHZ_SP_US);
+	index = rtw89_regd_get_index_by_name(rtwdev, "US");
+	enable = u8_get_bits(ptr->conf, RTW89_ACPI_CONF_6GHZ_SP_US);
+	if (enable && index != RTW89_REGD_MAX_COUNTRY_NUM)
+		clear_bit(index, regulatory->block_6ghz_sp);
 
-	for (i = 0; i < regd_ctrl->nr; i++) {
-		const struct rtw89_regd *tmp = &regd_ctrl->map[i];
-
-		if (enable_by_us && memcmp(tmp->alpha2, "US", 2) == 0)
-			clear_bit(i, regulatory->block_6ghz_sp);
-	}
+	index = rtw89_regd_get_index_by_name(rtwdev, "CA");
+	enable = u8_get_bits(ptr->conf, RTW89_ACPI_CONF_6GHZ_SP_CA);
+	if (enable && index != RTW89_REGD_MAX_COUNTRY_NUM)
+		clear_bit(index, regulatory->block_6ghz_sp);
 
 out:
+	kfree(ptr);
+}
+
+static void rtw89_regd_setup_policy_6ghz_vlp(struct rtw89_dev *rtwdev)
+{
+	struct rtw89_regulatory_info *regulatory = &rtwdev->regulatory;
+	const struct rtw89_acpi_policy_6ghz_vlp *ptr = NULL;
+	struct rtw89_acpi_dsm_result res = {};
+	bool enable;
+	u8 index;
+	int ret;
+	u8 val;
+
+	/* By default, allow 6 GHz VLP on all countries except US and CA. */
+	val = ~(RTW89_ACPI_CONF_6GHZ_VLP_US | RTW89_ACPI_CONF_6GHZ_VLP_CA);
+
+	ret = rtw89_acpi_evaluate_dsm(rtwdev, RTW89_ACPI_DSM_FUNC_6GHZ_VLP_SUP, &res);
+	if (ret) {
+		rtw89_debug(rtwdev, RTW89_DBG_REGD,
+			    "acpi: cannot eval policy 6ghz-vlp: %d\n", ret);
+		goto bottom;
+	}
+
+	ptr = res.u.policy_6ghz_vlp;
+
+	switch (ptr->override) {
+	default:
+		rtw89_debug(rtwdev, RTW89_DBG_REGD,
+			    "%s: unknown override case: %d\n", __func__,
+			    ptr->override);
+		fallthrough;
+	case 0:
+		break;
+	case 1:
+		val = ptr->conf;
+		break;
+	}
+
+bottom:
+	index = rtw89_regd_get_index_by_name(rtwdev, "US");
+	enable = u8_get_bits(val, RTW89_ACPI_CONF_6GHZ_VLP_US);
+	if (!enable && index != RTW89_REGD_MAX_COUNTRY_NUM)
+		set_bit(index, regulatory->block_6ghz_vlp);
+
+	index = rtw89_regd_get_index_by_name(rtwdev, "CA");
+	enable = u8_get_bits(val, RTW89_ACPI_CONF_6GHZ_VLP_CA);
+	if (!enable && index != RTW89_REGD_MAX_COUNTRY_NUM)
+		set_bit(index, regulatory->block_6ghz_vlp);
+
 	kfree(ptr);
 }
 
@@ -576,6 +613,7 @@ bottom:
 	if (regd_allow_6ghz) {
 		rtw89_regd_setup_policy_6ghz(rtwdev);
 		rtw89_regd_setup_policy_6ghz_sp(rtwdev);
+		rtw89_regd_setup_policy_6ghz_vlp(rtwdev);
 		return;
 	}
 
@@ -620,6 +658,30 @@ const char *rtw89_regd_get_string(enum rtw89_regulation_type regd)
 	return rtw89_regd_string[regd];
 }
 
+static void rtw89_regd_setup_reg_rules(struct rtw89_dev *rtwdev)
+{
+	struct rtw89_regulatory_info *regulatory = &rtwdev->regulatory;
+	const struct rtw89_acpi_policy_reg_rules *ptr;
+	struct rtw89_acpi_dsm_result res = {};
+	int ret;
+
+	regulatory->txpwr_uk_follow_etsi = true;
+
+	ret = rtw89_acpi_evaluate_dsm(rtwdev, RTW89_ACPI_DSM_FUNC_REG_RULES_EN, &res);
+	if (ret) {
+		rtw89_debug(rtwdev, RTW89_DBG_REGD,
+			    "acpi: cannot eval policy reg-rules: %d\n", ret);
+		return;
+	}
+
+	ptr = res.u.policy_reg_rules;
+
+	regulatory->txpwr_uk_follow_etsi =
+		!u8_get_bits(ptr->conf, RTW89_ACPI_CONF_REG_RULE_REGD_UK);
+
+	kfree(ptr);
+}
+
 int rtw89_regd_setup(struct rtw89_dev *rtwdev)
 {
 	struct rtw89_regulatory_info *regulatory = &rtwdev->regulatory;
@@ -636,7 +698,8 @@ int rtw89_regd_setup(struct rtw89_dev *rtwdev)
 	}
 
 	regulatory->reg_6ghz_power = RTW89_REG_6GHZ_POWER_DFLT;
-	regulatory->txpwr_uk_follow_etsi = true;
+
+	rtw89_regd_setup_reg_rules(rtwdev);
 
 	if (!wiphy)
 		return -EINVAL;
@@ -660,6 +723,8 @@ int rtw89_regd_init_hint(struct rtw89_dev *rtwdev)
 	chip_regd = rtw89_regd_find_reg_by_name(rtwdev, rtwdev->efuse.country_code);
 	if (!rtw89_regd_is_ww(chip_regd)) {
 		rtwdev->regulatory.regd = chip_regd;
+		rtwdev->regulatory.programmed = true;
+
 		/* Ignore country ie if there is a country domain programmed in chip */
 		wiphy->regulatory_flags |= REGULATORY_COUNTRY_IE_IGNORE;
 		wiphy->regulatory_flags |= REGULATORY_STRICT_REG;
@@ -804,11 +869,6 @@ static void rtw89_regd_notifier_apply(struct rtw89_dev *rtwdev,
 		wiphy->regulatory_flags |= REGULATORY_COUNTRY_IE_IGNORE;
 	else
 		wiphy->regulatory_flags &= ~REGULATORY_COUNTRY_IE_IGNORE;
-
-	rtw89_regd_apply_policy_unii4(rtwdev, wiphy);
-	rtw89_regd_apply_policy_6ghz(rtwdev, wiphy);
-	rtw89_regd_apply_policy_tas(rtwdev);
-	rtw89_regd_apply_policy_ant_gain(rtwdev);
 }
 
 static
@@ -820,19 +880,22 @@ void rtw89_regd_notifier(struct wiphy *wiphy, struct regulatory_request *request
 	wiphy_lock(wiphy);
 	rtw89_leave_ps_mode(rtwdev);
 
-	if (wiphy->regd) {
-		rtw89_debug(rtwdev, RTW89_DBG_REGD,
-			    "There is a country domain programmed in chip, ignore notifications\n");
-		goto exit;
-	}
+	if (rtwdev->regulatory.programmed)
+		goto policy;
+
 	rtw89_regd_notifier_apply(rtwdev, wiphy, request);
 	rtw89_debug_regd(rtwdev, rtwdev->regulatory.regd,
 			 "get from initiator %d, alpha2",
 			 request->initiator);
 
+policy:
+	rtw89_regd_apply_policy_unii4(rtwdev, wiphy);
+	rtw89_regd_apply_policy_6ghz(rtwdev, wiphy);
+	rtw89_regd_apply_policy_tas(rtwdev);
+	rtw89_regd_apply_policy_ant_gain(rtwdev);
+
 	rtw89_core_set_chip_txpwr(rtwdev);
 
-exit:
 	wiphy_unlock(wiphy);
 }
 
@@ -1046,7 +1109,16 @@ static int rtw89_reg_6ghz_power_recalc(struct rtw89_dev *rtwdev,
 				       struct rtw89_vif_link *rtwvif_link, bool active,
 				       unsigned int *changed)
 {
+	struct rtw89_regulatory_info *regulatory = &rtwdev->regulatory;
+	const struct rtw89_regd *regd = regulatory->regd;
+	bool blocked[NUM_OF_RTW89_REG_6GHZ_POWER] = {};
+	u8 index = rtw89_regd_get_index(rtwdev, regd);
 	struct ieee80211_bss_conf *bss_conf;
+	bool dflt = false;
+
+	if (index == RTW89_REGD_MAX_COUNTRY_NUM ||
+	    test_bit(index, regulatory->block_6ghz_vlp))
+		blocked[RTW89_REG_6GHZ_POWER_VLP] = true;
 
 	rcu_read_lock();
 
@@ -1065,13 +1137,23 @@ static int rtw89_reg_6ghz_power_recalc(struct rtw89_dev *rtwdev,
 			break;
 		default:
 			rtwvif_link->reg_6ghz_power = RTW89_REG_6GHZ_POWER_DFLT;
+			dflt = true;
 			break;
 		}
 	} else {
 		rtwvif_link->reg_6ghz_power = RTW89_REG_6GHZ_POWER_DFLT;
+		dflt = true;
 	}
 
 	rcu_read_unlock();
+
+	if (!dflt && blocked[rtwvif_link->reg_6ghz_power]) {
+		rtw89_debug(rtwdev, RTW89_DBG_REGD,
+			    "%c%c 6 GHz power type-%u is blocked by policy\n",
+			    regd->alpha2[0], regd->alpha2[1],
+			    rtwvif_link->reg_6ghz_power);
+		return -EINVAL;
+	}
 
 	*changed += __rtw89_reg_6ghz_power_recalc(rtwdev);
 	return 0;

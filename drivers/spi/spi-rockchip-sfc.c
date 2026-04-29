@@ -565,7 +565,6 @@ static int rockchip_sfc_exec_mem_op(struct spi_mem *mem, const struct spi_mem_op
 
 	ret = rockchip_sfc_xfer_done(sfc, 100000);
 out:
-	pm_runtime_mark_last_busy(sfc->dev);
 	pm_runtime_put_autosuspend(sfc->dev);
 
 	return ret;
@@ -623,7 +622,6 @@ static int rockchip_sfc_probe(struct platform_device *pdev)
 	host->flags = SPI_CONTROLLER_HALF_DUPLEX;
 	host->mem_ops = &rockchip_sfc_mem_ops;
 	host->mem_caps = &rockchip_sfc_mem_caps;
-	host->dev.of_node = pdev->dev.of_node;
 	host->mode_bits = SPI_TX_QUAD | SPI_TX_DUAL | SPI_RX_QUAD | SPI_RX_DUAL;
 	host->max_speed_hz = SFC_MAX_SPEED;
 	host->num_chipselect = SFC_MAX_CHIPSELECT_NUM;
@@ -705,18 +703,25 @@ static int rockchip_sfc_probe(struct platform_device *pdev)
 			ret = -ENOMEM;
 			goto err_dma;
 		}
-		sfc->dma_buffer = virt_to_phys(sfc->buffer);
+		sfc->dma_buffer = dma_map_single(dev, sfc->buffer,
+					    sfc->max_iosize, DMA_BIDIRECTIONAL);
+		if (dma_mapping_error(dev, sfc->dma_buffer)) {
+			ret = -ENOMEM;
+			goto err_dma_map;
+		}
 	}
 
-	ret = devm_spi_register_controller(dev, host);
+	ret = spi_register_controller(host);
 	if (ret)
 		goto err_register;
 
-	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 
 	return 0;
 err_register:
+	dma_unmap_single(dev, sfc->dma_buffer, sfc->max_iosize,
+			 DMA_BIDIRECTIONAL);
+err_dma_map:
 	free_pages((unsigned long)sfc->buffer, get_order(sfc->max_iosize));
 err_dma:
 	pm_runtime_get_sync(dev);
@@ -738,6 +743,8 @@ static void rockchip_sfc_remove(struct platform_device *pdev)
 	struct spi_controller *host = sfc->host;
 
 	spi_unregister_controller(host);
+	dma_unmap_single(&pdev->dev, sfc->dma_buffer, sfc->max_iosize,
+			 DMA_BIDIRECTIONAL);
 	free_pages((unsigned long)sfc->buffer, get_order(sfc->max_iosize));
 
 	clk_disable_unprepare(sfc->clk);
@@ -799,7 +806,6 @@ static int rockchip_sfc_resume(struct device *dev)
 
 	rockchip_sfc_init(sfc);
 
-	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 
 	return 0;

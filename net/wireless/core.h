@@ -21,6 +21,13 @@
 
 #define WIPHY_IDX_INVALID	-1
 
+struct cfg80211_scan_request_int {
+	struct cfg80211_scan_info info;
+	bool notified;
+	/* must be last - variable members */
+	struct cfg80211_scan_request req;
+};
+
 struct cfg80211_registered_device {
 	const struct cfg80211_ops *ops;
 	struct list_head list;
@@ -70,8 +77,8 @@ struct cfg80211_registered_device {
 	struct rb_root bss_tree;
 	u32 bss_generation;
 	u32 bss_entries;
-	struct cfg80211_scan_request *scan_req; /* protected by RTNL */
-	struct cfg80211_scan_request *int_scan_req;
+	struct cfg80211_scan_request_int *scan_req; /* protected by RTNL */
+	struct cfg80211_scan_request_int *int_scan_req;
 	struct sk_buff *scan_msg;
 	struct list_head sched_scan_req_list;
 	time64_t suspend_at;
@@ -282,6 +289,7 @@ struct cfg80211_event {
 			u8 td_bitmap_len;
 		} pa;
 	};
+	int link_id;
 };
 
 struct cfg80211_cached_keys {
@@ -482,6 +490,7 @@ cfg80211_start_background_radar_detection(struct cfg80211_registered_device *rde
 					  struct wireless_dev *wdev,
 					  struct cfg80211_chan_def *chandef);
 
+void cfg80211_stop_radar_detection(struct wireless_dev *wdev);
 void cfg80211_stop_background_radar_detection(struct wireless_dev *wdev);
 
 void cfg80211_background_cac_done_wk(struct work_struct *work);
@@ -529,7 +538,8 @@ void cfg80211_update_iface_num(struct cfg80211_registered_device *rdev,
 			       enum nl80211_iftype iftype, int num);
 
 void cfg80211_leave(struct cfg80211_registered_device *rdev,
-		    struct wireless_dev *wdev);
+		    struct wireless_dev *wdev,
+		    int link_id);
 
 void cfg80211_stop_p2p_device(struct cfg80211_registered_device *rdev,
 			      struct wireless_dev *wdev);
@@ -543,7 +553,8 @@ cfg80211_bss_update(struct cfg80211_registered_device *rdev,
 		    bool signal_valid, unsigned long ts);
 
 enum ieee80211_ap_reg_power
-cfg80211_get_6ghz_power_type(const u8 *elems, size_t elems_len);
+cfg80211_get_6ghz_power_type(const u8 *elems, size_t elems_len,
+			     u32 client_flags);
 
 #ifdef CONFIG_CFG80211_DEVELOPER_WARNINGS
 #define CFG80211_DEV_WARN_ON(cond)	WARN_ON(cond)

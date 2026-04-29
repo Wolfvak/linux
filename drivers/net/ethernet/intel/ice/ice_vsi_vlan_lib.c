@@ -94,7 +94,7 @@ static int ice_vsi_manage_vlan_insertion(struct ice_vsi *vsi)
 	struct ice_vsi_ctx *ctxt;
 	int err;
 
-	ctxt = kzalloc(sizeof(*ctxt), GFP_KERNEL);
+	ctxt = kzalloc_obj(*ctxt);
 	if (!ctxt)
 		return -ENOMEM;
 
@@ -113,7 +113,7 @@ static int ice_vsi_manage_vlan_insertion(struct ice_vsi *vsi)
 	err = ice_update_vsi(hw, vsi->idx, ctxt, NULL);
 	if (err) {
 		dev_err(ice_pf_to_dev(vsi->back), "update VSI for VLAN insert failed, err %d aq_err %s\n",
-			err, ice_aq_str(hw->adminq.sq_last_status));
+			err, libie_aq_str(hw->adminq.sq_last_status));
 		goto out;
 	}
 
@@ -141,7 +141,7 @@ static int ice_vsi_manage_vlan_stripping(struct ice_vsi *vsi, bool ena)
 	if (vsi->info.port_based_inner_vlan)
 		return 0;
 
-	ctxt = kzalloc(sizeof(*ctxt), GFP_KERNEL);
+	ctxt = kzalloc_obj(*ctxt);
 	if (!ctxt)
 		return -ENOMEM;
 
@@ -169,7 +169,7 @@ static int ice_vsi_manage_vlan_stripping(struct ice_vsi *vsi, bool ena)
 	err = ice_update_vsi(hw, vsi->idx, ctxt, NULL);
 	if (err) {
 		dev_err(ice_pf_to_dev(vsi->back), "update VSI for VLAN strip failed, ena = %d err %d aq_err %s\n",
-			ena, err, ice_aq_str(hw->adminq.sq_last_status));
+			ena, err, libie_aq_str(hw->adminq.sq_last_status));
 		goto out;
 	}
 
@@ -239,7 +239,7 @@ static int __ice_vsi_set_inner_port_vlan(struct ice_vsi *vsi, u16 pvid_info)
 	struct ice_vsi_ctx *ctxt;
 	int ret;
 
-	ctxt = kzalloc(sizeof(*ctxt), GFP_KERNEL);
+	ctxt = kzalloc_obj(*ctxt);
 	if (!ctxt)
 		return -ENOMEM;
 
@@ -258,7 +258,7 @@ static int __ice_vsi_set_inner_port_vlan(struct ice_vsi *vsi, u16 pvid_info)
 	ret = ice_update_vsi(hw, vsi->idx, ctxt, NULL);
 	if (ret) {
 		dev_info(ice_hw_to_dev(hw), "update VSI for port VLAN failed, err %d aq_err %s\n",
-			 ret, ice_aq_str(hw->adminq.sq_last_status));
+			 ret, libie_aq_str(hw->adminq.sq_last_status));
 		goto out;
 	}
 
@@ -292,7 +292,7 @@ int ice_vsi_clear_inner_port_vlan(struct ice_vsi *vsi)
 	struct ice_vsi_ctx *ctxt;
 	int ret;
 
-	ctxt = kzalloc(sizeof(*ctxt), GFP_KERNEL);
+	ctxt = kzalloc_obj(*ctxt);
 	if (!ctxt)
 		return -ENOMEM;
 
@@ -306,7 +306,7 @@ int ice_vsi_clear_inner_port_vlan(struct ice_vsi *vsi)
 	ret = ice_update_vsi(hw, vsi->idx, ctxt, NULL);
 	if (ret)
 		dev_err(ice_hw_to_dev(hw), "update VSI for port VLAN failed, err %d aq_err %s\n",
-			ret, ice_aq_str(hw->adminq.sq_last_status));
+			ret, libie_aq_str(hw->adminq.sq_last_status));
 
 	kfree(ctxt);
 	return ret;
@@ -336,7 +336,7 @@ static int ice_cfg_vlan_pruning(struct ice_vsi *vsi, bool ena)
 		return 0;
 
 	pf = vsi->back;
-	ctxt = kzalloc(sizeof(*ctxt), GFP_KERNEL);
+	ctxt = kzalloc_obj(*ctxt);
 	if (!ctxt)
 		return -ENOMEM;
 
@@ -353,7 +353,7 @@ static int ice_cfg_vlan_pruning(struct ice_vsi *vsi, bool ena)
 	if (status) {
 		netdev_err(vsi->netdev, "%sabling VLAN pruning on VSI handle: %d, VSI HW ID: %d failed, err = %d, aq_err = %s\n",
 			   ena ? "En" : "Dis", vsi->idx, vsi->vsi_num, status,
-			   ice_aq_str(pf->hw.adminq.sq_last_status));
+			   libie_aq_str(pf->hw.adminq.sq_last_status));
 		goto err_out;
 	}
 
@@ -382,7 +382,7 @@ static int ice_cfg_vlan_antispoof(struct ice_vsi *vsi, bool enable)
 	struct ice_vsi_ctx *ctx;
 	int err;
 
-	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+	ctx = kzalloc_obj(*ctx);
 	if (!ctx)
 		return -ENOMEM;
 
@@ -478,7 +478,7 @@ int ice_vsi_ena_outer_stripping(struct ice_vsi *vsi, u16 tpid)
 	if (tpid_to_vsi_outer_vlan_type(tpid, &tag_type))
 		return -EINVAL;
 
-	ctxt = kzalloc(sizeof(*ctxt), GFP_KERNEL);
+	ctxt = kzalloc_obj(*ctxt);
 	if (!ctxt)
 		return -ENOMEM;
 
@@ -497,7 +497,7 @@ int ice_vsi_ena_outer_stripping(struct ice_vsi *vsi, u16 tpid)
 	err = ice_update_vsi(hw, vsi->idx, ctxt, NULL);
 	if (err)
 		dev_err(ice_pf_to_dev(vsi->back), "update VSI for enabling outer VLAN stripping failed, err %d aq_err %s\n",
-			err, ice_aq_str(hw->adminq.sq_last_status));
+			err, libie_aq_str(hw->adminq.sq_last_status));
 	else
 		vsi->info.outer_vlan_flags = ctxt->info.outer_vlan_flags;
 
@@ -529,7 +529,7 @@ int ice_vsi_dis_outer_stripping(struct ice_vsi *vsi)
 	if (vsi->info.port_based_outer_vlan)
 		return 0;
 
-	ctxt = kzalloc(sizeof(*ctxt), GFP_KERNEL);
+	ctxt = kzalloc_obj(*ctxt);
 	if (!ctxt)
 		return -ENOMEM;
 
@@ -544,7 +544,7 @@ int ice_vsi_dis_outer_stripping(struct ice_vsi *vsi)
 	err = ice_update_vsi(hw, vsi->idx, ctxt, NULL);
 	if (err)
 		dev_err(ice_pf_to_dev(vsi->back), "update VSI for disabling outer VLAN stripping failed, err %d aq_err %s\n",
-			err, ice_aq_str(hw->adminq.sq_last_status));
+			err, libie_aq_str(hw->adminq.sq_last_status));
 	else
 		vsi->info.outer_vlan_flags = ctxt->info.outer_vlan_flags;
 
@@ -584,7 +584,7 @@ int ice_vsi_ena_outer_insertion(struct ice_vsi *vsi, u16 tpid)
 	if (tpid_to_vsi_outer_vlan_type(tpid, &tag_type))
 		return -EINVAL;
 
-	ctxt = kzalloc(sizeof(*ctxt), GFP_KERNEL);
+	ctxt = kzalloc_obj(*ctxt);
 	if (!ctxt)
 		return -ENOMEM;
 
@@ -604,7 +604,7 @@ int ice_vsi_ena_outer_insertion(struct ice_vsi *vsi, u16 tpid)
 	err = ice_update_vsi(hw, vsi->idx, ctxt, NULL);
 	if (err)
 		dev_err(ice_pf_to_dev(vsi->back), "update VSI for enabling outer VLAN insertion failed, err %d aq_err %s\n",
-			err, ice_aq_str(hw->adminq.sq_last_status));
+			err, libie_aq_str(hw->adminq.sq_last_status));
 	else
 		vsi->info.outer_vlan_flags = ctxt->info.outer_vlan_flags;
 
@@ -636,7 +636,7 @@ int ice_vsi_dis_outer_insertion(struct ice_vsi *vsi)
 	if (vsi->info.port_based_outer_vlan)
 		return 0;
 
-	ctxt = kzalloc(sizeof(*ctxt), GFP_KERNEL);
+	ctxt = kzalloc_obj(*ctxt);
 	if (!ctxt)
 		return -ENOMEM;
 
@@ -654,7 +654,7 @@ int ice_vsi_dis_outer_insertion(struct ice_vsi *vsi)
 	err = ice_update_vsi(hw, vsi->idx, ctxt, NULL);
 	if (err)
 		dev_err(ice_pf_to_dev(vsi->back), "update VSI for disabling outer VLAN insertion failed, err %d aq_err %s\n",
-			err, ice_aq_str(hw->adminq.sq_last_status));
+			err, libie_aq_str(hw->adminq.sq_last_status));
 	else
 		vsi->info.outer_vlan_flags = ctxt->info.outer_vlan_flags;
 
@@ -694,7 +694,7 @@ __ice_vsi_set_outer_port_vlan(struct ice_vsi *vsi, u16 vlan_info, u16 tpid)
 	if (tpid_to_vsi_outer_vlan_type(tpid, &tag_type))
 		return -EINVAL;
 
-	ctxt = kzalloc(sizeof(*ctxt), GFP_KERNEL);
+	ctxt = kzalloc_obj(*ctxt);
 	if (!ctxt)
 		return -ENOMEM;
 
@@ -720,7 +720,7 @@ __ice_vsi_set_outer_port_vlan(struct ice_vsi *vsi, u16 vlan_info, u16 tpid)
 	err = ice_update_vsi(hw, vsi->idx, ctxt, NULL);
 	if (err) {
 		dev_err(ice_pf_to_dev(vsi->back), "update VSI for setting outer port based VLAN failed, err %d aq_err %s\n",
-			err, ice_aq_str(hw->adminq.sq_last_status));
+			err, libie_aq_str(hw->adminq.sq_last_status));
 	} else {
 		vsi->info.port_based_outer_vlan = ctxt->info.port_based_outer_vlan;
 		vsi->info.outer_vlan_flags = ctxt->info.outer_vlan_flags;
@@ -767,7 +767,7 @@ int ice_vsi_clear_outer_port_vlan(struct ice_vsi *vsi)
 	struct ice_vsi_ctx *ctxt;
 	int err;
 
-	ctxt = kzalloc(sizeof(*ctxt), GFP_KERNEL);
+	ctxt = kzalloc_obj(*ctxt);
 	if (!ctxt)
 		return -ENOMEM;
 
@@ -782,7 +782,7 @@ int ice_vsi_clear_outer_port_vlan(struct ice_vsi *vsi)
 	err = ice_update_vsi(hw, vsi->idx, ctxt, NULL);
 	if (err)
 		dev_err(ice_pf_to_dev(vsi->back), "update VSI for clearing outer port based VLAN failed, err %d aq_err %s\n",
-			err, ice_aq_str(hw->adminq.sq_last_status));
+			err, libie_aq_str(hw->adminq.sq_last_status));
 
 	kfree(ctxt);
 	return err;
@@ -794,7 +794,7 @@ int ice_vsi_clear_port_vlan(struct ice_vsi *vsi)
 	struct ice_vsi_ctx *ctxt;
 	int err;
 
-	ctxt = kzalloc(sizeof(*ctxt), GFP_KERNEL);
+	ctxt = kzalloc_obj(*ctxt);
 	if (!ctxt)
 		return -ENOMEM;
 
@@ -830,7 +830,7 @@ int ice_vsi_clear_port_vlan(struct ice_vsi *vsi)
 	err = ice_update_vsi(hw, vsi->idx, ctxt, NULL);
 	if (err) {
 		dev_err(ice_pf_to_dev(vsi->back), "update VSI for clearing port based VLAN failed, err %d aq_err %s\n",
-			err, ice_aq_str(hw->adminq.sq_last_status));
+			err, libie_aq_str(hw->adminq.sq_last_status));
 	} else {
 		vsi->info.port_based_outer_vlan =
 			ctxt->info.port_based_outer_vlan;

@@ -152,6 +152,7 @@
 	_arg1;                                                                \
 })
 
+#ifndef NOLIBC_NO_RUNTIME
 /* startup code */
 void __attribute__((weak, noreturn)) __nolibc_entrypoint __no_stack_protector _start(void)
 {
@@ -169,6 +170,7 @@ void __attribute__((weak, noreturn)) __nolibc_entrypoint __no_stack_protector _s
 	);
 	__nolibc_entrypoint_epilogue();
 }
+#endif /* NOLIBC_NO_RUNTIME */
 
 static pid_t getpid(void);
 
@@ -187,5 +189,21 @@ pid_t sys_fork(void)
 		return ret;
 }
 #define sys_fork sys_fork
+
+static __attribute__((unused))
+pid_t sys_vfork(void)
+{
+	pid_t parent, ret;
+
+	parent = getpid();
+	ret = my_syscall0(__NR_vfork);
+
+	/* The syscall returns the parent pid in the child instead of 0 */
+	if (ret == parent)
+		return 0;
+	else
+		return ret;
+}
+#define sys_vfork sys_vfork
 
 #endif /* _NOLIBC_ARCH_SPARC_H */

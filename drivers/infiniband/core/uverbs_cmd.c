@@ -510,7 +510,7 @@ static int xrcd_table_insert(struct ib_uverbs_device *dev,
 	struct rb_node **p = &dev->xrcd_tree.rb_node;
 	struct rb_node *parent = NULL;
 
-	entry = kmalloc(sizeof *entry, GFP_KERNEL);
+	entry = kmalloc_obj(*entry);
 	if (!entry)
 		return -ENOMEM;
 
@@ -741,7 +741,7 @@ static int ib_uverbs_reg_mr(struct uverbs_attr_bundle *attrs)
 	}
 
 	mr = pd->device->ops.reg_user_mr(pd, cmd.start, cmd.length, cmd.hca_va,
-					 cmd.access_flags,
+					 cmd.access_flags, NULL,
 					 &attrs->driver_udata);
 	if (IS_ERR(mr)) {
 		ret = PTR_ERR(mr);
@@ -1312,9 +1312,9 @@ static int create_qp(struct uverbs_attr_bundle *attrs,
 
 	switch (cmd->qp_type) {
 	case IB_QPT_RAW_PACKET:
-		if (!capable(CAP_NET_RAW))
+		if (!rdma_uattrs_has_raw_cap(attrs))
 			return -EPERM;
-		break;
+		fallthrough;
 	case IB_QPT_RC:
 	case IB_QPT_UC:
 	case IB_QPT_UD:
@@ -1451,7 +1451,7 @@ static int create_qp(struct uverbs_attr_bundle *attrs,
 	}
 
 	if (attr.create_flags & IB_QP_CREATE_SOURCE_QPN) {
-		if (!capable(CAP_NET_RAW)) {
+		if (!rdma_uattrs_has_raw_cap(attrs)) {
 			ret = -EPERM;
 			goto err_put;
 		}
@@ -1672,8 +1672,8 @@ static int ib_uverbs_query_qp(struct uverbs_attr_bundle *attrs)
 	if (ret)
 		return ret;
 
-	attr      = kmalloc(sizeof *attr, GFP_KERNEL);
-	init_attr = kmalloc(sizeof *init_attr, GFP_KERNEL);
+	attr = kmalloc_obj(*attr);
+	init_attr = kmalloc_obj(*init_attr);
 	if (!attr || !init_attr) {
 		ret = -ENOMEM;
 		goto out;
@@ -1780,7 +1780,7 @@ static int modify_qp(struct uverbs_attr_bundle *attrs,
 	struct ib_qp *qp;
 	int ret;
 
-	attr = kzalloc(sizeof(*attr), GFP_KERNEL);
+	attr = kzalloc_obj(*attr);
 	if (!attr)
 		return -ENOMEM;
 
@@ -1877,7 +1877,8 @@ static int modify_qp(struct uverbs_attr_bundle *attrs,
 		attr->path_mig_state = cmd->base.path_mig_state;
 	if (cmd->base.attr_mask & IB_QP_QKEY) {
 		if (cmd->base.qkey & IB_QP_SET_QKEY &&
-		    !rdma_nl_get_privileged_qkey()) {
+		    !(rdma_nl_get_privileged_qkey() ||
+		      rdma_uattrs_has_raw_cap(attrs))) {
 			ret = -EPERM;
 			goto release_qp;
 		}
@@ -2048,7 +2049,10 @@ static int ib_uverbs_post_send(struct uverbs_attr_bundle *attrs)
 	if (ret)
 		return ret;
 
-	user_wr = kmalloc(cmd.wqe_size, GFP_KERNEL);
+	if (cmd.wqe_size < sizeof(struct ib_uverbs_send_wr))
+		return -EINVAL;
+
+	user_wr = kmalloc(cmd.wqe_size, GFP_KERNEL | __GFP_NOWARN);
 	if (!user_wr)
 		return -ENOMEM;
 
@@ -2238,7 +2242,7 @@ ib_uverbs_unmarshall_recv(struct uverbs_req_iter *iter, u32 wr_count,
 	if (ret)
 		return ERR_PTR(ret);
 
-	user_wr = kmalloc(wqe_size, GFP_KERNEL);
+	user_wr = kmalloc(wqe_size, GFP_KERNEL | __GFP_NOWARN);
 	if (!user_wr)
 		return ERR_PTR(-ENOMEM);
 
@@ -2521,7 +2525,7 @@ static int ib_uverbs_attach_mcast(struct uverbs_attr_bundle *attrs)
 			goto out_put;
 		}
 
-	mcast = kmalloc(sizeof *mcast, GFP_KERNEL);
+	mcast = kmalloc_obj(*mcast);
 	if (!mcast) {
 		ret = -ENOMEM;
 		goto out_put;
@@ -2591,7 +2595,7 @@ struct ib_uflow_resources *flow_resources_alloc(size_t num_specs)
 {
 	struct ib_uflow_resources *resources;
 
-	resources = kzalloc(sizeof(*resources), GFP_KERNEL);
+	resources = kzalloc_obj(*resources);
 
 	if (!resources)
 		return NULL;
@@ -2600,9 +2604,9 @@ struct ib_uflow_resources *flow_resources_alloc(size_t num_specs)
 		goto out;
 
 	resources->counters =
-		kcalloc(num_specs, sizeof(*resources->counters), GFP_KERNEL);
+		kzalloc_objs(*resources->counters, num_specs);
 	resources->collection =
-		kcalloc(num_specs, sizeof(*resources->collection), GFP_KERNEL);
+		kzalloc_objs(*resources->collection, num_specs);
 
 	if (!resources->counters || !resources->collection)
 		goto err;
@@ -3112,7 +3116,7 @@ static int ib_uverbs_ex_create_rwq_ind_table(struct uverbs_attr_bundle *attrs)
 	if (err)
 		goto err_free;
 
-	wqs = kcalloc(num_wq_handles, sizeof(*wqs), GFP_KERNEL);
+	wqs = kzalloc_objs(*wqs, num_wq_handles);
 	if (!wqs) {
 		err = -ENOMEM;
 		goto  err_free;
@@ -3225,7 +3229,7 @@ static int ib_uverbs_ex_create_flow(struct uverbs_attr_bundle *attrs)
 	if (cmd.comp_mask)
 		return -EINVAL;
 
-	if (!capable(CAP_NET_RAW))
+	if (!rdma_uattrs_has_raw_cap(attrs))
 		return -EPERM;
 
 	if (cmd.flow_attr.flags >= IB_FLOW_ATTR_FLAGS_RESERVED)
@@ -3288,8 +3292,7 @@ static int ib_uverbs_ex_create_flow(struct uverbs_attr_bundle *attrs)
 		goto err_put;
 	}
 
-	flow_attr = kzalloc(struct_size(flow_attr, flows,
-				cmd.flow_attr.num_of_specs), GFP_KERNEL);
+	flow_attr = kzalloc_flex(*flow_attr, flows, cmd.flow_attr.num_of_specs);
 	if (!flow_attr) {
 		err = -ENOMEM;
 		goto err_put;

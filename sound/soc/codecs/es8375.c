@@ -397,8 +397,6 @@ static int es8375_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	case SND_SOC_DAIFMT_I2S:
 		codeciface &= 0xFC;
 		break;
-	case SND_SOC_DAIFMT_RIGHT_J:
-		return -EINVAL;
 	case SND_SOC_DAIFMT_LEFT_J:
 		codeciface &= 0xFC;
 		codeciface |= 0x01;
@@ -620,7 +618,7 @@ static bool es8375_writeable_register(struct device *dev, unsigned int reg)
 	}
 }
 
-static struct regmap_config es8375_regmap_config = {
+static const struct regmap_config es8375_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
 	.max_register = ES8375_REG_MAX,

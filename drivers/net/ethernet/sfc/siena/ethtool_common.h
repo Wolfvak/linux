@@ -37,6 +37,7 @@ int efx_siena_ethtool_set_fecparam(struct net_device *net_dev,
 				   struct ethtool_fecparam *fecparam);
 int efx_siena_ethtool_get_rxnfc(struct net_device *net_dev,
 				struct ethtool_rxnfc *info, u32 *rule_locs);
+u32 efx_siena_ethtool_get_rx_ring_count(struct net_device *net_dev);
 int efx_siena_ethtool_set_rxnfc(struct net_device *net_dev,
 				struct ethtool_rxnfc *info);
 u32 efx_siena_ethtool_get_rxfh_indir_size(struct net_device *net_dev);
@@ -46,6 +47,8 @@ int efx_siena_ethtool_get_rxfh(struct net_device *net_dev,
 int efx_siena_ethtool_set_rxfh(struct net_device *net_dev,
 			       struct ethtool_rxfh_param *rxfh,
 			       struct netlink_ext_ack *extack);
+int efx_siena_ethtool_get_rxfh_fields(struct net_device *net_dev,
+				      struct ethtool_rxfh_fields *info);
 int efx_siena_ethtool_reset(struct net_device *net_dev, u32 *flags);
 int efx_siena_ethtool_get_module_eeprom(struct net_device *net_dev,
 					struct ethtool_eeprom *ee,

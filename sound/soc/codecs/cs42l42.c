@@ -403,7 +403,7 @@ static DECLARE_TLV_DB_SCALE(mixer_tlv, -6300, 100, true);
 static int cs42l42_slow_start_put(struct snd_kcontrol *kcontrol,
 				  struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
 	u8 val;
 
 	/* all bits of SLOW_START_EN must change together */
@@ -1775,7 +1775,6 @@ irqreturn_t cs42l42_irq_thread(int irq, void *data)
 	}
 
 	mutex_unlock(&cs42l42->irq_lock);
-	pm_runtime_mark_last_busy(cs42l42->dev);
 	pm_runtime_put_autosuspend(cs42l42->dev);
 
 	return IRQ_HANDLED;

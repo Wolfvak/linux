@@ -26,6 +26,7 @@
 #include "core_types.h"
 #include "resource.h"
 #include "dcn35_dccg.h"
+#include "dcn20/dcn20_dccg.h"
 
 #define TO_DCN_DCCG(dccg)\
 	container_of(dccg, struct dcn_dccg, base)
@@ -39,6 +40,7 @@
 
 #define CTX \
 	dccg_dcn->base.ctx
+#include "logger_types.h"
 #define DC_LOGGER \
 	dccg->ctx->logger
 
@@ -133,30 +135,34 @@ enum dsc_clk_source {
 };
 
 
-static void dccg35_set_dsc_clk_rcg(struct dccg *dccg, int inst, bool enable)
+static void dccg35_set_dsc_clk_rcg(struct dccg *dccg, int inst, bool allow_rcg)
 {
 	struct dcn_dccg *dccg_dcn = TO_DCN_DCCG(dccg);
 
-	if (!dccg->ctx->dc->debug.root_clock_optimization.bits.dsc && enable)
+	if (!dccg->ctx->dc->debug.root_clock_optimization.bits.dsc && allow_rcg)
 		return;
 
 	switch (inst) {
 	case 0:
-		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK0_ROOT_GATE_DISABLE, enable ? 0 : 1);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK0_ROOT_GATE_DISABLE, allow_rcg ? 0 : 1);
 		break;
 	case 1:
-		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK1_ROOT_GATE_DISABLE, enable ? 0 : 1);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK1_ROOT_GATE_DISABLE, allow_rcg ? 0 : 1);
 		break;
 	case 2:
-		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK2_ROOT_GATE_DISABLE, enable ? 0 : 1);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK2_ROOT_GATE_DISABLE, allow_rcg ? 0 : 1);
 		break;
 	case 3:
-		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK3_ROOT_GATE_DISABLE, enable ? 0 : 1);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK3_ROOT_GATE_DISABLE, allow_rcg ? 0 : 1);
 		break;
 	default:
 		BREAK_TO_DEBUGGER();
 		return;
 	}
+
+	/* Wait for clock to ramp */
+	if (!allow_rcg)
+		udelay(10);
 }
 
 static void dccg35_set_symclk32_se_rcg(
@@ -385,35 +391,34 @@ static void dccg35_set_dtbclk_p_rcg(struct dccg *dccg, int inst, bool enable)
 	}
 }
 
-static void dccg35_set_dppclk_rcg(struct dccg *dccg,
-												int inst, bool enable)
+static void dccg35_set_dppclk_rcg(struct dccg *dccg, int inst, bool allow_rcg)
 {
-
 	struct dcn_dccg *dccg_dcn = TO_DCN_DCCG(dccg);
 
-
-	if (!dccg->ctx->dc->debug.root_clock_optimization.bits.dpp && enable)
+	if (!dccg->ctx->dc->debug.root_clock_optimization.bits.dpp && allow_rcg)
 		return;
 
 	switch (inst) {
 	case 0:
-		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK0_ROOT_GATE_DISABLE, enable ? 0 : 1);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK0_ROOT_GATE_DISABLE, allow_rcg ? 0 : 1);
 		break;
 	case 1:
-		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK1_ROOT_GATE_DISABLE, enable ? 0 : 1);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK1_ROOT_GATE_DISABLE, allow_rcg ? 0 : 1);
 		break;
 	case 2:
-		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK2_ROOT_GATE_DISABLE, enable ? 0 : 1);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK2_ROOT_GATE_DISABLE, allow_rcg ? 0 : 1);
 		break;
 	case 3:
-		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK3_ROOT_GATE_DISABLE, enable ? 0 : 1);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK3_ROOT_GATE_DISABLE, allow_rcg ? 0 : 1);
 		break;
 	default:
 	BREAK_TO_DEBUGGER();
 		break;
 	}
-	//DC_LOG_DEBUG("%s: inst(%d) DPPCLK rcg_disable: %d\n", __func__, inst, enable ? 0 : 1);
 
+	/* Wait for clock to ramp */
+	if (!allow_rcg)
+		udelay(10);
 }
 
 static void dccg35_set_dpstreamclk_rcg(
@@ -1101,7 +1106,7 @@ static void dccg35_enable_dpstreamclk_new(struct dccg *dccg,
 	dccg35_set_dpstreamclk_src_new(dccg, src, inst);
 }
 
-static void dccg35_trigger_dio_fifo_resync(struct dccg *dccg)
+void dccg35_trigger_dio_fifo_resync(struct dccg *dccg)
 {
 	struct dcn_dccg *dccg_dcn = TO_DCN_DCCG(dccg);
 	uint32_t dispclk_rdivider_value = 0;
@@ -1109,6 +1114,17 @@ static void dccg35_trigger_dio_fifo_resync(struct dccg *dccg)
 	REG_GET(DENTIST_DISPCLK_CNTL, DENTIST_DISPCLK_RDIVIDER, &dispclk_rdivider_value);
 	if (dispclk_rdivider_value != 0)
 		REG_UPDATE(DENTIST_DISPCLK_CNTL, DENTIST_DISPCLK_WDIVIDER, dispclk_rdivider_value);
+}
+
+static void dccg35_wait_for_dentist_change_done(
+	struct dccg *dccg)
+{
+	struct dcn_dccg *dccg_dcn = TO_DCN_DCCG(dccg);
+
+	uint32_t dentist_dispclk_value = REG_READ(DENTIST_DISPCLK_CNTL);
+
+	REG_WRITE(DENTIST_DISPCLK_CNTL, dentist_dispclk_value);
+	REG_WAIT(DENTIST_DISPCLK_CNTL, DENTIST_DISPCLK_CHG_DONE, 1, 50, 2000);
 }
 
 static void dcn35_set_dppclk_enable(struct dccg *dccg,
@@ -1133,12 +1149,11 @@ static void dcn35_set_dppclk_enable(struct dccg *dccg,
 	default:
 		break;
 	}
-	//DC_LOG_DEBUG("%s: dpp_inst(%d) DPPCLK_EN = %d\n", __func__, dpp_inst, enable);
+	DC_LOG_DEBUG("%s: dpp_inst(%d) DPPCLK_EN = %d\n", __func__, dpp_inst, enable);
 
 }
 
-static void dccg35_update_dpp_dto(struct dccg *dccg, int dpp_inst,
-				  int req_dppclk)
+void dccg35_update_dpp_dto(struct dccg *dccg, int dpp_inst, int req_dppclk)
 {
 	struct dcn_dccg *dccg_dcn = TO_DCN_DCCG(dccg);
 
@@ -1170,39 +1185,41 @@ static void dccg35_update_dpp_dto(struct dccg *dccg, int dpp_inst,
 		dcn35_set_dppclk_enable(dccg, dpp_inst, true);
 	} else {
 		dcn35_set_dppclk_enable(dccg, dpp_inst, false);
-		/*we have this in hwss: disable_plane*/
-		//dccg35_set_dppclk_rcg(dccg, dpp_inst, true);
+		dccg35_set_dppclk_rcg(dccg, dpp_inst, true);
 	}
+	udelay(10);
 	dccg->pipe_dppclk_khz[dpp_inst] = req_dppclk;
 }
 
 static void dccg35_set_dppclk_root_clock_gating(struct dccg *dccg,
-		 uint32_t dpp_inst, uint32_t enable)
+		 uint32_t dpp_inst, uint32_t disallow_rcg)
 {
 	struct dcn_dccg *dccg_dcn = TO_DCN_DCCG(dccg);
 
-	if (!dccg->ctx->dc->debug.root_clock_optimization.bits.dpp)
+	if (!dccg->ctx->dc->debug.root_clock_optimization.bits.dpp && !disallow_rcg)
 		return;
 
 
 	switch (dpp_inst) {
 	case 0:
-		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK0_ROOT_GATE_DISABLE, enable);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK0_ROOT_GATE_DISABLE, disallow_rcg);
 		break;
 	case 1:
-		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK1_ROOT_GATE_DISABLE, enable);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK1_ROOT_GATE_DISABLE, disallow_rcg);
 		break;
 	case 2:
-		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK2_ROOT_GATE_DISABLE, enable);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK2_ROOT_GATE_DISABLE, disallow_rcg);
 		break;
 	case 3:
-		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK3_ROOT_GATE_DISABLE, enable);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DPPCLK3_ROOT_GATE_DISABLE, disallow_rcg);
 		break;
 	default:
 		break;
 	}
-	//DC_LOG_DEBUG("%s: dpp_inst(%d) rcg: %d\n", __func__, dpp_inst, enable);
 
+	/* Wait for clock to ramp */
+	if (disallow_rcg)
+		udelay(10);
 }
 
 static void dccg35_get_pixel_rate_div(
@@ -1294,6 +1311,8 @@ static void dccg35_set_pixel_rate_div(
 		BREAK_TO_DEBUGGER();
 		return;
 	}
+	if (otg_inst < 4)
+		dccg35_wait_for_dentist_change_done(dccg);
 }
 
 static void dccg35_set_dtbclk_p_src(
@@ -1401,7 +1420,11 @@ static void dccg35_set_dtbclk_dto(
 		 * PIPEx_DTO_SRC_SEL should not be programmed during DTBCLK update since OTG may still be on, and the
 		 * programming is handled in program_pix_clk() regardless, so it can be removed from here.
 		 */
-	} else {
+		DC_LOG_DEBUG("%s: OTG%d DTBCLK DTO enabled: pixclk_khz=%d, ref_dtbclk_khz=%d, req_dtbclk_khz=%d, phase=%d, modulo=%d\n",
+				__func__, params->otg_inst, params->pixclk_khz,
+				params->ref_dtbclk_khz, req_dtbclk_khz, phase, modulo);
+
+	} else if (!params->ref_dtbclk_khz && !req_dtbclk_khz) {
 		switch (params->otg_inst) {
 		case 0:
 			REG_UPDATE(DCCG_GATE_DISABLE_CNTL5, DTBCLK_P0_GATE_DISABLE, 0);
@@ -1426,6 +1449,8 @@ static void dccg35_set_dtbclk_dto(
 
 		REG_WRITE(DTBCLK_DTO_MODULO[params->otg_inst], 0);
 		REG_WRITE(DTBCLK_DTO_PHASE[params->otg_inst], 0);
+
+		DC_LOG_DEBUG("%s: OTG%d DTBCLK DTO disabled\n", __func__, params->otg_inst);
 	}
 }
 
@@ -1470,13 +1495,11 @@ static void dccg35_set_dpstreamclk(
 		BREAK_TO_DEBUGGER();
 		return;
 	}
+	DC_LOG_DEBUG("%s: dp_hpo_inst(%d) DPSTREAMCLK_EN = %d, DPSTREAMCLK_SRC_SEL = %d\n",
+			__func__, dp_hpo_inst, (src == REFCLK) ? 0 : 1, otg_inst);
 }
 
-
-static void dccg35_set_dpstreamclk_root_clock_gating(
-		struct dccg *dccg,
-		int dp_hpo_inst,
-		bool enable)
+void dccg35_set_dpstreamclk_root_clock_gating(struct dccg *dccg, int dp_hpo_inst, bool enable)
 {
 	struct dcn_dccg *dccg_dcn = TO_DCN_DCCG(dccg);
 
@@ -1509,6 +1532,8 @@ static void dccg35_set_dpstreamclk_root_clock_gating(
 		BREAK_TO_DEBUGGER();
 		return;
 	}
+	DC_LOG_DEBUG("%s: dp_hpo_inst(%d) DPSTREAMCLK_ROOT_GATE_DISABLE = %d\n",
+			__func__, dp_hpo_inst, enable ? 1 : 0);
 }
 
 
@@ -1548,7 +1573,7 @@ static void dccg35_set_physymclk_root_clock_gating(
 		BREAK_TO_DEBUGGER();
 		return;
 	}
-	//DC_LOG_DEBUG("%s: dpp_inst(%d) PHYESYMCLK_ROOT_GATE_DISABLE:\n", __func__, phy_inst, enable ? 0 : 1);
+	DC_LOG_DEBUG("%s: dpp_inst(%d) PHYESYMCLK_ROOT_GATE_DISABLE: %d\n", __func__, phy_inst, enable ? 0 : 1);
 
 }
 
@@ -1621,6 +1646,8 @@ static void dccg35_set_physymclk(
 		BREAK_TO_DEBUGGER();
 		return;
 	}
+	DC_LOG_DEBUG("%s: phy_inst(%d) PHYxSYMCLK_EN = %d, PHYxSYMCLK_SRC_SEL = %d\n",
+			__func__, phy_inst, force_enable ? 1 : 0, clk_src);
 }
 
 static void dccg35_set_valid_pixel_rate(
@@ -1639,14 +1666,11 @@ static void dccg35_set_valid_pixel_rate(
 	dccg35_set_dtbclk_dto(dccg, &dto_params);
 }
 
-static void dccg35_dpp_root_clock_control(
-		struct dccg *dccg,
-		unsigned int dpp_inst,
-		bool clock_on)
+void dccg35_dpp_root_clock_control(struct dccg *dccg, unsigned int dpp_inst, bool clock_on)
 {
 	struct dcn_dccg *dccg_dcn = TO_DCN_DCCG(dccg);
 
-	if (dccg->dpp_clock_gated[dpp_inst] == clock_on)
+	if (dccg->dpp_clock_gated[dpp_inst] != clock_on)
 		return;
 
 	if (clock_on) {
@@ -1664,15 +1688,17 @@ static void dccg35_dpp_root_clock_control(
 			  DPPCLK0_DTO_PHASE, 0,
 			  DPPCLK0_DTO_MODULO, 1);
 		/*we have this in hwss: disable_plane*/
-		//dccg35_set_dppclk_rcg(dccg, dpp_inst, true);
+		dccg35_set_dppclk_rcg(dccg, dpp_inst, true);
 	}
 
+	// wait for clock to fully ramp
+	udelay(10);
+
 	dccg->dpp_clock_gated[dpp_inst] = !clock_on;
+	DC_LOG_DEBUG("%s: dpp_inst(%d) clock_on = %d\n", __func__, dpp_inst, clock_on);
 }
 
-static void dccg35_disable_symclk32_se(
-		struct dccg *dccg,
-		int hpo_se_inst)
+void dccg35_disable_symclk32_se(struct dccg *dccg, int hpo_se_inst)
 {
 	struct dcn_dccg *dccg_dcn = TO_DCN_DCCG(dccg);
 
@@ -1726,6 +1752,7 @@ static void dccg35_disable_symclk32_se(
 		BREAK_TO_DEBUGGER();
 		return;
 	}
+
 }
 
 static void dccg35_init_cb(struct dccg *dccg)
@@ -1733,7 +1760,6 @@ static void dccg35_init_cb(struct dccg *dccg)
 	(void)dccg;
 	/* Any RCG should be done when driver enter low power mode*/
 }
-
 void dccg35_init(struct dccg *dccg)
 {
 	int otg_inst;
@@ -1748,6 +1774,8 @@ void dccg35_init(struct dccg *dccg)
 		for (otg_inst = 0; otg_inst < 2; otg_inst++) {
 			dccg31_disable_symclk32_le(dccg, otg_inst);
 			dccg31_set_symclk32_le_root_clock_gating(dccg, otg_inst, false);
+			DC_LOG_DEBUG("%s: OTG%d SYMCLK32_LE disabled and root clock gating disabled\n",
+					__func__, otg_inst);
 		}
 
 //	if (dccg->ctx->dc->debug.root_clock_optimization.bits.symclk32_se)
@@ -1760,6 +1788,8 @@ void dccg35_init(struct dccg *dccg)
 			dccg35_set_dpstreamclk(dccg, REFCLK, otg_inst,
 						otg_inst);
 			dccg35_set_dpstreamclk_root_clock_gating(dccg, otg_inst, false);
+			DC_LOG_DEBUG("%s: OTG%d DPSTREAMCLK disabled and root clock gating disabled\n",
+					__func__, otg_inst);
 		}
 
 /*
@@ -1775,15 +1805,14 @@ void dccg35_enable_global_fgcg_rep(struct dccg *dccg, bool value)
 	REG_UPDATE(DCCG_GLOBAL_FGCG_REP_CNTL, DCCG_GLOBAL_FGCG_REP_DIS, !value);
 }
 
-static void dccg35_enable_dscclk(struct dccg *dccg, int inst)
+void dccg35_enable_dscclk(struct dccg *dccg, int inst)
 {
 	struct dcn_dccg *dccg_dcn = TO_DCN_DCCG(dccg);
 
 	//Disable DTO
 	switch (inst) {
 	case 0:
-		if (dccg->ctx->dc->debug.root_clock_optimization.bits.dsc)
-			REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK0_ROOT_GATE_DISABLE, 1);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK0_ROOT_GATE_DISABLE, 1);
 
 		REG_UPDATE_2(DSCCLK0_DTO_PARAM,
 				DSCCLK0_DTO_PHASE, 0,
@@ -1791,8 +1820,7 @@ static void dccg35_enable_dscclk(struct dccg *dccg, int inst)
 		REG_UPDATE(DSCCLK_DTO_CTRL,	DSCCLK0_EN, 1);
 		break;
 	case 1:
-		if (dccg->ctx->dc->debug.root_clock_optimization.bits.dsc)
-			REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK1_ROOT_GATE_DISABLE, 1);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK1_ROOT_GATE_DISABLE, 1);
 
 		REG_UPDATE_2(DSCCLK1_DTO_PARAM,
 				DSCCLK1_DTO_PHASE, 0,
@@ -1800,8 +1828,7 @@ static void dccg35_enable_dscclk(struct dccg *dccg, int inst)
 		REG_UPDATE(DSCCLK_DTO_CTRL, DSCCLK1_EN, 1);
 		break;
 	case 2:
-		if (dccg->ctx->dc->debug.root_clock_optimization.bits.dsc)
-			REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK2_ROOT_GATE_DISABLE, 1);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK2_ROOT_GATE_DISABLE, 1);
 
 		REG_UPDATE_2(DSCCLK2_DTO_PARAM,
 				DSCCLK2_DTO_PHASE, 0,
@@ -1809,8 +1836,7 @@ static void dccg35_enable_dscclk(struct dccg *dccg, int inst)
 		REG_UPDATE(DSCCLK_DTO_CTRL, DSCCLK2_EN, 1);
 		break;
 	case 3:
-		if (dccg->ctx->dc->debug.root_clock_optimization.bits.dsc)
-			REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK3_ROOT_GATE_DISABLE, 1);
+		REG_UPDATE(DCCG_GATE_DISABLE_CNTL6, DSCCLK3_ROOT_GATE_DISABLE, 1);
 
 		REG_UPDATE_2(DSCCLK3_DTO_PARAM,
 				DSCCLK3_DTO_PHASE, 0,
@@ -1821,10 +1847,12 @@ static void dccg35_enable_dscclk(struct dccg *dccg, int inst)
 		BREAK_TO_DEBUGGER();
 		return;
 	}
+
+	/* Wait for clock to ramp */
+	udelay(10);
 }
 
-static void dccg35_disable_dscclk(struct dccg *dccg,
-				int inst)
+void dccg35_disable_dscclk(struct dccg *dccg, int inst)
 {
 	struct dcn_dccg *dccg_dcn = TO_DCN_DCCG(dccg);
 
@@ -1864,9 +1892,12 @@ static void dccg35_disable_dscclk(struct dccg *dccg,
 	default:
 		return;
 	}
+
+	/* Wait for clock ramp */
+	udelay(10);
 }
 
-static void dccg35_enable_symclk_se(struct dccg *dccg, uint32_t stream_enc_inst, uint32_t link_enc_inst)
+void dccg35_enable_symclk_se(struct dccg *dccg, uint32_t stream_enc_inst, uint32_t link_enc_inst)
 {
 	struct dcn_dccg *dccg_dcn = TO_DCN_DCCG(dccg);
 
@@ -1973,7 +2004,7 @@ static uint8_t dccg35_get_number_enabled_symclk_fe_connected_to_be(struct dccg *
 	return num_enabled_symclk_fe;
 }
 
-static void dccg35_disable_symclk_se(struct dccg *dccg, uint32_t stream_enc_inst, uint32_t link_enc_inst)
+void dccg35_disable_symclk_se(struct dccg *dccg, uint32_t stream_enc_inst, uint32_t link_enc_inst)
 {
 	uint8_t num_enabled_symclk_fe = 0;
 	struct dcn_dccg *dccg_dcn = TO_DCN_DCCG(dccg);
@@ -2349,10 +2380,7 @@ static void dccg35_disable_symclk_se_cb(
 
 void dccg35_root_gate_disable_control(struct dccg *dccg, uint32_t pipe_idx, uint32_t disable_clock_gating)
 {
-
-	if (dccg->ctx->dc->debug.root_clock_optimization.bits.dpp) {
-		dccg35_set_dppclk_root_clock_gating(dccg, pipe_idx, disable_clock_gating);
-	}
+	dccg35_set_dppclk_root_clock_gating(dccg, pipe_idx, disable_clock_gating);
 }
 
 static const struct dccg_funcs dccg35_funcs_new = {
@@ -2384,6 +2412,10 @@ static const struct dccg_funcs dccg35_funcs_new = {
 	.enable_symclk_se = dccg35_enable_symclk_se_cb,
 	.disable_symclk_se = dccg35_disable_symclk_se_cb,
 	.set_dtbclk_p_src = dccg35_set_dtbclk_p_src_cb,
+	.refclk_setup = dccg2_refclk_setup, /* Deprecated - for backward compatibility only */
+	.allow_clock_gating = dccg2_allow_clock_gating,
+	.enable_memory_low_power = dccg2_enable_memory_low_power,
+	.is_s0i3_golden_init_wa_done = dccg2_is_s0i3_golden_init_wa_done /* Deprecated - for backward compatibility only */
 };
 
 static const struct dccg_funcs dccg35_funcs = {
@@ -2415,7 +2447,12 @@ static const struct dccg_funcs dccg35_funcs = {
 	.enable_symclk_se = dccg35_enable_symclk_se,
 	.disable_symclk_se = dccg35_disable_symclk_se,
 	.set_dtbclk_p_src = dccg35_set_dtbclk_p_src,
+	.refclk_setup = dccg2_refclk_setup, /* Deprecated - for backward compatibility only */
+	.allow_clock_gating = dccg2_allow_clock_gating,
+	.enable_memory_low_power = dccg2_enable_memory_low_power,
+	.is_s0i3_golden_init_wa_done = dccg2_is_s0i3_golden_init_wa_done, /* Deprecated - for backward compatibility only */
 	.dccg_root_gate_disable_control = dccg35_root_gate_disable_control,
+	.dccg_read_reg_state = dccg31_read_reg_state
 };
 
 struct dccg *dccg35_create(
@@ -2424,7 +2461,7 @@ struct dccg *dccg35_create(
 	const struct dccg_shift *dccg_shift,
 	const struct dccg_mask *dccg_mask)
 {
-	struct dcn_dccg *dccg_dcn = kzalloc(sizeof(*dccg_dcn), GFP_KERNEL);
+	struct dcn_dccg *dccg_dcn = kzalloc_obj(*dccg_dcn);
 	struct dccg *base;
 
 	if (dccg_dcn == NULL) {

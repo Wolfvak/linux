@@ -36,12 +36,12 @@
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 
-#include "i915_reg.h"
 #include "intel_connector.h"
 #include "intel_crtc.h"
 #include "intel_de.h"
 #include "intel_display_driver.h"
 #include "intel_display_irq.h"
+#include "intel_display_regs.h"
 #include "intel_display_types.h"
 #include "intel_dpll.h"
 #include "intel_hotplug.h"
@@ -1966,7 +1966,7 @@ intel_tv_init(struct intel_display *display)
 	    (tv_dac_off & TVDAC_STATE_CHG_EN) != 0)
 		return;
 
-	intel_tv = kzalloc(sizeof(*intel_tv), GFP_KERNEL);
+	intel_tv = kzalloc_obj(*intel_tv);
 	if (!intel_tv) {
 		return;
 	}

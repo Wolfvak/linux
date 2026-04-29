@@ -228,14 +228,16 @@ static void ccu_pll_calc_factors(unsigned long rate, unsigned long parent_rate,
 	}
 }
 
-static long ccu_pll_round_rate(struct clk_hw *hw, unsigned long rate,
-			       unsigned long *parent_rate)
+static int ccu_pll_determine_rate(struct clk_hw *hw,
+				  struct clk_rate_request *req)
 {
 	unsigned long nr = 1, nf = 1, od = 1;
 
-	ccu_pll_calc_factors(rate, *parent_rate, &nr, &nf, &od);
+	ccu_pll_calc_factors(req->rate, req->best_parent_rate, &nr, &nf, &od);
 
-	return ccu_pll_calc_freq(*parent_rate, nr, nf, od);
+	req->rate = ccu_pll_calc_freq(req->best_parent_rate, nr, nf, od);
+
+	return 0;
 }
 
 /*
@@ -443,7 +445,7 @@ static void ccu_pll_debug_init(struct clk_hw *hw, struct dentry *dentry)
 	struct ccu_pll_dbgfs_fld *flds;
 	int idx;
 
-	bits = kcalloc(CCU_PLL_DBGFS_BIT_NUM, sizeof(*bits), GFP_KERNEL);
+	bits = kzalloc_objs(*bits, CCU_PLL_DBGFS_BIT_NUM);
 	if (!bits)
 		return;
 
@@ -456,7 +458,7 @@ static void ccu_pll_debug_init(struct clk_hw *hw, struct dentry *dentry)
 					   &ccu_pll_dbgfs_bit_fops);
 	}
 
-	flds = kcalloc(CCU_PLL_DBGFS_FLD_NUM, sizeof(*flds), GFP_KERNEL);
+	flds = kzalloc_objs(*flds, CCU_PLL_DBGFS_FLD_NUM);
 	if (!flds)
 		return;
 
@@ -481,7 +483,7 @@ static const struct clk_ops ccu_pll_gate_to_set_ops = {
 	.disable = ccu_pll_disable,
 	.is_enabled = ccu_pll_is_enabled,
 	.recalc_rate = ccu_pll_recalc_rate,
-	.round_rate = ccu_pll_round_rate,
+	.determine_rate = ccu_pll_determine_rate,
 	.set_rate = ccu_pll_set_rate_norst,
 	.debug_init = ccu_pll_debug_init
 };
@@ -491,7 +493,7 @@ static const struct clk_ops ccu_pll_straight_set_ops = {
 	.disable = ccu_pll_disable,
 	.is_enabled = ccu_pll_is_enabled,
 	.recalc_rate = ccu_pll_recalc_rate,
-	.round_rate = ccu_pll_round_rate,
+	.determine_rate = ccu_pll_determine_rate,
 	.set_rate = ccu_pll_set_rate_reset,
 	.debug_init = ccu_pll_debug_init
 };
@@ -506,7 +508,7 @@ struct ccu_pll *ccu_pll_hw_register(const struct ccu_pll_init_data *pll_init)
 	if (!pll_init)
 		return ERR_PTR(-EINVAL);
 
-	pll = kzalloc(sizeof(*pll), GFP_KERNEL);
+	pll = kzalloc_obj(*pll);
 	if (!pll)
 		return ERR_PTR(-ENOMEM);
 

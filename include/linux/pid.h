@@ -6,6 +6,7 @@
 #include <linux/rculist.h>
 #include <linux/rcupdate.h>
 #include <linux/refcount.h>
+#include <linux/rhashtable-types.h>
 #include <linux/sched.h>
 #include <linux/wait.h>
 
@@ -47,19 +48,23 @@
 
 #define RESERVED_PIDS 300
 
+struct pidfs_attr;
+
 struct upid {
 	int nr;
 	struct pid_namespace *ns;
 };
 
-struct pid
-{
+struct pid {
 	refcount_t count;
 	unsigned int level;
 	spinlock_t lock;
-	struct dentry *stashed;
-	u64 ino;
-	struct rb_node pidfs_node;
+	struct {
+		u64 ino;
+		struct rhash_head pidfs_hash;
+		struct dentry *stashed;
+		struct pidfs_attr *attr;
+	};
 	/* lists of tasks that use this pid */
 	struct hlist_head tasks[PIDTYPE_MAX];
 	struct hlist_head inodes;
@@ -69,7 +74,6 @@ struct pid
 	struct upid numbers[];
 };
 
-extern seqcount_spinlock_t pidmap_lock_seq;
 extern struct pid init_struct_pid;
 
 struct file;
@@ -304,6 +308,11 @@ static inline pid_t task_ppid_nr_ns(const struct task_struct *tsk, struct pid_na
 	rcu_read_unlock();
 
 	return pid;
+}
+
+static inline pid_t task_ppid_vnr(const struct task_struct *tsk)
+{
+	return task_ppid_nr_ns(tsk, NULL);
 }
 
 static inline pid_t task_ppid_nr(const struct task_struct *tsk)

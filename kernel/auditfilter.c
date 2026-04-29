@@ -108,11 +108,11 @@ static inline struct audit_entry *audit_init_entry(u32 field_count)
 	struct audit_entry *entry;
 	struct audit_field *fields;
 
-	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
+	entry = kzalloc_obj(*entry);
 	if (unlikely(!entry))
 		return NULL;
 
-	fields = kcalloc(field_count, sizeof(*fields), GFP_KERNEL);
+	fields = kzalloc_objs(*fields, field_count);
 	if (unlikely(!fields)) {
 		kfree(entry);
 		return NULL;
@@ -638,10 +638,9 @@ static struct audit_rule_data *audit_krule_to_data(struct audit_krule *krule)
 	void *bufp;
 	int i;
 
-	data = kmalloc(struct_size(data, buf, krule->buflen), GFP_KERNEL);
+	data = kzalloc_flex(*data, buf, krule->buflen);
 	if (unlikely(!data))
 		return NULL;
-	memset(data, 0, sizeof(*data));
 
 	data->flags = krule->flags | krule->listnr;
 	data->action = krule->action;
@@ -1181,7 +1180,7 @@ int audit_list_rules_send(struct sk_buff *request_skb, int seq)
 	 * happen if we're actually running in the context of auditctl
 	 * trying to _send_ the stuff */
 
-	dest = kmalloc(sizeof(*dest), GFP_KERNEL);
+	dest = kmalloc_obj(*dest);
 	if (!dest)
 		return -ENOMEM;
 	dest->net = get_net(sock_net(NETLINK_CB(request_skb).sk));
@@ -1326,7 +1325,7 @@ int audit_compare_dname_path(const struct qstr *dname, const char *path, int par
 
 	/* handle trailing slashes */
 	pathlen -= parentlen;
-	while (p[pathlen - 1] == '/')
+	while (pathlen > 0 && p[pathlen - 1] == '/')
 		pathlen--;
 
 	if (pathlen != dlen)
@@ -1440,7 +1439,7 @@ static int update_lsm_rule(struct audit_krule *r)
 }
 
 /* This function will re-initialize the lsm_rule field of all applicable rules.
- * It will traverse the filter lists serarching for rules that contain LSM
+ * It will traverse the filter lists searching for rules that contain LSM
  * specific filter fields.  When such a rule is found, it is copied, the
  * LSM field is re-initialized, and the old rule is replaced with the
  * updated rule. */

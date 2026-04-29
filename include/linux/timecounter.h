@@ -28,7 +28,7 @@
  * @shift:		cycle to nanosecond divisor (power of two)
  */
 struct cyclecounter {
-	u64 (*read)(const struct cyclecounter *cc);
+	u64 (*read)(struct cyclecounter *cc);
 	u64 mask;
 	u32 mult;
 	u32 shift;
@@ -53,7 +53,7 @@ struct cyclecounter {
  * @frac:		accumulated fractional nanoseconds
  */
 struct timecounter {
-	const struct cyclecounter *cc;
+	struct cyclecounter *cc;
 	u64 cycle_last;
 	u64 nsec;
 	u64 mask;
@@ -100,7 +100,7 @@ static inline void timecounter_adjtime(struct timecounter *tc, s64 delta)
  * the time stamp counter by the number of elapsed nanoseconds.
  */
 extern void timecounter_init(struct timecounter *tc,
-			     const struct cyclecounter *cc,
+			     struct cyclecounter *cc,
 			     u64 start_tstamp);
 
 /**
@@ -114,6 +114,15 @@ extern void timecounter_init(struct timecounter *tc,
  * Returns: nanoseconds since the initial time stamp
  */
 extern u64 timecounter_read(struct timecounter *tc);
+
+/*
+ * This is like cyclecounter_cyc2ns(), but it is used for computing a
+ * time previous to the time stored in the cycle counter.
+ */
+static inline u64 cc_cyc2ns_backwards(const struct cyclecounter *cc, u64 cycles, u64 frac)
+{
+	return ((cycles * cc->mult) - frac) >> cc->shift;
+}
 
 /**
  * timecounter_cyc2time - convert a cycle counter to same
@@ -131,7 +140,25 @@ extern u64 timecounter_read(struct timecounter *tc);
  *
  * Returns: cycle counter converted to nanoseconds since the initial time stamp
  */
-extern u64 timecounter_cyc2time(const struct timecounter *tc,
-				u64 cycle_tstamp);
+static inline u64 timecounter_cyc2time(const struct timecounter *tc, u64 cycle_tstamp)
+{
+	const struct cyclecounter *cc = tc->cc;
+	u64 delta = (cycle_tstamp - tc->cycle_last) & cc->mask;
+	u64 nsec = tc->nsec, frac = tc->frac;
+
+	/*
+	 * Instead of always treating cycle_tstamp as more recent than
+	 * tc->cycle_last, detect when it is too far in the future and
+	 * treat it as old time stamp instead.
+	 */
+	if (unlikely(delta > cc->mask / 2)) {
+		delta = (tc->cycle_last - cycle_tstamp) & cc->mask;
+		nsec -= cc_cyc2ns_backwards(cc, delta, frac);
+	} else {
+		nsec += cyclecounter_cyc2ns(cc, delta, tc->mask, &frac);
+	}
+
+	return nsec;
+}
 
 #endif

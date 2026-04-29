@@ -31,6 +31,7 @@
 #include <linux/kgdb.h>
 #include <linux/delay.h>
 #include <linux/mm.h>
+#include <linux/vmalloc.h>
 
 #include <asm/byteorder.h>
 
@@ -54,8 +55,6 @@
 
 #if defined(CONFIG_DRM_AMD_DC_FP)
 #include "amdgpu_dm/dc_fpu.h"
-#define DC_FP_START() dc_fpu_begin(__func__, __LINE__)
-#define DC_FP_END() dc_fpu_end(__func__, __LINE__)
 #endif /* CONFIG_DRM_AMD_DC_FP */
 
 /*

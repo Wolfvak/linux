@@ -12,18 +12,17 @@
 #include <drm/drm_print.h>
 #include <drm/drm_vblank.h>
 
-#include "i915_reg.h"
-#include "i915_utils.h"
 #include "intel_atomic.h"
-#include "intel_atomic_plane.h"
 #include "intel_cursor.h"
 #include "intel_cursor_regs.h"
 #include "intel_de.h"
 #include "intel_display.h"
 #include "intel_display_types.h"
+#include "intel_display_utils.h"
 #include "intel_fb.h"
 #include "intel_fb_pin.h"
 #include "intel_frontbuffer.h"
+#include "intel_plane.h"
 #include "intel_psr.h"
 #include "intel_psr_regs.h"
 #include "intel_vblank.h"
@@ -34,17 +33,9 @@ static const u32 intel_cursor_formats[] = {
 	DRM_FORMAT_ARGB8888,
 };
 
-static u32 intel_cursor_base(const struct intel_plane_state *plane_state)
+static u32 intel_cursor_surf_offset(const struct intel_plane_state *plane_state)
 {
-	struct intel_display *display = to_intel_display(plane_state);
-	u32 base;
-
-	if (DISPLAY_INFO(display)->cursor_needs_physical)
-		base = plane_state->phys_dma_addr;
-	else
-		base = intel_plane_ggtt_offset(plane_state);
-
-	return base + plane_state->view.color_plane[0].offset;
+	return plane_state->view.color_plane[0].offset;
 }
 
 static u32 intel_cursor_position(const struct intel_crtc_state *crtc_state,
@@ -159,10 +150,10 @@ static int intel_check_cursor(struct intel_crtc_state *crtc_state,
 		return -EINVAL;
 	}
 
-	ret = intel_atomic_plane_check_clipping(plane_state, crtc_state,
-						DRM_PLANE_NO_SCALING,
-						DRM_PLANE_NO_SCALING,
-						true);
+	ret = intel_plane_check_clipping(plane_state, crtc_state,
+					 DRM_PLANE_NO_SCALING,
+					 DRM_PLANE_NO_SCALING,
+					 true);
 	if (ret)
 		return ret;
 
@@ -191,8 +182,8 @@ static int intel_check_cursor(struct intel_crtc_state *crtc_state,
 
 static unsigned int
 i845_cursor_max_stride(struct intel_plane *plane,
-		       u32 pixel_format, u64 modifier,
-		       unsigned int rotation)
+		       const struct drm_format_info *info,
+		       u64 modifier, unsigned int rotation)
 {
 	return 2048;
 }
@@ -214,8 +205,7 @@ static u32 i845_cursor_ctl_crtc(const struct intel_crtc_state *crtc_state)
 	return cntl;
 }
 
-static u32 i845_cursor_ctl(const struct intel_crtc_state *crtc_state,
-			   const struct intel_plane_state *plane_state)
+static u32 i845_cursor_ctl(const struct intel_plane_state *plane_state)
 {
 	return CURSOR_ENABLE |
 		CURSOR_FORMAT_ARGB |
@@ -275,7 +265,7 @@ static int i845_check_cursor(struct intel_crtc_state *crtc_state,
 		return -EINVAL;
 	}
 
-	plane_state->ctl = i845_cursor_ctl(crtc_state, plane_state);
+	plane_state->ctl = i845_cursor_ctl(plane_state);
 
 	return 0;
 }
@@ -298,7 +288,7 @@ static void i845_cursor_update_arm(struct intel_dsb *dsb,
 
 		size = CURSOR_HEIGHT(height) | CURSOR_WIDTH(width);
 
-		base = intel_cursor_base(plane_state);
+		base = plane_state->surf;
 		pos = intel_cursor_position(crtc_state, plane_state, false);
 	}
 
@@ -334,7 +324,7 @@ static bool i845_cursor_get_hw_state(struct intel_plane *plane,
 {
 	struct intel_display *display = to_intel_display(plane);
 	enum intel_display_power_domain power_domain;
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 	bool ret;
 
 	power_domain = POWER_DOMAIN_PIPE(PIPE_A);
@@ -353,8 +343,8 @@ static bool i845_cursor_get_hw_state(struct intel_plane *plane,
 
 static unsigned int
 i9xx_cursor_max_stride(struct intel_plane *plane,
-		       u32 pixel_format, u64 modifier,
-		       unsigned int rotation)
+		       const struct drm_format_info *info,
+		       u64 modifier, unsigned int rotation)
 {
 	return plane->base.dev->mode_config.cursor_width * 4;
 }
@@ -407,8 +397,7 @@ static u32 i9xx_cursor_ctl_crtc(const struct intel_crtc_state *crtc_state)
 	return cntl;
 }
 
-static u32 i9xx_cursor_ctl(const struct intel_crtc_state *crtc_state,
-			   const struct intel_plane_state *plane_state)
+static u32 i9xx_cursor_ctl(const struct intel_plane_state *plane_state)
 {
 	struct intel_display *display = to_intel_display(plane_state);
 	u32 cntl = 0;
@@ -535,7 +524,7 @@ static int i9xx_check_cursor(struct intel_crtc_state *crtc_state,
 		return -EINVAL;
 	}
 
-	plane_state->ctl = i9xx_cursor_ctl(crtc_state, plane_state);
+	plane_state->ctl = i9xx_cursor_ctl(plane_state);
 
 	return 0;
 }
@@ -673,10 +662,10 @@ static void i9xx_cursor_update_arm(struct intel_dsb *dsb,
 		cntl = plane_state->ctl |
 			i9xx_cursor_ctl_crtc(crtc_state);
 
-		if (width != height)
+		if (DISPLAY_VER(display) < 14 && width != height)
 			fbc_ctl = CUR_FBC_EN | CUR_FBC_HEIGHT(height - 1);
 
-		base = intel_cursor_base(plane_state);
+		base = plane_state->surf;
 		pos = intel_cursor_position(crtc_state, plane_state, false);
 	}
 
@@ -738,7 +727,7 @@ static bool i9xx_cursor_get_hw_state(struct intel_plane *plane,
 {
 	struct intel_display *display = to_intel_display(plane);
 	enum intel_display_power_domain power_domain;
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 	bool ret;
 	u32 val;
 
@@ -985,6 +974,7 @@ static const struct drm_plane_funcs intel_cursor_plane_funcs = {
 	.atomic_duplicate_state = intel_plane_duplicate_state,
 	.atomic_destroy_state = intel_plane_destroy_state,
 	.format_mod_supported = intel_cursor_format_mod_supported,
+	.format_mod_supported_async = intel_plane_format_mod_supported_async,
 };
 
 static void intel_cursor_add_size_hints_property(struct intel_plane *plane)
@@ -1052,6 +1042,8 @@ intel_cursor_plane_create(struct intel_display *display,
 		cursor->check_plane = i9xx_check_cursor;
 	}
 
+	cursor->surf_offset = intel_cursor_surf_offset;
+
 	if (DISPLAY_VER(display) >= 5 || display->platform.g4x)
 		cursor->capture_error = g4x_cursor_capture_error;
 	else
@@ -1100,4 +1092,24 @@ fail:
 	intel_plane_free(cursor);
 
 	return ERR_PTR(ret);
+}
+
+void intel_cursor_mode_config_init(struct intel_display *display)
+{
+	struct drm_mode_config *mode_config = &display->drm->mode_config;
+
+	if (display->platform.i845g) {
+		mode_config->cursor_width = 64;
+		mode_config->cursor_height = 1023;
+	} else if (display->platform.i865g) {
+		mode_config->cursor_width = 512;
+		mode_config->cursor_height = 1023;
+	} else if (display->platform.i830 || display->platform.i85x ||
+		   display->platform.i915g || display->platform.i915gm) {
+		mode_config->cursor_width = 64;
+		mode_config->cursor_height = 64;
+	} else {
+		mode_config->cursor_width = 256;
+		mode_config->cursor_height = 256;
+	}
 }

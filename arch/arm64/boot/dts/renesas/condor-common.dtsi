@@ -174,6 +174,7 @@
 &i2c0 {
 	pinctrl-0 = <&i2c0_pins>;
 	pinctrl-names = "default";
+	bootph-all;
 
 	status = "okay";
 	clock-frequency = <400000>;
@@ -230,6 +231,7 @@
 		compatible = "rohm,br24t01", "atmel,24c01";
 		reg = <0x50>;
 		pagesize = <8>;
+		bootph-all;
 	};
 };
 
@@ -499,7 +501,7 @@
 				reg = <0x00040000 0x080000>;
 				read-only;
 			};
-			cert_header_sa3@c0000 {
+			cert-header-sa3@c0000 {
 				reg = <0x000c0000 0x080000>;
 				read-only;
 			};
@@ -507,7 +509,7 @@
 				reg = <0x00140000 0x040000>;
 				read-only;
 			};
-			cert_header_sa6@180000 {
+			cert-header-sa6@180000 {
 				reg = <0x00180000 0x040000>;
 				read-only;
 			};
@@ -551,4 +553,9 @@
 
 &scif_clk {
 	clock-frequency = <14745600>;
+};
+
+/* Firmware should reserve it but sadly doesn't */
+&swdt {
+	status = "reserved";
 };

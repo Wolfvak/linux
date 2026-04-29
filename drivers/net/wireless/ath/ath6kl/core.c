@@ -91,7 +91,7 @@ int ath6kl_core_init(struct ath6kl *ar, enum ath6kl_htc_type htc_type)
 
 	/*
 	 * Turn on power to get hardware (target) version and leave power
-	 * on delibrately as we will boot the hardware anyway within few
+	 * on deliberately as we will boot the hardware anyway within few
 	 * seconds.
 	 */
 	ret = ath6kl_hif_power_on(ar);
@@ -311,7 +311,7 @@ struct ath6kl *ath6kl_core_create(struct device *dev)
 		ar->sta_list[ctr].mgmt_psq_len = 0;
 		INIT_LIST_HEAD(&ar->sta_list[ctr].mgmt_psq);
 		ar->sta_list[ctr].aggr_conn =
-			kzalloc(sizeof(struct aggr_info_conn), GFP_KERNEL);
+			kzalloc_obj(struct aggr_info_conn);
 		if (!ar->sta_list[ctr].aggr_conn) {
 			ath6kl_err("Failed to allocate memory for sta aggregation information\n");
 			ath6kl_core_destroy(ar);

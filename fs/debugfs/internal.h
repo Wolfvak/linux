@@ -19,7 +19,7 @@ struct debugfs_inode_info {
 		const struct debugfs_short_fops *short_fops;
 		debugfs_automount_t automount;
 	};
-	const void *aux;
+	void *aux;
 };
 
 static inline struct debugfs_inode_info *DEBUGFS_I(struct inode *inode)
@@ -54,18 +54,5 @@ enum {
 	HAS_POLL = 8,
 	HAS_IOCTL = 16
 };
-
-#define DEBUGFS_ALLOW_API	BIT(0)
-#define DEBUGFS_ALLOW_MOUNT	BIT(1)
-
-#ifdef CONFIG_DEBUG_FS_ALLOW_ALL
-#define DEFAULT_DEBUGFS_ALLOW_BITS (DEBUGFS_ALLOW_MOUNT | DEBUGFS_ALLOW_API)
-#endif
-#ifdef CONFIG_DEBUG_FS_DISALLOW_MOUNT
-#define DEFAULT_DEBUGFS_ALLOW_BITS (DEBUGFS_ALLOW_API)
-#endif
-#ifdef CONFIG_DEBUG_FS_ALLOW_NONE
-#define DEFAULT_DEBUGFS_ALLOW_BITS (0)
-#endif
 
 #endif /* _DEBUGFS_INTERNAL_H_ */

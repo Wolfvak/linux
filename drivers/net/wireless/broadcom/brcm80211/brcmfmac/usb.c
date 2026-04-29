@@ -428,7 +428,7 @@ brcmf_usbdev_qinit(struct list_head *q, int qsize)
 	int i;
 	struct brcmf_usbreq *req, *reqs;
 
-	reqs = kcalloc(qsize, sizeof(struct brcmf_usbreq), GFP_ATOMIC);
+	reqs = kzalloc_objs(struct brcmf_usbreq, qsize, GFP_ATOMIC);
 	if (reqs == NULL)
 		return NULL;
 
@@ -927,10 +927,7 @@ brcmf_usb_dl_writeimage(struct brcmf_usbdev_info *devinfo, u8 *fw, int fwlen)
 		/* Wait until the usb device reports it received all
 		 * the bytes we sent */
 		if ((rdlbytes == sent) && (rdlbytes != dllen)) {
-			if ((dllen-sent) < TRX_RDL_CHUNK)
-				sendlen = dllen-sent;
-			else
-				sendlen = TRX_RDL_CHUNK;
+			sendlen = min(dllen - sent, TRX_RDL_CHUNK);
 
 			/* simply avoid having to send a ZLP by ensuring we
 			 * never have an even
@@ -1258,7 +1255,7 @@ static int brcmf_usb_probe_cb(struct brcmf_usbdev_info *devinfo,
 	if (!bus_pub)
 		return -ENODEV;
 
-	bus = kzalloc(sizeof(*bus), GFP_ATOMIC);
+	bus = kzalloc_obj(*bus, GFP_ATOMIC);
 	if (!bus) {
 		ret = -ENOMEM;
 		goto fail;
@@ -1362,7 +1359,7 @@ brcmf_usb_probe(struct usb_interface *intf, const struct usb_device_id *id)
 
 	brcmf_dbg(USB, "Enter 0x%04x:0x%04x\n", id->idVendor, id->idProduct);
 
-	devinfo = kzalloc(sizeof(*devinfo), GFP_ATOMIC);
+	devinfo = kzalloc_obj(*devinfo, GFP_ATOMIC);
 	if (devinfo == NULL)
 		return -ENOMEM;
 

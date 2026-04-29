@@ -210,7 +210,7 @@ static int llc_ui_release(struct socket *sock)
 	dprintk("%s: closing local(%02X) remote(%02X)\n", __func__,
 		llc->laddr.lsap, llc->daddr.lsap);
 	if (!llc_send_disc(sk))
-		llc_ui_wait_for_disc(sk, sk->sk_rcvtimeo);
+		llc_ui_wait_for_disc(sk, READ_ONCE(sk->sk_rcvtimeo));
 	if (!sock_flag(sk, SOCK_ZAPPED)) {
 		struct llc_sap *sap = llc->sap;
 
@@ -337,7 +337,7 @@ out:
  *	otherwise all hell will break loose.
  *	Returns: 0 upon success, negative otherwise.
  */
-static int llc_ui_bind(struct socket *sock, struct sockaddr *uaddr, int addrlen)
+static int llc_ui_bind(struct socket *sock, struct sockaddr_unsized *uaddr, int addrlen)
 {
 	struct sockaddr_llc *addr = (struct sockaddr_llc *)uaddr;
 	struct sock *sk = sock->sk;
@@ -455,7 +455,7 @@ static int llc_ui_shutdown(struct socket *sock, int how)
 		goto out;
 	rc = llc_send_disc(sk);
 	if (!rc)
-		rc = llc_ui_wait_for_disc(sk, sk->sk_rcvtimeo);
+		rc = llc_ui_wait_for_disc(sk, READ_ONCE(sk->sk_rcvtimeo));
 	/* Wake up anyone sleeping in poll */
 	sk->sk_state_change(sk);
 out:
@@ -477,7 +477,7 @@ out:
  *	This function will autobind if user did not previously call bind.
  *	Returns: 0 upon success, negative otherwise.
  */
-static int llc_ui_connect(struct socket *sock, struct sockaddr *uaddr,
+static int llc_ui_connect(struct socket *sock, struct sockaddr_unsized *uaddr,
 			  int addrlen, int flags)
 {
 	struct sock *sk = sock->sk;
@@ -712,7 +712,7 @@ static int llc_ui_accept(struct socket *sock, struct socket *newsock,
 		goto out;
 	/* wait for a connection to arrive. */
 	if (skb_queue_empty(&sk->sk_receive_queue)) {
-		rc = llc_wait_data(sk, sk->sk_rcvtimeo);
+		rc = llc_wait_data(sk, READ_ONCE(sk->sk_rcvtimeo));
 		if (rc)
 			goto out;
 	}

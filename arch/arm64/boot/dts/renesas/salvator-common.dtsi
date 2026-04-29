@@ -501,7 +501,7 @@
 		};
 	};
 
-	cs2000: clk_multiplier@4f {
+	cs2000: clk-multiplier@4f {
 		#clock-cells = <0>;
 		compatible = "cirrus,cs2000-cp";
 		reg = <0x4f>;
@@ -592,6 +592,7 @@
 };
 
 &i2c_dvfs {
+	bootph-all;
 	status = "okay";
 
 	clock-frequency = <400000>;
@@ -625,6 +626,7 @@
 		compatible = "rohm,br24t01", "atmel,24c01";
 		reg = <0x50>;
 		pagesize = <8>;
+		bootph-all;
 	};
 };
 
@@ -888,7 +890,7 @@
 				reg = <0x00040000 0x140000>;
 				read-only;
 			};
-			cert_header_sa6@180000 {
+			cert-header-sa6@180000 {
 				reg = <0x00180000 0x040000>;
 				read-only;
 			};
@@ -1000,6 +1002,11 @@
 
 &ssi1 {
 	shared-pin;
+};
+
+/* Firmware should reserve it but sadly doesn't */
+&swdt {
+	status = "reserved";
 };
 
 &usb_extal_clk {

@@ -141,7 +141,7 @@ lockd(void *vrqstp)
 	 */
 	while (!svc_thread_should_stop(rqstp)) {
 		nlmsvc_retry_blocked(rqstp);
-		svc_recv(rqstp);
+		svc_recv(rqstp, 0);
 	}
 	if (nlmsvc_ops)
 		nlmsvc_invalidate_all();
@@ -216,8 +216,7 @@ out_err:
 	if (warned++ == 0)
 		printk(KERN_WARNING
 			"lockd_up: makesock failed, error=%d\n", err);
-	svc_xprt_destroy_all(serv, net);
-	svc_rpcb_cleanup(serv, net);
+	svc_xprt_destroy_all(serv, net, true);
 	return err;
 }
 
@@ -255,8 +254,7 @@ static void lockd_down_net(struct svc_serv *serv, struct net *net)
 			nlm_shutdown_hosts_net(net);
 			cancel_delayed_work_sync(&ln->grace_period_end);
 			locks_end_grace(&ln->lockd_manager);
-			svc_xprt_destroy_all(serv, net);
-			svc_rpcb_cleanup(serv, net);
+			svc_xprt_destroy_all(serv, net, true);
 		}
 	} else {
 		pr_err("%s: no users! net=%x\n",
@@ -342,7 +340,7 @@ static int lockd_get(void)
 		return -ENOMEM;
 	}
 
-	error = svc_set_num_threads(serv, NULL, 1);
+	error = svc_set_num_threads(serv, 0, 1);
 	if (error < 0) {
 		svc_destroy(&serv);
 		return error;
@@ -370,7 +368,7 @@ static void lockd_put(void)
 	unregister_inet6addr_notifier(&lockd_inet6addr_notifier);
 #endif
 
-	svc_set_num_threads(nlmsvc_serv, NULL, 0);
+	svc_set_num_threads(nlmsvc_serv, 0, 0);
 	timer_delete_sync(&nlmsvc_retry);
 	svc_destroy(&nlmsvc_serv);
 	dprintk("lockd_down: service destroyed\n");

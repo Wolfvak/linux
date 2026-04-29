@@ -9,6 +9,19 @@ menu "Analog to digital converters"
 config IIO_ADC_HELPER
 	tristate
 
+config 88PM886_GPADC
+	tristate "Marvell 88PM886 GPADC driver"
+	depends on MFD_88PM886_PMIC
+	default MFD_88PM886_PMIC
+	help
+	  Say Y here to enable support for the GPADC (General Purpose ADC)
+	  found on the Marvell 88PM886 PMIC. The GPADC measures various
+	  internal voltages and temperatures, including (but not limited to)
+	  system, battery and USB Vbus.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called 88pm886-gpadc.
+
 config AB8500_GPADC
 	bool "ST-Ericsson AB8500 GPADC driver"
 	depends on AB8500_CORE && REGULATOR_AB8500
@@ -22,7 +35,9 @@ config AB8500_GPADC
 config AD_SIGMA_DELTA
 	tristate
 	select IIO_BUFFER
+	select IIO_BUFFER_DMAENGINE
 	select IIO_TRIGGERED_BUFFER
+	select SPI_OFFLOAD
 
 config AD4000
 	tristate "Analog Devices AD4000 ADC Driver"
@@ -55,6 +70,33 @@ config AD4030
 	  To compile this driver as a module, choose M here: the module will be
 	  called ad4030.
 
+config AD4062
+	tristate "Analog Devices AD4062 Driver"
+	depends on I3C
+	select REGMAP_I3C
+	select IIO_BUFFER
+	select IIO_TRIGGERED_BUFFER
+	help
+	  Say yes here to build support for Analog Devices AD4062 I3C analog
+	  to digital converters (ADC).
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called ad4062.
+
+config AD4080
+	tristate "Analog Devices AD4080 high speed ADC"
+	depends on SPI
+	select REGMAP_SPI
+	select IIO_BACKEND
+	help
+	  Say yes here to build support for Analog Devices AD4080
+	  high speed, low noise, low distortion, 20-bit, Easy Drive,
+	  successive approximation register (SAR) analog-to-digital
+	  converter (ADC). Supports iio_backended devices for AD4080.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called ad4080.
+
 config AD4130
 	tristate "Analog Device AD4130 ADC Driver"
 	depends on SPI
@@ -69,6 +111,33 @@ config AD4130
 
 	  To compile this driver as a module, choose M here: the module will be
 	  called ad4130.
+
+config AD4134
+	tristate "Analog Device AD4134 ADC Driver"
+	depends on SPI
+	select REGMAP_SPI
+	select CRC8
+	help
+	  Say yes here to build support for Analog Devices AD4134 SPI analog to
+	  digital converters (ADC).
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called ad4134_spi.
+
+config AD4170_4
+	tristate "Analog Device AD4170-4 ADC Driver"
+	depends on SPI
+	select REGMAP_SPI
+	select IIO_BUFFER
+	select IIO_TRIGGERED_BUFFER
+	depends on COMMON_CLK
+	depends on GPIOLIB
+	help
+	  Say yes here to build support for Analog Devices AD4170-4 SPI analog
+	  to digital converters (ADC).
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called ad4170-4.
 
 config AD4695
 	tristate "Analog Device AD4695 ADC Driver"
@@ -252,6 +321,16 @@ config AD7380
 	  To compile this driver as a module, choose M here: the module will be
 	  called ad7380.
 
+config AD7405
+	tristate "Analog Device AD7405 ADC Driver"
+	depends on IIO_BACKEND
+	help
+	  Say yes here to build support for Analog Devices AD7405, ADUM7701,
+	  ADUM7702, ADUM7703 analog to digital converters (ADC).
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called ad7405.
+
 config AD7476
 	tristate "Analog Devices AD7476 1-channel ADCs driver and other similar devices from AD and TI"
 	depends on SPI
@@ -330,7 +409,9 @@ config AD7766
 config AD7768_1
 	tristate "Analog Devices AD7768-1 ADC driver"
 	depends on SPI
+	select REGULATOR
 	select REGMAP_SPI
+	select RATIONAL
 	select IIO_BUFFER
 	select IIO_TRIGGER
 	select IIO_TRIGGERED_BUFFER
@@ -346,6 +427,7 @@ config AD7779
 	depends on SPI
 	select CRC8
 	select IIO_BUFFER
+	select IIO_BACKEND
 	help
 	  Say yes here to build support for Analog Devices AD777X family
 	  (AD7770, AD7771, AD7779) analog to digital converter (ADC).
@@ -463,6 +545,25 @@ config AD9467
 
 	  To compile this driver as a module, choose M here: the module will be
 	  called ad9467.
+
+config ADE9000
+	tristate "Analog Devices ADE9000 Multiphase Energy, and Power Quality Monitoring IC Driver"
+	depends on SPI
+	select REGMAP_SPI
+	select IIO_BUFFER
+	select IIO_KFIFO_BUF
+	help
+	  Say yes here to build support for the Analog Devices ADE9000,
+	  a highly accurate, multiphase energy and power quality monitoring
+	  integrated circuit.
+
+	  The device features high-precision analog-to-digital converters
+	  and digital signal processing to compute RMS values, power factor,
+	  frequency, and harmonic analysis. It supports SPI communication
+	  and provides buffered data output through the IIO framework.
+
+	  To compile this driver as a module, choose M here: the module will
+	  be called ade9000.
 
 config ADI_AXI_ADC
 	tristate "Analog Devices Generic AXI ADC IP core driver"
@@ -723,6 +824,17 @@ config INGENIC_ADC
 	  This driver can also be built as a module. If so, the module will be
 	  called ingenic_adc.
 
+config INTEL_DC_TI_ADC
+	tristate "Intel Bay Trail / Cherry Trail Dollar Cove TI ADC driver"
+	depends on INTEL_SOC_PMIC_CHTDC_TI
+	help
+	  Say yes here to have support for the Dollar Cove TI PMIC ADC device.
+	  Depending on platform configuration, this general purpose ADC can be
+	  used for sensors such as battery voltage and thermal resistors.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called intel_dc_ti_adc.
+
 config INTEL_MRFLD_ADC
 	tristate "Intel Merrifield Basin Cove ADC driver"
 	depends on INTEL_SOC_PMIC_MRFLD
@@ -933,6 +1045,16 @@ config MAX1363
 	  To compile this driver as a module, choose M here: the module will be
 	  called max1363.
 
+config MAX14001
+	tristate "Analog Devices MAX14001/MAX14002 ADC driver"
+	depends on SPI
+	help
+	  Say yes here to build support for Analog Devices MAX14001/MAX14002
+	  Configurable, Isolated 10-bit ADCs for Multi-Range Binary Inputs.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called max14001.
+
 config MAX34408
 	tristate "Maxim max34408/max344089 ADC driver"
 	depends on I2C
@@ -1125,6 +1247,18 @@ config NPCM_ADC
 	  This driver can also be built as a module. If so, the module
 	  will be called npcm_adc.
 
+config NXP_SAR_ADC
+	tristate "NXP S32G SAR-ADC driver"
+	depends on ARCH_S32 || COMPILE_TEST
+	select IIO_BUFFER
+	select IIO_TRIGGERED_BUFFER
+	help
+	  Say yes here to build support for S32G platforms
+	  analog-to-digital converter.
+
+	  This driver can also be built as a module. If so, the module will be
+	  called nxp_sar_adc.
+
 config PAC1921
 	tristate "Microchip Technology PAC1921 driver"
 	depends on I2C
@@ -1255,9 +1389,19 @@ config RN5T618_ADC
 	  This driver can also be built as a module. If so, the module
 	  will be called rn5t618-adc.
 
+config ROHM_BD79112
+	tristate "Rohm BD79112 ADC driver"
+	depends on SPI && GPIOLIB
+	select REGMAP_SPI
+	select IIO_ADC_HELPER
+	help
+	  Say yes here to build support for the ROHM BD79112 ADC. The
+	  ROHM BD79112 is a 12-bit, 32-channel, SAR ADC. Analog inputs
+	  can also be used for GPIO.
+
 config ROHM_BD79124
 	tristate "Rohm BD79124 ADC driver"
-	depends on I2C
+	depends on I2C && GPIOLIB
 	select REGMAP_I2C
 	select IIO_ADC_HELPER
 	help
@@ -1305,6 +1449,27 @@ config RZG2L_ADC
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called rzg2l_adc.
+
+config RZN1_ADC
+	tristate "Renesas RZ/N1 ADC driver"
+	depends on ARCH_RZN1 || COMPILE_TEST
+	help
+	  Say yes here to build support for the ADC found in Renesas
+	  RZ/N1 family.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called rzn1-adc.
+
+config RZT2H_ADC
+	tristate "Renesas RZ/T2H / RZ/N2H ADC driver"
+	depends on ARCH_RENESAS || COMPILE_TEST
+	select IIO_ADC_HELPER
+	help
+	  Say yes here to build support for the ADC found in Renesas
+	  RZ/T2H / RZ/N2H SoCs.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called rzt2h_adc.
 
 config SC27XX_ADC
 	tristate "Spreadtrum SC27xx series PMICs ADC"
@@ -1536,6 +1701,18 @@ config TI_ADS1015
 	  This driver can also be built as a module. If so, the module will be
 	  called ti-ads1015.
 
+config TI_ADS1018
+       tristate "Texas Instruments ADS1018 ADC"
+       depends on SPI
+       select IIO_BUFFER
+       select IIO_TRIGGERED_BUFFER
+       help
+         If you say yes here you get support for Texas Instruments ADS1018 and
+         ADS1118 ADC chips.
+
+         This driver can also be built as a module. If so, the module will be
+         called ti-ads1018.
+
 config TI_ADS1100
 	tristate "Texas Instruments ADS1100 and ADS1000 ADC"
 	depends on I2C
@@ -1593,6 +1770,17 @@ config TI_ADS131E08
 
 	  This driver can also be built as a module. If so, the module will be
 	  called ti-ads131e08.
+
+config TI_ADS131M02
+	tristate "Texas Instruments ADS131M02"
+	depends on SPI && REGULATOR
+	select CRC_ITU_T
+	help
+	  Say yes here to get support for Texas Instruments ADS131M02, ADS131M03,
+	  ADS131M04, ADS131M06 and ADS131M08 chips.
+
+	  This driver can also be built as a module. If so, the module will be
+	  called ti-ads131m02.
 
 config TI_ADS7138
 	tristate "Texas Instruments ADS7128 and ADS7138 ADC driver"

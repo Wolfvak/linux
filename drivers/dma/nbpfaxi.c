@@ -711,6 +711,9 @@ static int nbpf_desc_page_alloc(struct nbpf_channel *chan)
 		list_add_tail(&ldesc->node, &lhead);
 		ldesc->hwdesc_dma_addr = dma_map_single(dchan->device->dev,
 					hwdesc, sizeof(*hwdesc), DMA_TO_DEVICE);
+		if (dma_mapping_error(dchan->device->dev,
+				      ldesc->hwdesc_dma_addr))
+			goto unmap_error;
 
 		dev_dbg(dev, "%s(): mapped 0x%p to %pad\n", __func__,
 			hwdesc, &ldesc->hwdesc_dma_addr);
@@ -737,6 +740,16 @@ static int nbpf_desc_page_alloc(struct nbpf_channel *chan)
 	spin_unlock_irq(&chan->lock);
 
 	return ARRAY_SIZE(dpage->desc);
+
+unmap_error:
+	while (i--) {
+		ldesc--; hwdesc--;
+
+		dma_unmap_single(dchan->device->dev, ldesc->hwdesc_dma_addr,
+				 sizeof(hwdesc), DMA_TO_DEVICE);
+	}
+
+	return -ENOMEM;
 }
 
 static void nbpf_desc_put(struct nbpf_desc *desc)
@@ -1487,7 +1500,6 @@ static const struct platform_device_id nbpf_ids[] = {
 };
 MODULE_DEVICE_TABLE(platform, nbpf_ids);
 
-#ifdef CONFIG_PM
 static int nbpf_runtime_suspend(struct device *dev)
 {
 	struct nbpf_device *nbpf = dev_get_drvdata(dev);
@@ -1500,17 +1512,16 @@ static int nbpf_runtime_resume(struct device *dev)
 	struct nbpf_device *nbpf = dev_get_drvdata(dev);
 	return clk_prepare_enable(nbpf->clk);
 }
-#endif
 
 static const struct dev_pm_ops nbpf_pm_ops = {
-	SET_RUNTIME_PM_OPS(nbpf_runtime_suspend, nbpf_runtime_resume, NULL)
+	RUNTIME_PM_OPS(nbpf_runtime_suspend, nbpf_runtime_resume, NULL)
 };
 
 static struct platform_driver nbpf_driver = {
 	.driver = {
 		.name = "dma-nbpf",
 		.of_match_table = nbpf_match,
-		.pm = &nbpf_pm_ops,
+		.pm = pm_ptr(&nbpf_pm_ops),
 	},
 	.id_table = nbpf_ids,
 	.probe = nbpf_probe,

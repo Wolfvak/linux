@@ -2,11 +2,12 @@
 
 config FS_VERITY
 	bool "FS Verity (read-only file-based authenticity protection)"
-	select CRYPTO
+	# Filesystems cache the Merkle tree at a 64K aligned offset in the
+	# pagecache.  That approach assumes the page size is at most 64K.
+	depends on PAGE_SHIFT <= 16
 	select CRYPTO_HASH_INFO
-	# SHA-256 is selected as it's intended to be the default hash algorithm.
-	# To avoid bloat, other wanted algorithms must be selected explicitly.
-	select CRYPTO_SHA256
+	select CRYPTO_LIB_SHA256
+	select CRYPTO_LIB_SHA512
 	help
 	  This option enables fs-verity.  fs-verity is the dm-verity
 	  mechanism implemented at the file level.  On supported

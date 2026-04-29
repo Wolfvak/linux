@@ -170,7 +170,7 @@ void rose_kill_by_neigh(struct rose_neigh *neigh)
 
 		if (rose->neighbour == neigh) {
 			rose_disconnect(s, ENETUNREACH, ROSE_OUT_OF_ORDER, 0);
-			rose->neighbour->use--;
+			rose_neigh_put(rose->neighbour);
 			rose->neighbour = NULL;
 		}
 	}
@@ -205,14 +205,14 @@ start:
 	spin_unlock_bh(&rose_list_lock);
 
 	for (i = 0; i < cnt; i++) {
-		sk = array[cnt];
+		sk = array[i];
 		rose = rose_sk(sk);
 		lock_sock(sk);
 		spin_lock_bh(&rose_list_lock);
 		if (rose->device == dev) {
 			rose_disconnect(sk, ENETUNREACH, ROSE_OUT_OF_ORDER, 0);
 			if (rose->neighbour)
-				rose->neighbour->use--;
+				rose_neigh_put(rose->neighbour);
 			netdev_put(rose->device, &rose->dev_tracker);
 			rose->device = NULL;
 		}
@@ -655,7 +655,7 @@ static int rose_release(struct socket *sock)
 		break;
 
 	case ROSE_STATE_2:
-		rose->neighbour->use--;
+		rose_neigh_put(rose->neighbour);
 		release_sock(sk);
 		rose_disconnect(sk, 0, -1, -1);
 		lock_sock(sk);
@@ -693,7 +693,7 @@ static int rose_release(struct socket *sock)
 	return 0;
 }
 
-static int rose_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
+static int rose_bind(struct socket *sock, struct sockaddr_unsized *uaddr, int addr_len)
 {
 	struct sock *sk = sock->sk;
 	struct rose_sock *rose = rose_sk(sk);
@@ -765,7 +765,8 @@ out_release:
 	return err;
 }
 
-static int rose_connect(struct socket *sock, struct sockaddr *uaddr, int addr_len, int flags)
+static int rose_connect(struct socket *sock, struct sockaddr_unsized *uaddr, int addr_len,
+			int flags)
 {
 	struct sock *sk = sock->sk;
 	struct rose_sock *rose = rose_sk(sk);
@@ -810,6 +811,11 @@ static int rose_connect(struct socket *sock, struct sockaddr *uaddr, int addr_le
 		goto out_release;
 	}
 
+	if (sk->sk_state == TCP_SYN_SENT) {
+		err = -EALREADY;
+		goto out_release;
+	}
+
 	sk->sk_state   = TCP_CLOSE;
 	sock->state = SS_UNCONNECTED;
 
@@ -823,6 +829,7 @@ static int rose_connect(struct socket *sock, struct sockaddr *uaddr, int addr_le
 	rose->lci = rose_new_lci(rose->neighbour);
 	if (!rose->lci) {
 		err = -ENETUNREACH;
+		rose_neigh_put(rose->neighbour);
 		goto out_release;
 	}
 
@@ -834,12 +841,14 @@ static int rose_connect(struct socket *sock, struct sockaddr *uaddr, int addr_le
 		dev = rose_dev_first();
 		if (!dev) {
 			err = -ENETUNREACH;
+			rose_neigh_put(rose->neighbour);
 			goto out_release;
 		}
 
 		user = ax25_findbyuid(current_euid());
 		if (!user) {
 			err = -EINVAL;
+			rose_neigh_put(rose->neighbour);
 			dev_put(dev);
 			goto out_release;
 		}
@@ -873,8 +882,6 @@ static int rose_connect(struct socket *sock, struct sockaddr *uaddr, int addr_le
 	sk->sk_state     = TCP_SYN_SENT;
 
 	rose->state = ROSE_STATE_1;
-
-	rose->neighbour->use++;
 
 	rose_write_internal(sk, ROSE_CALL_REQUEST);
 	rose_start_heartbeat(sk);
@@ -1077,7 +1084,7 @@ int rose_rx_call_request(struct sk_buff *skb, struct net_device *dev, struct ros
 			     GFP_ATOMIC);
 	make_rose->facilities    = facilities;
 
-	make_rose->neighbour->use++;
+	rose_neigh_hold(make_rose->neighbour);
 
 	if (rose_sk(sk)->defer) {
 		make_rose->state = ROSE_STATE_5;
@@ -1569,8 +1576,7 @@ static int __init rose_proto_init(void)
 
 	rose_callsign = null_ax25_address;
 
-	dev_rose = kcalloc(rose_ndevs, sizeof(struct net_device *),
-			   GFP_KERNEL);
+	dev_rose = kzalloc_objs(struct net_device *, rose_ndevs);
 	if (dev_rose == NULL) {
 		printk(KERN_ERR "ROSE: rose_proto_init - unable to allocate device structure\n");
 		rc = -ENOMEM;

@@ -814,7 +814,7 @@ static int enetc_init_port_rss_memory(struct enetc_si *si)
 	if (!num_rss)
 		return 0;
 
-	rss_table = kcalloc(num_rss, sizeof(*rss_table), GFP_KERNEL);
+	rss_table = kzalloc_objs(*rss_table, num_rss);
 	if (!rss_table)
 		return -ENOMEM;
 
@@ -829,11 +829,17 @@ static int enetc_pf_register_with_ierb(struct pci_dev *pdev)
 {
 	struct platform_device *ierb_pdev;
 	struct device_node *ierb_node;
+	int ret;
 
 	ierb_node = of_find_compatible_node(NULL, NULL,
 					    "fsl,ls1028a-enetc-ierb");
-	if (!ierb_node || !of_device_is_available(ierb_node))
+	if (!ierb_node)
 		return -ENODEV;
+
+	if (!of_device_is_available(ierb_node)) {
+		of_node_put(ierb_node);
+		return -ENODEV;
+	}
 
 	ierb_pdev = of_find_device_by_node(ierb_node);
 	of_node_put(ierb_node);
@@ -841,7 +847,11 @@ static int enetc_pf_register_with_ierb(struct pci_dev *pdev)
 	if (!ierb_pdev)
 		return -EPROBE_DEFER;
 
-	return enetc_ierb_register_pf(ierb_pdev, pdev);
+	ret = enetc_ierb_register_pf(ierb_pdev, pdev);
+
+	put_device(&ierb_pdev->dev);
+
+	return ret;
 }
 
 static const struct enetc_si_ops enetc_psi_ops = {
@@ -948,8 +958,8 @@ static int enetc_pf_probe(struct pci_dev *pdev,
 
 	pf->total_vfs = pci_sriov_get_totalvfs(pdev);
 	if (pf->total_vfs) {
-		pf->vf_state = kcalloc(pf->total_vfs, sizeof(struct enetc_vf_state),
-				       GFP_KERNEL);
+		pf->vf_state = kzalloc_objs(struct enetc_vf_state,
+					    pf->total_vfs);
 		if (!pf->vf_state)
 			goto err_alloc_vf_state;
 	}

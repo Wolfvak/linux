@@ -646,19 +646,19 @@ filelayout_decode_layout(struct pnfs_layout_hdr *flo,
 {
 	struct xdr_stream stream;
 	struct xdr_buf buf;
-	struct page *scratch;
+	struct folio *scratch;
 	__be32 *p;
 	uint32_t nfl_util;
 	int i;
 
 	dprintk("%s: set_layout_map Begin\n", __func__);
 
-	scratch = alloc_page(gfp_flags);
+	scratch = folio_alloc(gfp_flags, 0);
 	if (!scratch)
 		return -ENOMEM;
 
 	xdr_init_decode_pages(&stream, &buf, lgr->layoutp->pages, lgr->layoutp->len);
-	xdr_set_scratch_page(&stream, scratch);
+	xdr_set_scratch_folio(&stream, scratch);
 
 	/* 20 = ufl_util (4), first_stripe_index (4), pattern_offset (8),
 	 * num_fh (4) */
@@ -694,15 +694,15 @@ filelayout_decode_layout(struct pnfs_layout_hdr *flo,
 		goto out_err;
 
 	if (fl->num_fh > 0) {
-		fl->fh_array = kcalloc(fl->num_fh, sizeof(fl->fh_array[0]),
-				       gfp_flags);
+		fl->fh_array = kzalloc_objs(fl->fh_array[0], fl->num_fh,
+					    gfp_flags);
 		if (!fl->fh_array)
 			goto out_err;
 	}
 
 	for (i = 0; i < fl->num_fh; i++) {
 		/* Do we want to use a mempool here? */
-		fl->fh_array[i] = kmalloc(sizeof(struct nfs_fh), gfp_flags);
+		fl->fh_array[i] = kmalloc_obj(struct nfs_fh, gfp_flags);
 		if (!fl->fh_array[i])
 			goto out_err;
 
@@ -724,11 +724,11 @@ filelayout_decode_layout(struct pnfs_layout_hdr *flo,
 			fl->fh_array[i]->size);
 	}
 
-	__free_page(scratch);
+	folio_put(scratch);
 	return 0;
 
 out_err:
-	__free_page(scratch);
+	folio_put(scratch);
 	return -EIO;
 }
 
@@ -763,7 +763,7 @@ filelayout_alloc_lseg(struct pnfs_layout_hdr *layoutid,
 	int rc;
 
 	dprintk("--> %s\n", __func__);
-	fl = kzalloc(sizeof(*fl), gfp_flags);
+	fl = kzalloc_obj(*fl, gfp_flags);
 	if (!fl)
 		return NULL;
 
@@ -1049,7 +1049,7 @@ filelayout_alloc_layout_hdr(struct inode *inode, gfp_t gfp_flags)
 {
 	struct nfs4_filelayout *flo;
 
-	flo = kzalloc(sizeof(*flo), gfp_flags);
+	flo = kzalloc_obj(*flo, gfp_flags);
 	if (flo == NULL)
 		return NULL;
 	pnfs_init_ds_commit_info(&flo->commit_info);

@@ -890,7 +890,7 @@ static void carl9170_stat_work(struct work_struct *work)
 		round_jiffies(msecs_to_jiffies(CARL9170_STAT_WORK)));
 }
 
-static int carl9170_op_config(struct ieee80211_hw *hw, u32 changed)
+static int carl9170_op_config(struct ieee80211_hw *hw, int radio_idx, u32 changed)
 {
 	struct ar9170 *ar = hw->priv;
 	int err = 0;
@@ -1412,8 +1412,7 @@ static int carl9170_op_ampdu_action(struct ieee80211_hw *hw,
 		if (!sta_info->ht_sta)
 			return -EOPNOTSUPP;
 
-		tid_info = kzalloc(sizeof(struct carl9170_sta_tid),
-				   GFP_KERNEL);
+		tid_info = kzalloc_obj(struct carl9170_sta_tid);
 		if (!tid_info)
 			return -ENOMEM;
 

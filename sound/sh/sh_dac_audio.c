@@ -224,7 +224,7 @@ static int snd_sh_dac_pcm(struct snd_sh_dac *chip, int device)
 		return err;
 
 	pcm->private_data = chip;
-	strcpy(pcm->name, "SH_DAC PCM");
+	strscpy(pcm->name, "SH_DAC PCM");
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &snd_sh_dac_pcm_ops);
 
 	/* buffer size=48K */
@@ -306,7 +306,7 @@ static int snd_sh_dac_create(struct snd_card *card,
 
 	*rchip = NULL;
 
-	chip = kzalloc(sizeof(*chip), GFP_KERNEL);
+	chip = kzalloc_obj(*chip);
 	if (chip == NULL)
 		return -ENOMEM;
 
@@ -358,8 +358,8 @@ static int snd_sh_dac_probe(struct platform_device *devptr)
 	if (err < 0)
 		goto probe_error;
 
-	strcpy(card->driver, "snd_sh_dac");
-	strcpy(card->shortname, "SuperH DAC audio driver");
+	strscpy(card->driver, "snd_sh_dac");
+	strscpy(card->shortname, "SuperH DAC audio driver");
 	dev_info(&devptr->dev, "%s %s\n", card->longname, card->shortname);
 
 	err = snd_card_register(card);

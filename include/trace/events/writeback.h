@@ -42,7 +42,6 @@
 	EM( WB_REASON_VMSCAN,			"vmscan")		\
 	EM( WB_REASON_SYNC,			"sync")			\
 	EM( WB_REASON_PERIODIC,			"periodic")		\
-	EM( WB_REASON_LAPTOP_TIMER,		"laptop_timer")		\
 	EM( WB_REASON_FS_FREE_SPACE,		"fs_free_space")	\
 	EM( WB_REASON_FORKER_THREAD,		"forker_thread")	\
 	EMe(WB_REASON_FOREIGN_FLUSH,		"foreign_flush")
@@ -120,7 +119,7 @@ DECLARE_EVENT_CLASS(writeback_dirty_inode_template,
 		/* may be called for files on pseudo FSes w/ unregistered bdi */
 		strscpy_pad(__entry->name, bdi_dev_name(bdi), 32);
 		__entry->ino		= inode->i_ino;
-		__entry->state		= inode->i_state;
+		__entry->state		= inode_state_read_once(inode);
 		__entry->flags		= flags;
 	),
 
@@ -210,6 +209,35 @@ TRACE_EVENT(inode_foreign_history,
 		(unsigned long)__entry->ino,
 		(unsigned long)__entry->cgroup_ino,
 		__entry->history
+	)
+);
+
+TRACE_EVENT(inode_switch_wbs_queue,
+
+	TP_PROTO(struct bdi_writeback *old_wb, struct bdi_writeback *new_wb,
+		 unsigned int count),
+
+	TP_ARGS(old_wb, new_wb, count),
+
+	TP_STRUCT__entry(
+		__array(char,		name, 32)
+		__field(ino_t,		old_cgroup_ino)
+		__field(ino_t,		new_cgroup_ino)
+		__field(unsigned int,	count)
+	),
+
+	TP_fast_assign(
+		strscpy_pad(__entry->name, bdi_dev_name(old_wb->bdi), 32);
+		__entry->old_cgroup_ino	= __trace_wb_assign_cgroup(old_wb);
+		__entry->new_cgroup_ino	= __trace_wb_assign_cgroup(new_wb);
+		__entry->count		= count;
+	),
+
+	TP_printk("bdi %s: old_cgroup_ino=%lu new_cgroup_ino=%lu count=%u",
+		__entry->name,
+		(unsigned long)__entry->old_cgroup_ino,
+		(unsigned long)__entry->new_cgroup_ino,
+		__entry->count
 	)
 );
 
@@ -459,7 +487,6 @@ DECLARE_EVENT_CLASS(wbc_class,
 		__field(int, sync_mode)
 		__field(int, for_kupdate)
 		__field(int, for_background)
-		__field(int, for_reclaim)
 		__field(int, range_cyclic)
 		__field(long, range_start)
 		__field(long, range_end)
@@ -473,23 +500,20 @@ DECLARE_EVENT_CLASS(wbc_class,
 		__entry->sync_mode	= wbc->sync_mode;
 		__entry->for_kupdate	= wbc->for_kupdate;
 		__entry->for_background	= wbc->for_background;
-		__entry->for_reclaim	= wbc->for_reclaim;
 		__entry->range_cyclic	= wbc->range_cyclic;
 		__entry->range_start	= (long)wbc->range_start;
 		__entry->range_end	= (long)wbc->range_end;
 		__entry->cgroup_ino	= __trace_wbc_assign_cgroup(wbc);
 	),
 
-	TP_printk("bdi %s: towrt=%ld skip=%ld mode=%d kupd=%d "
-		"bgrd=%d reclm=%d cyclic=%d "
-		"start=0x%lx end=0x%lx cgroup_ino=%lu",
+	TP_printk("bdi %s: towrt=%ld skip=%ld mode=%d kupd=%d bgrd=%d "
+		"cyclic=%d start=0x%lx end=0x%lx cgroup_ino=%lu",
 		__entry->name,
 		__entry->nr_to_write,
 		__entry->pages_skipped,
 		__entry->sync_mode,
 		__entry->for_kupdate,
 		__entry->for_background,
-		__entry->for_reclaim,
 		__entry->range_cyclic,
 		__entry->range_start,
 		__entry->range_end,
@@ -723,7 +747,7 @@ TRACE_EVENT(writeback_sb_inodes_requeue,
 		strscpy_pad(__entry->name,
 			    bdi_dev_name(inode_to_bdi(inode)), 32);
 		__entry->ino		= inode->i_ino;
-		__entry->state		= inode->i_state;
+		__entry->state		= inode_state_read_once(inode);
 		__entry->dirtied_when	= inode->dirtied_when;
 		__entry->cgroup_ino	= __trace_wb_assign_cgroup(inode_to_wb(inode));
 	),
@@ -762,7 +786,7 @@ DECLARE_EVENT_CLASS(writeback_single_inode_template,
 		strscpy_pad(__entry->name,
 			    bdi_dev_name(inode_to_bdi(inode)), 32);
 		__entry->ino		= inode->i_ino;
-		__entry->state		= inode->i_state;
+		__entry->state		= inode_state_read_once(inode);
 		__entry->dirtied_when	= inode->dirtied_when;
 		__entry->writeback_index = inode->i_mapping->writeback_index;
 		__entry->nr_to_write	= nr_to_write;
@@ -814,7 +838,7 @@ DECLARE_EVENT_CLASS(writeback_inode_template,
 	TP_fast_assign(
 		__entry->dev	= inode->i_sb->s_dev;
 		__entry->ino	= inode->i_ino;
-		__entry->state	= inode->i_state;
+		__entry->state	= inode_state_read_once(inode);
 		__entry->mode	= inode->i_mode;
 		__entry->dirtied_when = inode->dirtied_when;
 	),
@@ -826,12 +850,6 @@ DECLARE_EVENT_CLASS(writeback_inode_template,
 );
 
 DEFINE_EVENT(writeback_inode_template, writeback_lazytime,
-	TP_PROTO(struct inode *inode),
-
-	TP_ARGS(inode)
-);
-
-DEFINE_EVENT(writeback_inode_template, writeback_lazytime_iput,
 	TP_PROTO(struct inode *inode),
 
 	TP_ARGS(inode)

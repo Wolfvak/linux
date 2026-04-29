@@ -153,17 +153,10 @@ int drm_mode_addfb_ioctl(struct drm_device *dev,
 }
 
 static int framebuffer_check(struct drm_device *dev,
+			     const struct drm_format_info *info,
 			     const struct drm_mode_fb_cmd2 *r)
 {
-	const struct drm_format_info *info;
 	int i;
-
-	/* check if the format is supported at all */
-	if (!__drm_format_info(r->pixel_format)) {
-		drm_dbg_kms(dev, "bad framebuffer format %p4cc\n",
-			    &r->pixel_format);
-		return -EINVAL;
-	}
 
 	if (r->width == 0) {
 		drm_dbg_kms(dev, "bad framebuffer width %u\n", r->width);
@@ -174,9 +167,6 @@ static int framebuffer_check(struct drm_device *dev,
 		drm_dbg_kms(dev, "bad framebuffer height %u\n", r->height);
 		return -EINVAL;
 	}
-
-	/* now let the driver pick its own format info */
-	info = drm_get_format_info(dev, r);
 
 	for (i = 0; i < info->num_planes; i++) {
 		unsigned int width = drm_format_info_plane_width(info, r->width, i);
@@ -272,6 +262,7 @@ drm_internal_framebuffer_create(struct drm_device *dev,
 				struct drm_file *file_priv)
 {
 	struct drm_mode_config *config = &dev->mode_config;
+	const struct drm_format_info *info;
 	struct drm_framebuffer *fb;
 	int ret;
 
@@ -297,11 +288,21 @@ drm_internal_framebuffer_create(struct drm_device *dev,
 		return ERR_PTR(-EINVAL);
 	}
 
-	ret = framebuffer_check(dev, r);
+	/* check if the format is supported at all */
+	if (!__drm_format_info(r->pixel_format)) {
+		drm_dbg_kms(dev, "bad framebuffer format %p4cc\n",
+			    &r->pixel_format);
+		return ERR_PTR(-EINVAL);
+	}
+
+	/* now let the driver pick its own format info */
+	info = drm_get_format_info(dev, r->pixel_format, r->modifier[0]);
+
+	ret = framebuffer_check(dev, info, r);
 	if (ret)
 		return ERR_PTR(ret);
 
-	fb = dev->mode_config.funcs->fb_create(dev, file_priv, r);
+	fb = dev->mode_config.funcs->fb_create(dev, file_priv, info, r);
 	if (IS_ERR(fb)) {
 		drm_dbg_kms(dev, "could not create framebuffer\n");
 		return fb;
@@ -746,7 +747,7 @@ int drm_mode_dirtyfb_ioctl(struct drm_device *dev,
 			ret = -EINVAL;
 			goto out_err1;
 		}
-		clips = kcalloc(num_clips, sizeof(*clips), GFP_KERNEL);
+		clips = kzalloc_objs(*clips, num_clips);
 		if (!clips) {
 			ret = -ENOMEM;
 			goto out_err1;
@@ -1047,7 +1048,7 @@ retry:
 				    plane_state->crtc->base.id,
 				    plane_state->crtc->name, fb->base.id);
 
-			crtc_state = drm_atomic_get_existing_crtc_state(state, plane_state->crtc);
+			crtc_state = drm_atomic_get_new_crtc_state(state, plane_state->crtc);
 
 			ret = drm_atomic_add_affected_connectors(state, plane_state->crtc);
 			if (ret)

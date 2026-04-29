@@ -118,7 +118,7 @@
  * VMAP'd stacks are allocated at page granularity, so we must ensure that such
  * stacks are a multiple of page size.
  */
-#if defined(CONFIG_VMAP_STACK) && (MIN_THREAD_SHIFT < PAGE_SHIFT)
+#if (MIN_THREAD_SHIFT < PAGE_SHIFT)
 #define THREAD_SHIFT		PAGE_SHIFT
 #else
 #define THREAD_SHIFT		MIN_THREAD_SHIFT
@@ -135,11 +135,7 @@
  * checking sp & (1 << THREAD_SHIFT), which we can do cheaply in the entry
  * assembly.
  */
-#ifdef CONFIG_VMAP_STACK
 #define THREAD_ALIGN		(2 * THREAD_SIZE)
-#else
-#define THREAD_ALIGN		THREAD_SIZE
-#endif
 
 #define IRQ_STACK_SIZE		THREAD_SIZE
 
@@ -179,19 +175,24 @@
 #define MT_DEVICE_nGnRE		4
 
 /*
- * Memory types for Stage-2 translation
+ * Memory types for Stage-2 translation when HCR_EL2.FWB=0. See R_HMNDG,
+ * R_TNHFM, R_GQFSF and I_MCQKW for the details on how these attributes get
+ * combined with Stage-1.
  */
 #define MT_S2_NORMAL		0xf
 #define MT_S2_NORMAL_NC		0x5
 #define MT_S2_DEVICE_nGnRE	0x1
+#define MT_S2_AS_S1		MT_S2_NORMAL
 
 /*
- * Memory types for Stage-2 translation when ID_AA64MMFR2_EL1.FWB is 0001
- * Stage-2 enforces Normal-WB and Device-nGnRE
+ * Memory types for Stage-2 translation when HCR_EL2.FWB=1. Stage-2 enforces
+ * Normal-WB and Device-nGnRE, unless we actively say that S1 wins. See
+ * R_VRJSW and R_RHWZM for details.
  */
 #define MT_S2_FWB_NORMAL	6
 #define MT_S2_FWB_NORMAL_NC	5
 #define MT_S2_FWB_DEVICE_nGnRE	1
+#define MT_S2_FWB_AS_S1		7
 
 #ifdef CONFIG_ARM64_4K_PAGES
 #define IOREMAP_MAX_ORDER	(PUD_SHIFT)
@@ -211,7 +212,7 @@
  */
 #define TRAMP_SWAPPER_OFFSET	(2 * PAGE_SIZE)
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/bitops.h>
 #include <linux/compiler.h>
@@ -312,6 +313,7 @@ static inline const void *__tag_set(const void *addr, u8 tag)
 #define arch_enable_tag_checks_sync()		mte_enable_kernel_sync()
 #define arch_enable_tag_checks_async()		mte_enable_kernel_async()
 #define arch_enable_tag_checks_asymm()		mte_enable_kernel_asymm()
+#define arch_enable_tag_checks_write_only()	mte_enable_kernel_store_only()
 #define arch_suppress_tag_checks_start()	mte_enable_tco()
 #define arch_suppress_tag_checks_stop()		mte_disable_tco()
 #define arch_force_async_tag_fault()		mte_check_tfsr_exit()
@@ -395,7 +397,6 @@ static inline unsigned long virt_to_pfn(const void *kaddr)
  *  virt_to_page(x)	convert a _valid_ virtual address to struct page *
  *  virt_addr_valid(x)	indicates whether a virtual address is valid
  */
-#define ARCH_PFN_OFFSET		((unsigned long)PHYS_PFN_OFFSET)
 
 #if defined(CONFIG_DEBUG_VIRTUAL)
 #define page_to_virt(x)	({						\
@@ -425,7 +426,7 @@ static inline unsigned long virt_to_pfn(const void *kaddr)
 })
 
 void dump_mem_limit(void);
-#endif /* !ASSEMBLY */
+#endif /* !__ASSEMBLER__ */
 
 /*
  * Given that the GIC architecture permits ITS implementations that can only be

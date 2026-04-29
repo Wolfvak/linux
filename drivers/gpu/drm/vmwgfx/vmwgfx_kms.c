@@ -224,7 +224,7 @@ void vmw_du_crtc_reset(struct drm_crtc *crtc)
 		kfree(vmw_crtc_state_to_vcs(crtc->state));
 	}
 
-	vcs = kzalloc(sizeof(*vcs), GFP_KERNEL);
+	vcs = kzalloc_obj(*vcs);
 
 	if (!vcs) {
 		DRM_ERROR("Cannot allocate vmw_crtc_state\n");
@@ -300,7 +300,7 @@ void vmw_du_plane_reset(struct drm_plane *plane)
 	if (plane->state)
 		vmw_du_plane_destroy_state(plane, plane->state);
 
-	vps = kzalloc(sizeof(*vps), GFP_KERNEL);
+	vps = kzalloc_obj(*vps);
 
 	if (!vps) {
 		DRM_ERROR("Cannot allocate vmw_plane_state\n");
@@ -382,7 +382,7 @@ void vmw_du_connector_reset(struct drm_connector *connector)
 		kfree(vmw_connector_state_to_vcs(connector->state));
 	}
 
-	vcs = kzalloc(sizeof(*vcs), GFP_KERNEL);
+	vcs = kzalloc_obj(*vcs);
 
 	if (!vcs) {
 		DRM_ERROR("Cannot allocate vmw_connector_state\n");
@@ -500,6 +500,7 @@ static const struct drm_framebuffer_funcs vmw_framebuffer_surface_funcs = {
 static int vmw_kms_new_framebuffer_surface(struct vmw_private *dev_priv,
 					   struct vmw_user_object *uo,
 					   struct vmw_framebuffer **out,
+					   const struct drm_format_info *info,
 					   const struct drm_mode_fb_cmd2
 					   *mode_cmd)
 
@@ -542,15 +543,18 @@ static int vmw_kms_new_framebuffer_surface(struct vmw_private *dev_priv,
 		return -EINVAL;
 	}
 
-	vfbs = kzalloc(sizeof(*vfbs), GFP_KERNEL);
+	vfbs = kzalloc_obj(*vfbs);
 	if (!vfbs) {
 		ret = -ENOMEM;
 		goto out_err1;
 	}
 
-	drm_helper_mode_fill_fb_struct(dev, &vfbs->base.base, mode_cmd);
+	drm_helper_mode_fill_fb_struct(dev, &vfbs->base.base, info, mode_cmd);
 	memcpy(&vfbs->uo, uo, sizeof(vfbs->uo));
 	vmw_user_object_ref(&vfbs->uo);
+
+	if (vfbs->uo.buffer)
+		vfbs->base.base.obj[0] = &vfbs->uo.buffer->tbo.base;
 
 	*out = &vfbs->base;
 
@@ -602,6 +606,7 @@ static const struct drm_framebuffer_funcs vmw_framebuffer_bo_funcs = {
 static int vmw_kms_new_framebuffer_bo(struct vmw_private *dev_priv,
 				      struct vmw_bo *bo,
 				      struct vmw_framebuffer **out,
+				      const struct drm_format_info *info,
 				      const struct drm_mode_fb_cmd2
 				      *mode_cmd)
 
@@ -627,14 +632,14 @@ static int vmw_kms_new_framebuffer_bo(struct vmw_private *dev_priv,
 		return -EINVAL;
 	}
 
-	vfbd = kzalloc(sizeof(*vfbd), GFP_KERNEL);
+	vfbd = kzalloc_obj(*vfbd);
 	if (!vfbd) {
 		ret = -ENOMEM;
 		goto out_err1;
 	}
 
 	vfbd->base.base.obj[0] = &bo->tbo.base;
-	drm_helper_mode_fill_fb_struct(dev, &vfbd->base.base, mode_cmd);
+	drm_helper_mode_fill_fb_struct(dev, &vfbd->base.base, info, mode_cmd);
 	vfbd->base.bo = true;
 	vfbd->buffer = vmw_bo_reference(bo);
 	*out = &vfbd->base;
@@ -679,11 +684,13 @@ vmw_kms_srf_ok(struct vmw_private *dev_priv, uint32_t width, uint32_t height)
  * @dev_priv: Pointer to device private struct.
  * @uo: Pointer to user object to wrap the kms framebuffer around.
  * Either the buffer or surface inside the user object must be NULL.
+ * @info: pixel format information.
  * @mode_cmd: Frame-buffer metadata.
  */
 struct vmw_framebuffer *
 vmw_kms_new_framebuffer(struct vmw_private *dev_priv,
 			struct vmw_user_object *uo,
+			const struct drm_format_info *info,
 			const struct drm_mode_fb_cmd2 *mode_cmd)
 {
 	struct vmw_framebuffer *vfb = NULL;
@@ -692,10 +699,10 @@ vmw_kms_new_framebuffer(struct vmw_private *dev_priv,
 	/* Create the new framebuffer depending one what we have */
 	if (vmw_user_object_surface(uo)) {
 		ret = vmw_kms_new_framebuffer_surface(dev_priv, uo, &vfb,
-						      mode_cmd);
+						      info, mode_cmd);
 	} else if (uo->buffer) {
 		ret = vmw_kms_new_framebuffer_bo(dev_priv, uo->buffer, &vfb,
-						 mode_cmd);
+						 info, mode_cmd);
 	} else {
 		BUG();
 	}
@@ -712,6 +719,7 @@ vmw_kms_new_framebuffer(struct vmw_private *dev_priv,
 
 static struct drm_framebuffer *vmw_kms_fb_create(struct drm_device *dev,
 						 struct drm_file *file_priv,
+						 const struct drm_format_info *info,
 						 const struct drm_mode_fb_cmd2 *mode_cmd)
 {
 	struct vmw_private *dev_priv = vmw_priv(dev);
@@ -741,7 +749,7 @@ static struct drm_framebuffer *vmw_kms_fb_create(struct drm_device *dev,
 	}
 
 
-	vfb = vmw_kms_new_framebuffer(dev_priv, &uo, mode_cmd);
+	vfb = vmw_kms_new_framebuffer(dev_priv, &uo, info, mode_cmd);
 	if (IS_ERR(vfb)) {
 		ret = PTR_ERR(vfb);
 		goto err_out;
@@ -758,13 +766,16 @@ err_out:
 		return ERR_PTR(ret);
 	}
 
-	ttm_bo_reserve(&bo->tbo, false, false, NULL);
-	ret = vmw_bo_dirty_add(bo);
-	if (!ret && surface && surface->res.func->dirty_alloc) {
-		surface->res.coherent = true;
-		ret = surface->res.func->dirty_alloc(&surface->res);
+	if (bo) {
+		ttm_bo_reserve(&bo->tbo, false, false, NULL);
+		ret = vmw_bo_dirty_add(bo);
+		if (!ret && surface && surface->res.func->dirty_alloc) {
+			surface->res.coherent = true;
+			if (surface->res.dirty == NULL)
+				ret = surface->res.func->dirty_alloc(&surface->res);
+		}
+		ttm_bo_unreserve(&bo->tbo);
 	}
-	ttm_bo_unreserve(&bo->tbo);
 
 	return &vfb->base;
 }
@@ -938,8 +949,7 @@ static int vmw_kms_check_topology(struct drm_device *dev,
 	uint32_t i;
 	int ret = 0;
 
-	rects = kcalloc(dev->mode_config.num_crtc, sizeof(struct drm_rect),
-			GFP_KERNEL);
+	rects = kzalloc_objs(struct drm_rect, dev->mode_config.num_crtc);
 	if (!rects)
 		return -ENOMEM;
 
@@ -1412,8 +1422,7 @@ int vmw_kms_update_layout_ioctl(struct drm_device *dev, void *data,
 	}
 
 	rects_size = arg->num_outputs * sizeof(struct drm_vmw_rect);
-	rects = kcalloc(arg->num_outputs, sizeof(struct drm_vmw_rect),
-			GFP_KERNEL);
+	rects = kzalloc_objs(struct drm_vmw_rect, arg->num_outputs);
 	if (unlikely(!rects))
 		return -ENOMEM;
 

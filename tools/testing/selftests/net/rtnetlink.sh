@@ -8,6 +8,7 @@ ALL_TESTS="
 	kci_test_polrouting
 	kci_test_route_get
 	kci_test_addrlft
+	kci_test_addrlft_route_cleanup
 	kci_test_promote_secondaries
 	kci_test_tc
 	kci_test_gre
@@ -21,15 +22,18 @@ ALL_TESTS="
 	kci_test_vrf
 	kci_test_encap
 	kci_test_macsec
+	kci_test_macsec_vlan
 	kci_test_ipsec
 	kci_test_ipsec_offload
 	kci_test_fdb_get
 	kci_test_fdb_del
 	kci_test_neigh_get
+	kci_test_neigh_update
 	kci_test_bridge_parent_id
 	kci_test_address_proto
 	kci_test_enslave_bonding
 	kci_test_mngtmpaddr
+	kci_test_operstate
 "
 
 devdummy="test-dummy0"
@@ -291,6 +295,17 @@ kci_test_route_get()
 	end_test "PASS: route get"
 }
 
+check_addr_not_exist()
+{
+	dev=$1
+	addr=$2
+	if ip addr show dev $dev | grep -q $addr; then
+		return 1
+	else
+		return 0
+	fi
+}
+
 kci_test_addrlft()
 {
 	for i in $(seq 10 100) ;do
@@ -298,9 +313,10 @@ kci_test_addrlft()
 		run_cmd ip addr add 10.23.11.$i/32 dev "$devdummy" preferred_lft $lft valid_lft $((lft+1))
 	done
 
-	sleep 5
-	run_cmd_grep_fail "10.23.11." ip addr show dev "$devdummy"
-	if [ $? -eq 0 ]; then
+	slowwait 5 check_addr_not_exist "$devdummy" "10.23.11."
+	if [ $? -eq 1 ]; then
+		# troubleshoot the reason for our failure
+		run_cmd ip addr show dev "$devdummy"
 		check_err 1
 		end_test "FAIL: preferred_lft addresses remaining"
 		return
@@ -309,8 +325,32 @@ kci_test_addrlft()
 	end_test "PASS: preferred_lft addresses have expired"
 }
 
+kci_test_addrlft_route_cleanup()
+{
+	local ret=0
+	local test_addr="2001:db8:99::1/64"
+	local test_prefix="2001:db8:99::/64"
+
+	run_cmd ip -6 addr add $test_addr dev "$devdummy" valid_lft 300 preferred_lft 300
+	run_cmd_grep "$test_prefix proto kernel" ip -6 route show dev "$devdummy"
+	run_cmd ip -6 addr del $test_addr dev "$devdummy"
+	run_cmd_grep_fail "$test_prefix" ip -6 route show dev "$devdummy"
+
+	if [ $ret -ne 0 ]; then
+		end_test "FAIL: route not cleaned up when address with valid_lft deleted"
+		return 1
+	fi
+
+	end_test "PASS: route cleaned up when address with valid_lft deleted"
+}
+
 kci_test_promote_secondaries()
 {
+	run_cmd ifconfig "$devdummy"
+	if [ $ret -ne 0 ]; then
+		end_test "SKIP: ifconfig not installed"
+		return $ksft_skip
+	fi
 	promote=$(sysctl -n net.ipv4.conf.$devdummy.promote_secondaries)
 
 	sysctl -q net.ipv4.conf.$devdummy.promote_secondaries=1
@@ -507,7 +547,7 @@ kci_test_encap_fou()
 	run_cmd_fail ip -netns "$testns" fou del port 9999
 	run_cmd ip -netns "$testns" fou del port 7777
 	if [ $ret -ne 0 ]; then
-		end_test "FAIL: fou"s
+		end_test "FAIL: fou"
 		return 1
 	fi
 
@@ -559,6 +599,41 @@ kci_test_macsec()
 	fi
 
 	end_test "PASS: macsec"
+}
+
+# Test __dev_set_rx_mode call from dev_uc_add under addr_list_lock spinlock.
+# Make sure __dev_set_promiscuity is not grabbing (sleeping) netdev instance
+# lock.
+# https://lore.kernel.org/netdev/2aff4342b0f5b1539c02ffd8df4c7e58dd9746e7.camel@nvidia.com/
+kci_test_macsec_vlan()
+{
+	msname="test_macsec1"
+	vlanname="test_vlan1"
+	local ret=0
+	run_cmd_grep "^Usage: ip macsec" ip macsec help
+	if [ $? -ne 0 ]; then
+		end_test "SKIP: macsec: iproute2 too old"
+		return $ksft_skip
+	fi
+	run_cmd ip link add link "$devdummy" "$msname" type macsec port 42 encrypt on
+	if [ $ret -ne 0 ];then
+		end_test "FAIL: can't add macsec interface, skipping test"
+		return 1
+	fi
+
+	run_cmd ip link set dev "$msname" up
+	ip link add link "$msname" name "$vlanname" type vlan id 1
+	ip link set dev "$vlanname" address 00:11:22:33:44:88
+	ip link set dev "$vlanname" up
+	run_cmd ip link del dev "$vlanname"
+	run_cmd ip link del dev "$msname"
+
+	if [ $ret -ne 0 ];then
+		end_test "FAIL: macsec_vlan"
+		return 1
+	fi
+
+	end_test "PASS: macsec_vlan"
 }
 
 #-------------------------------------------------------------------
@@ -673,6 +748,11 @@ kci_test_ipsec_offload()
 	sysfsf=$sysfsd/ipsec
 	sysfsnet=/sys/bus/netdevsim/devices/netdevsim0/net/
 	probed=false
+	esp4_offload_probed_default=false
+
+	if lsmod | grep -q esp4_offload; then
+		esp4_offload_probed_default=true
+	fi
 
 	if ! mount | grep -q debugfs; then
 		mount -t debugfs none /sys/kernel/debug/ &> /dev/null
@@ -766,6 +846,7 @@ EOF
 	fi
 
 	# clean up any leftovers
+	! "$esp4_offload_probed_default" && lsmod | grep -q esp4_offload && rmmod esp4_offload
 	echo 0 > /sys/bus/netdevsim/del_device
 	$probed && rmmod netdevsim
 
@@ -1080,6 +1161,60 @@ kci_test_neigh_get()
 	end_test "PASS: neigh get"
 }
 
+kci_test_neigh_update()
+{
+	dstip=10.0.2.4
+	dstmac=de:ad:be:ef:13:37
+	local ret=0
+
+	for proxy in "" "proxy" ; do
+		# add a neighbour entry without any flags
+		run_cmd ip neigh add $proxy $dstip dev "$devdummy" lladdr $dstmac nud permanent
+		run_cmd_grep $dstip ip neigh show $proxy
+		run_cmd_grep_fail "$dstip dev $devdummy .*\(managed\|use\|router\|extern\)" ip neigh show $proxy
+
+		# set the extern_learn flag, but no other
+		run_cmd ip neigh change $proxy $dstip dev "$devdummy" extern_learn
+		run_cmd_grep "$dstip dev $devdummy .* extern_learn" ip neigh show $proxy
+		run_cmd_grep_fail "$dstip dev $devdummy .* \(managed\|use\|router\)" ip neigh show $proxy
+
+		# flags are reset when not provided
+		run_cmd ip neigh change $proxy $dstip dev "$devdummy"
+		run_cmd_grep $dstip ip neigh show $proxy
+		run_cmd_grep_fail "$dstip dev $devdummy .* extern_learn" ip neigh show $proxy
+
+		# add a protocol
+		run_cmd ip neigh change $proxy $dstip dev "$devdummy" protocol boot
+		run_cmd_grep "$dstip dev $devdummy .* proto boot" ip neigh show $proxy
+
+		# protocol is retained when not provided
+		run_cmd ip neigh change $proxy $dstip dev "$devdummy"
+		run_cmd_grep "$dstip dev $devdummy .* proto boot" ip neigh show $proxy
+
+		# change protocol
+		run_cmd ip neigh change $proxy $dstip dev "$devdummy" protocol static
+		run_cmd_grep "$dstip dev $devdummy .* proto static" ip neigh show $proxy
+
+		# also check an extended flag for non-proxy neighs
+		if [ "$proxy" = "" ]; then
+			run_cmd ip neigh change $proxy $dstip dev "$devdummy" managed
+			run_cmd_grep "$dstip dev $devdummy managed" ip neigh show $proxy
+
+			run_cmd ip neigh change $proxy $dstip dev "$devdummy" lladdr $dstmac
+			run_cmd_grep_fail "$dstip dev $devdummy managed" ip neigh show $proxy
+		fi
+
+		run_cmd ip neigh del $proxy $dstip dev "$devdummy"
+	done
+
+	if [ $ret -ne 0 ];then
+		end_test "FAIL: neigh update"
+		return 1
+	fi
+
+	end_test "PASS: neigh update"
+}
+
 kci_test_bridge_parent_id()
 {
 	local ret=0
@@ -1147,6 +1282,12 @@ do_test_address_proto()
 	local count
 	local ret=0
 	local err
+
+	run_cmd_grep 'proto' ip address help
+	if [ $? -ne 0 ];then
+		end_test "SKIP: addr proto ${what}: iproute2 too old"
+		return $ksft_skip
+	fi
 
 	ip address add dev "$devdummy" "$addr3"
 	check_err $?
@@ -1334,6 +1475,39 @@ kci_test_mngtmpaddr()
 	return $ret
 }
 
+kci_test_operstate()
+{
+	local ret=0
+
+	# Check that it is possible to set operational state during device
+	# creation and that it is preserved when the administrative state of
+	# the device is toggled.
+	run_cmd ip link add name vx0 up state up type vxlan id 10010 dstport 4789
+	run_cmd_grep "state UP" ip link show dev vx0
+	run_cmd ip link set dev vx0 down
+	run_cmd_grep "state DOWN" ip link show dev vx0
+	run_cmd ip link set dev vx0 up
+	run_cmd_grep "state UP" ip link show dev vx0
+
+	run_cmd ip link del dev vx0
+
+	# Check that it is possible to set the operational state of the device
+	# after creation.
+	run_cmd ip link add name vx0 up type vxlan id 10010 dstport 4789
+	run_cmd_grep "state UNKNOWN" ip link show dev vx0
+	run_cmd ip link set dev vx0 state up
+	run_cmd_grep "state UP" ip link show dev vx0
+
+	run_cmd ip link del dev vx0
+
+	if [ "$ret" -ne 0 ]; then
+		end_test "FAIL: operstate"
+		return 1
+	fi
+
+	end_test "PASS: operstate"
+}
+
 kci_test_rtnl()
 {
 	local current_test
@@ -1366,6 +1540,8 @@ usage: ${0##*/} OPTS
         -p          Pause after every failing test before cleanup (for debugging)
 EOF
 }
+
+require_command jq
 
 #check for needed privileges
 if [ "$(id -u)" -ne 0 ];then

@@ -15,6 +15,8 @@ enum gic_type {
 	GIC_V2,
 	/* Full GICv3, optionally with v2 compat */
 	GIC_V3,
+	/* Full GICv5, optionally with v3 compat */
+	GIC_V5,
 };
 
 struct gic_kvm_info {
@@ -22,6 +24,8 @@ struct gic_kvm_info {
 	enum gic_type	type;
 	/* Virtual CPU interface */
 	struct resource vcpu;
+	/* GICv2 GICC VA */
+	void __iomem	*gicc_base;
 	/* Interrupt number */
 	unsigned int	maint_irq;
 	/* No interrupt mask, no need to use the above field */

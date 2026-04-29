@@ -21,7 +21,7 @@
 
 #include "vdso_config.h"
 #include "vdso_call.h"
-#include "../kselftest.h"
+#include "kselftest.h"
 
 static const char **name;
 
@@ -108,7 +108,7 @@ static void *vsyscall_getcpu(void)
 }
 
 
-static void fill_function_pointers()
+static void fill_function_pointers(void)
 {
 	void *vdso = dlopen("linux-vdso.so.1",
 			    RTLD_LAZY | RTLD_LOCAL | RTLD_NOLOAD);

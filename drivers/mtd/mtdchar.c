@@ -72,7 +72,7 @@ static int mtdchar_open(struct inode *inode, struct file *file)
 		goto out1;
 	}
 
-	mfi = kzalloc(sizeof(*mfi), GFP_KERNEL);
+	mfi = kzalloc_obj(*mfi);
 	if (!mfi) {
 		ret = -ENOMEM;
 		goto out1;
@@ -599,6 +599,7 @@ mtdchar_write_ioctl(struct mtd_info *mtd, struct mtd_write_req __user *argp)
 	uint8_t *datbuf = NULL, *oobbuf = NULL;
 	size_t datbuf_len, oobbuf_len;
 	int ret = 0;
+	u64 end;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
 		return -EFAULT;
@@ -618,7 +619,7 @@ mtdchar_write_ioctl(struct mtd_info *mtd, struct mtd_write_req __user *argp)
 	req.len &= 0xffffffff;
 	req.ooblen &= 0xffffffff;
 
-	if (req.start + req.len > mtd->size)
+	if (check_add_overflow(req.start, req.len, &end) || end > mtd->size)
 		return -EINVAL;
 
 	datbuf_len = min_t(size_t, req.len, mtd->erasesize);
@@ -698,6 +699,7 @@ mtdchar_read_ioctl(struct mtd_info *mtd, struct mtd_read_req __user *argp)
 	size_t datbuf_len, oobbuf_len;
 	size_t orig_len, orig_ooblen;
 	int ret = 0;
+	u64 end;
 
 	if (copy_from_user(&req, argp, sizeof(req)))
 		return -EFAULT;
@@ -724,7 +726,7 @@ mtdchar_read_ioctl(struct mtd_info *mtd, struct mtd_read_req __user *argp)
 	req.len &= 0xffffffff;
 	req.ooblen &= 0xffffffff;
 
-	if (req.start + req.len > mtd->size) {
+	if (check_add_overflow(req.start, req.len, &end) || end > mtd->size) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -921,7 +923,7 @@ static int mtdchar_ioctl(struct file *file, u_int cmd, u_long arg)
 	{
 		struct erase_info *erase;
 
-		erase=kzalloc(sizeof(struct erase_info),GFP_KERNEL);
+		erase=kzalloc_obj(struct erase_info);
 		if (!erase)
 			ret = -ENOMEM;
 		else {
@@ -1160,7 +1162,7 @@ static int mtdchar_ioctl(struct file *file, u_int cmd, u_long arg)
 		if (!master->ooblayout)
 			return -EOPNOTSUPP;
 
-		usrlay = kmalloc(sizeof(*usrlay), GFP_KERNEL);
+		usrlay = kmalloc_obj(*usrlay);
 		if (!usrlay)
 			return -ENOMEM;
 

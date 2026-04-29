@@ -406,7 +406,7 @@ static void subsys_create_adapter(struct hpi_message *phm,
 
 	memset(&ao, 0, sizeof(ao));
 
-	ao.priv = kzalloc(sizeof(struct hpi_hw_obj), GFP_KERNEL);
+	ao.priv = kzalloc_obj(struct hpi_hw_obj);
 	if (!ao.priv) {
 		HPI_DEBUG_LOG(ERROR, "can't get mem for adapter object\n");
 		phr->error = HPI_ERROR_MEMORY_ALLOC;
@@ -608,7 +608,7 @@ static void adapter_get_asserts(struct hpi_adapter_obj *pao,
 		phr->u.ax.assert.p2 = 0;
 		phr->u.ax.assert.count = 1;	/* assert count */
 		phr->u.ax.assert.dsp_index = -1;	/* "dsp index" */
-		strcpy(phr->u.ax.assert.sz_message, "PCI2040 error");
+		strscpy(phr->u.ax.assert.sz_message, "PCI2040 error");
 		phr->u.ax.assert.dsp_msg_addr = 0;
 		gw_pci_read_asserts = 0;
 		gw_pci_write_asserts = 0;

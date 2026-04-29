@@ -117,6 +117,7 @@ static short int check_and_handle_sdw_dma_irq(struct acp63_dev_data *adata, u32 
 					break;
 				case ACP70_PCI_REV:
 				case ACP71_PCI_REV:
+				case ACP72_PCI_REV:
 					adata->acp70_sdw0_dma_intr_stat[stream_id] = 1;
 					break;
 				}
@@ -141,6 +142,7 @@ static short int check_and_handle_sdw_dma_irq(struct acp63_dev_data *adata, u32 
 		break;
 	case ACP70_PCI_REV:
 	case ACP71_PCI_REV:
+	case ACP72_PCI_REV:
 		if (ext_intr_stat1 & ACP70_P1_SDW_DMA_IRQ_MASK) {
 			for (index = ACP70_P1_AUDIO2_RX_THRESHOLD;
 			     index <= ACP70_P1_AUDIO0_TX_THRESHOLD; index++) {
@@ -333,6 +335,12 @@ static struct snd_soc_acpi_mach *acp63_sdw_machine_select(struct device *dev)
 			mach->mach_params.links = mach->links;
 			mach->mach_params.link_mask = mach->link_mask;
 			mach->mach_params.subsystem_rev = acp_data->acp_rev;
+			mach->mach_params.subsystem_vendor = acp_data->subsystem_vendor;
+			mach->mach_params.subsystem_device = acp_data->subsystem_device;
+			mach->mach_params.subsystem_id_set = true;
+
+			dev_dbg(dev, "SSID %x%04x\n", mach->mach_params.subsystem_vendor,
+				mach->mach_params.subsystem_device);
 			return mach;
 		}
 	}
@@ -552,6 +560,7 @@ static int acp_hw_init_ops(struct acp63_dev_data *adata, struct pci_dev *pci)
 		break;
 	case ACP70_PCI_REV:
 	case ACP71_PCI_REV:
+	case ACP72_PCI_REV:
 		acp70_hw_init_ops(adata->hw_ops);
 		break;
 	default:
@@ -581,6 +590,7 @@ static int snd_acp63_probe(struct pci_dev *pci,
 	case ACP63_PCI_REV:
 	case ACP70_PCI_REV:
 	case ACP71_PCI_REV:
+	case ACP72_PCI_REV:
 		break;
 	default:
 		dev_dbg(&pci->dev, "acp63/acp70/acp71 pci device not found\n");
@@ -613,6 +623,9 @@ static int snd_acp63_probe(struct pci_dev *pci,
 	adata->addr = addr;
 	adata->reg_range = ACP63_REG_END - ACP63_REG_START;
 	adata->acp_rev = pci->revision;
+	adata->subsystem_vendor = pci->subsystem_vendor;
+	adata->subsystem_device = pci->subsystem_device;
+
 	pci_set_master(pci);
 	pci_set_drvdata(pci, adata);
 	mutex_init(&adata->acp_lock);

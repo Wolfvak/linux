@@ -153,7 +153,7 @@ static struct gsmi_buf *gsmi_buf_alloc(void)
 {
 	struct gsmi_buf *smibuf;
 
-	smibuf = kzalloc(sizeof(*smibuf), GFP_KERNEL);
+	smibuf = kzalloc_obj(*smibuf);
 	if (!smibuf) {
 		printk(KERN_ERR "gsmi: out of memory\n");
 		return NULL;
@@ -530,7 +530,7 @@ static ssize_t eventlog_write(struct file *filp, struct kobject *kobj,
 
 static const struct bin_attribute eventlog_bin_attr = {
 	.attr = {.name = "append_to_eventlog", .mode = 0200},
-	.write_new = eventlog_write,
+	.write = eventlog_write,
 };
 
 static ssize_t gsmi_clear_eventlog_store(struct kobject *kobj,

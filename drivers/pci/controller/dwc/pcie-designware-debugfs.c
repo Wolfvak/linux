@@ -443,63 +443,13 @@ static ssize_t counter_value_read(struct file *file, char __user *buf,
 	return simple_read_from_buffer(buf, count, ppos, debugfs_buf, pos);
 }
 
-static const char *ltssm_status_string(enum dw_pcie_ltssm ltssm)
-{
-	const char *str;
-
-	switch (ltssm) {
-#define DW_PCIE_LTSSM_NAME(n) case n: str = #n; break
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_DETECT_QUIET);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_DETECT_ACT);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_POLL_ACTIVE);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_POLL_COMPLIANCE);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_POLL_CONFIG);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_PRE_DETECT_QUIET);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_DETECT_WAIT);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_CFG_LINKWD_START);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_CFG_LINKWD_ACEPT);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_CFG_LANENUM_WAI);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_CFG_LANENUM_ACEPT);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_CFG_COMPLETE);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_CFG_IDLE);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_RCVRY_LOCK);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_RCVRY_SPEED);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_RCVRY_RCVRCFG);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_RCVRY_IDLE);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_L0);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_L0S);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_L123_SEND_EIDLE);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_L1_IDLE);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_L2_IDLE);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_L2_WAKE);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_DISABLED_ENTRY);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_DISABLED_IDLE);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_DISABLED);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_LPBK_ENTRY);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_LPBK_ACTIVE);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_LPBK_EXIT);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_LPBK_EXIT_TIMEOUT);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_HOT_RESET_ENTRY);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_HOT_RESET);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_RCVRY_EQ0);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_RCVRY_EQ1);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_RCVRY_EQ2);
-	DW_PCIE_LTSSM_NAME(DW_PCIE_LTSSM_RCVRY_EQ3);
-	default:
-		str = "DW_PCIE_LTSSM_UNKNOWN";
-		break;
-	}
-
-	return str + strlen("DW_PCIE_LTSSM_");
-}
-
 static int ltssm_status_show(struct seq_file *s, void *v)
 {
 	struct dw_pcie *pci = s->private;
 	enum dw_pcie_ltssm val;
 
 	val = dw_pcie_get_ltssm(pci);
-	seq_printf(s, "%s (0x%02x)\n", ltssm_status_string(val), val);
+	seq_printf(s, "%s (0x%02x)\n", dw_pcie_ltssm_status_string(val), val);
 
 	return 0;
 }
@@ -814,14 +764,14 @@ static bool dw_pcie_ptm_context_update_visible(void *drvdata)
 {
 	struct dw_pcie *pci = drvdata;
 
-	return (pci->mode == DW_PCIE_EP_TYPE) ? true : false;
+	return pci->mode == DW_PCIE_EP_TYPE;
 }
 
 static bool dw_pcie_ptm_context_valid_visible(void *drvdata)
 {
 	struct dw_pcie *pci = drvdata;
 
-	return (pci->mode == DW_PCIE_RC_TYPE) ? true : false;
+	return pci->mode == DW_PCIE_RC_TYPE;
 }
 
 static bool dw_pcie_ptm_local_clock_visible(void *drvdata)
@@ -834,38 +784,38 @@ static bool dw_pcie_ptm_master_clock_visible(void *drvdata)
 {
 	struct dw_pcie *pci = drvdata;
 
-	return (pci->mode == DW_PCIE_EP_TYPE) ? true : false;
+	return pci->mode == DW_PCIE_EP_TYPE;
 }
 
 static bool dw_pcie_ptm_t1_visible(void *drvdata)
 {
 	struct dw_pcie *pci = drvdata;
 
-	return (pci->mode == DW_PCIE_EP_TYPE) ? true : false;
+	return pci->mode == DW_PCIE_EP_TYPE;
 }
 
 static bool dw_pcie_ptm_t2_visible(void *drvdata)
 {
 	struct dw_pcie *pci = drvdata;
 
-	return (pci->mode == DW_PCIE_RC_TYPE) ? true : false;
+	return pci->mode == DW_PCIE_RC_TYPE;
 }
 
 static bool dw_pcie_ptm_t3_visible(void *drvdata)
 {
 	struct dw_pcie *pci = drvdata;
 
-	return (pci->mode == DW_PCIE_RC_TYPE) ? true : false;
+	return pci->mode == DW_PCIE_RC_TYPE;
 }
 
 static bool dw_pcie_ptm_t4_visible(void *drvdata)
 {
 	struct dw_pcie *pci = drvdata;
 
-	return (pci->mode == DW_PCIE_EP_TYPE) ? true : false;
+	return pci->mode == DW_PCIE_EP_TYPE;
 }
 
-const struct pcie_ptm_ops dw_pcie_ptm_ops = {
+static const struct pcie_ptm_ops dw_pcie_ptm_ops = {
 	.check_capability = dw_pcie_ptm_check_capability,
 	.context_update_write = dw_pcie_ptm_context_update_write,
 	.context_update_read = dw_pcie_ptm_context_update_read,

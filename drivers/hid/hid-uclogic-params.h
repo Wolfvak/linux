@@ -103,6 +103,11 @@ struct uclogic_params_pen {
 	 * Only valid if "id" is not zero.
 	 */
 	bool tilt_y_flipped;
+	/*
+	 * True, if reports include fragmented high resolution X coords.
+	 * This moves bytes 10-11 to the LSB of the X coordinate.
+	 */
+	bool fragmented_hires2;
 };
 
 /*
@@ -175,6 +180,11 @@ struct uclogic_params_frame {
 	 * counterclockwise, as opposed to the normal 1 and -1.
 	 */
 	unsigned int bitmap_dial_byte;
+	/*
+	 * Destination offset for the second bitmap dial byte, if the tablet
+	 * supports a second dial at all.
+	 */
+	unsigned int bitmap_second_dial_destination_byte;
 };
 
 /*

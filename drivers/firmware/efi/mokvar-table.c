@@ -85,7 +85,7 @@ static struct kobject *mokvar_kobj;
  * as an alternative to ordinary EFI variables, due to platform-dependent
  * limitations. The memory occupied by this table is marked as reserved.
  *
- * This routine must be called before efi_free_boot_services() in order
+ * This routine must be called before efi_unmap_boot_services() in order
  * to guarantee that it can mark the table as reserved.
  *
  * Implicit inputs:
@@ -329,7 +329,7 @@ static int __init efi_mokvar_sysfs_init(void)
 	}
 
 	while (efi_mokvar_entry_next(&mokvar_entry)) {
-		mokvar_sysfs = kzalloc(sizeof(*mokvar_sysfs), GFP_KERNEL);
+		mokvar_sysfs = kzalloc_obj(*mokvar_sysfs);
 		if (!mokvar_sysfs) {
 			err = -ENOMEM;
 			break;
@@ -340,7 +340,7 @@ static int __init efi_mokvar_sysfs_init(void)
 		mokvar_sysfs->bin_attr.attr.name = mokvar_entry->name;
 		mokvar_sysfs->bin_attr.attr.mode = 0400;
 		mokvar_sysfs->bin_attr.size = mokvar_entry->data_size;
-		mokvar_sysfs->bin_attr.read_new = efi_mokvar_sysfs_read;
+		mokvar_sysfs->bin_attr.read = efi_mokvar_sysfs_read;
 
 		err = sysfs_create_bin_file(mokvar_kobj,
 					   &mokvar_sysfs->bin_attr);

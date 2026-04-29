@@ -13,6 +13,24 @@
  */
 int max_lock_depth = 1024;
 
+static const struct ctl_table rtmutex_sysctl_table[] = {
+	{
+		.procname	= "max_lock_depth",
+		.data		= &max_lock_depth,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+};
+
+static int __init init_rtmutex_sysctl(void)
+{
+	register_sysctl_init("kernel", rtmutex_sysctl_table);
+	return 0;
+}
+
+subsys_initcall(init_rtmutex_sysctl);
+
 /*
  * Debug aware fast / slowpath lock,trylock,unlock
  *
@@ -497,13 +515,11 @@ void rt_mutex_debug_task_free(struct task_struct *task)
 
 #ifdef CONFIG_PREEMPT_RT
 /* Mutexes */
-void __mutex_rt_init(struct mutex *mutex, const char *name,
-		     struct lock_class_key *key)
+static void __mutex_rt_init_generic(struct mutex *mutex)
 {
+	rt_mutex_base_init(&mutex->rtmutex);
 	debug_check_no_locks_freed((void *)mutex, sizeof(*mutex));
-	lockdep_init_map_wait(&mutex->dep_map, name, key, 0, LD_WAIT_SLEEP);
 }
-EXPORT_SYMBOL(__mutex_rt_init);
 
 static __always_inline int __mutex_lock_common(struct mutex *lock,
 					       unsigned int state,
@@ -524,6 +540,13 @@ static __always_inline int __mutex_lock_common(struct mutex *lock,
 }
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
+void mutex_rt_init_lockdep(struct mutex *mutex, const char *name, struct lock_class_key *key)
+{
+	__mutex_rt_init_generic(mutex);
+	lockdep_init_map_wait(&mutex->dep_map, name, key, 0, LD_WAIT_SLEEP);
+}
+EXPORT_SYMBOL(mutex_rt_init_lockdep);
+
 void __sched mutex_lock_nested(struct mutex *lock, unsigned int subclass)
 {
 	__mutex_lock_common(lock, TASK_UNINTERRUPTIBLE, subclass, NULL, _RET_IP_);
@@ -579,6 +602,12 @@ int __sched _mutex_trylock_nest_lock(struct mutex *lock,
 }
 EXPORT_SYMBOL_GPL(_mutex_trylock_nest_lock);
 #else /* CONFIG_DEBUG_LOCK_ALLOC */
+
+void mutex_rt_init_generic(struct mutex *mutex)
+{
+	__mutex_rt_init_generic(mutex);
+}
+EXPORT_SYMBOL(mutex_rt_init_generic);
 
 void __sched mutex_lock(struct mutex *lock)
 {

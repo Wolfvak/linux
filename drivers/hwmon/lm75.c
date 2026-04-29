@@ -39,6 +39,7 @@ enum lm75_type {		/* keep sorted in alphabetical order */
 	max6626,
 	max31725,
 	mcp980x,
+	p3t1750,
 	p3t1755,
 	pct2075,
 	stds75,
@@ -221,6 +222,13 @@ static const struct lm75_params device_params[] = {
 	[tcn75] = {
 		.default_resolution = 9,
 		.default_sample_time = MSEC_PER_SEC / 18,
+	},
+	[p3t1750] = {
+		.clr_mask = 1 << 1 | 1 << 7,	/* disable SMBAlert and one-shot */
+		.default_resolution = 12,
+		.default_sample_time = 55,
+		.num_sample_times = 4,
+		.sample_times = (unsigned int []){ 28, 55, 110, 220 },
 	},
 	[p3t1755] = {
 		.clr_mask = 1 << 1 | 1 << 7,	/* disable SMBAlert and one-shot */
@@ -613,7 +621,7 @@ static int lm75_i3c_reg_read(void *context, unsigned int reg, unsigned int *val)
 {
 	struct i3c_device *i3cdev = context;
 	struct lm75_data *data = i3cdev_get_drvdata(i3cdev);
-	struct i3c_priv_xfer xfers[] = {
+	struct i3c_xfer xfers[] = {
 		{
 			.rnw = false,
 			.len = 1,
@@ -632,7 +640,7 @@ static int lm75_i3c_reg_read(void *context, unsigned int reg, unsigned int *val)
 	if (reg == LM75_REG_CONF && !data->params->config_reg_16bits)
 		xfers[1].len--;
 
-	ret = i3c_device_do_priv_xfers(i3cdev, xfers, 2);
+	ret = i3c_device_do_xfers(i3cdev, xfers, 2, I3C_SDR);
 	if (ret < 0)
 		return ret;
 
@@ -650,7 +658,7 @@ static int lm75_i3c_reg_write(void *context, unsigned int reg, unsigned int val)
 {
 	struct i3c_device *i3cdev = context;
 	struct lm75_data *data = i3cdev_get_drvdata(i3cdev);
-	struct i3c_priv_xfer xfers[] = {
+	struct i3c_xfer xfers[] = {
 		{
 			.rnw = false,
 			.len = 3,
@@ -672,7 +680,7 @@ static int lm75_i3c_reg_write(void *context, unsigned int reg, unsigned int val)
 		data->val_buf[2] = val & 0xff;
 	}
 
-	return i3c_device_do_priv_xfers(i3cdev, xfers, 1);
+	return i3c_device_do_xfers(i3cdev, xfers, 1, I3C_SDR);
 }
 
 static const struct regmap_bus lm75_i3c_regmap_bus = {
@@ -805,6 +813,7 @@ static const struct i2c_device_id lm75_i2c_ids[] = {
 	{ "max31725", max31725, },
 	{ "max31726", max31725, },
 	{ "mcp980x", mcp980x, },
+	{ "p3t1750", p3t1750, },
 	{ "p3t1755", p3t1755, },
 	{ "pct2075", pct2075, },
 	{ "stds75", stds75, },
@@ -915,6 +924,10 @@ static const struct of_device_id __maybe_unused lm75_of_match[] = {
 	{
 		.compatible = "maxim,mcp980x",
 		.data = (void *)mcp980x
+	},
+	{
+		.compatible = "nxp,p3t1750",
+		.data = (void *)p3t1750
 	},
 	{
 		.compatible = "nxp,p3t1755",

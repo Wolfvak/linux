@@ -7,8 +7,8 @@
  *
  * See kernel/stop_machine.c
  */
+#include "sched.h"
 
-#ifdef CONFIG_SMP
 static int
 select_task_rq_stop(struct task_struct *p, int cpu, int flags)
 {
@@ -20,7 +20,6 @@ balance_stop(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 {
 	return sched_stop_runnable(rq);
 }
-#endif /* CONFIG_SMP */
 
 static void
 wakeup_preempt_stop(struct rq *rq, struct task_struct *p, int flags)
@@ -33,7 +32,7 @@ static void set_next_task_stop(struct rq *rq, struct task_struct *stop, bool fir
 	stop->se.exec_start = rq_clock_task(rq);
 }
 
-static struct task_struct *pick_task_stop(struct rq *rq)
+static struct task_struct *pick_task_stop(struct rq *rq, struct rq_flags *rf)
 {
 	if (!sched_stop_runnable(rq))
 		return NULL;
@@ -76,14 +75,17 @@ static void task_tick_stop(struct rq *rq, struct task_struct *curr, int queued)
 {
 }
 
-static void switched_to_stop(struct rq *rq, struct task_struct *p)
+static void switching_to_stop(struct rq *rq, struct task_struct *p)
 {
 	BUG(); /* its impossible to change to this class */
 }
 
 static void
-prio_changed_stop(struct rq *rq, struct task_struct *p, int oldprio)
+prio_changed_stop(struct rq *rq, struct task_struct *p, u64 oldprio)
 {
+	if (p->prio == oldprio)
+		return;
+
 	BUG(); /* how!?, what priority? */
 }
 
@@ -95,7 +97,6 @@ static void update_curr_stop(struct rq *rq)
  * Simple, special scheduling class for the per-CPU stop tasks:
  */
 DEFINE_SCHED_CLASS(stop) = {
-
 	.enqueue_task		= enqueue_task_stop,
 	.dequeue_task		= dequeue_task_stop,
 	.yield_task		= yield_task_stop,
@@ -106,15 +107,13 @@ DEFINE_SCHED_CLASS(stop) = {
 	.put_prev_task		= put_prev_task_stop,
 	.set_next_task          = set_next_task_stop,
 
-#ifdef CONFIG_SMP
 	.balance		= balance_stop,
 	.select_task_rq		= select_task_rq_stop,
 	.set_cpus_allowed	= set_cpus_allowed_common,
-#endif
 
 	.task_tick		= task_tick_stop,
 
 	.prio_changed		= prio_changed_stop,
-	.switched_to		= switched_to_stop,
+	.switching_to		= switching_to_stop,
 	.update_curr		= update_curr_stop,
 };

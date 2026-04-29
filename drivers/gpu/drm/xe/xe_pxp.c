@@ -15,7 +15,6 @@
 #include "xe_force_wake.h"
 #include "xe_guc_submit.h"
 #include "xe_gsc_proxy.h"
-#include "xe_gt.h"
 #include "xe_gt_types.h"
 #include "xe_huc.h"
 #include "xe_mmio.h"
@@ -58,10 +57,9 @@ bool xe_pxp_is_enabled(const struct xe_pxp *pxp)
 static bool pxp_prerequisites_done(const struct xe_pxp *pxp)
 {
 	struct xe_gt *gt = pxp->gt;
-	unsigned int fw_ref;
 	bool ready;
 
-	fw_ref = xe_force_wake_get(gt_to_fw(gt), XE_FORCEWAKE_ALL);
+	CLASS(xe_force_wake, fw_ref)(gt_to_fw(gt), XE_FORCEWAKE_ALL);
 
 	/*
 	 * If force_wake fails we could falsely report the prerequisites as not
@@ -71,13 +69,11 @@ static bool pxp_prerequisites_done(const struct xe_pxp *pxp)
 	 * PXP. Therefore, we can just log the force_wake error and not escalate
 	 * it.
 	 */
-	XE_WARN_ON(!xe_force_wake_ref_has_domain(fw_ref, XE_FORCEWAKE_ALL));
+	XE_WARN_ON(!xe_force_wake_ref_has_domain(fw_ref.domains, XE_FORCEWAKE_ALL));
 
 	/* PXP requires both HuC authentication via GSC and GSC proxy initialized */
 	ready = xe_huc_is_authenticated(&gt->uc.huc, XE_HUC_AUTH_VIA_GSC) &&
 		xe_gsc_proxy_init_done(&gt->uc.gsc);
-
-	xe_force_wake_put(gt_to_fw(gt), fw_ref);
 
 	return ready;
 }
@@ -104,13 +100,12 @@ int xe_pxp_get_readiness_status(struct xe_pxp *pxp)
 	    xe_uc_fw_status_to_error(pxp->gt->uc.gsc.fw.status))
 		return -EIO;
 
-	xe_pm_runtime_get(pxp->xe);
+	guard(xe_pm_runtime)(pxp->xe);
 
 	/* PXP requires both HuC loaded and GSC proxy initialized */
 	if (pxp_prerequisites_done(pxp))
 		ret = 1;
 
-	xe_pm_runtime_put(pxp->xe);
 	return ret;
 }
 
@@ -135,35 +130,28 @@ static void pxp_invalidate_queues(struct xe_pxp *pxp);
 static int pxp_terminate_hw(struct xe_pxp *pxp)
 {
 	struct xe_gt *gt = pxp->gt;
-	unsigned int fw_ref;
 	int ret = 0;
 
 	drm_dbg(&pxp->xe->drm, "Terminating PXP\n");
 
-	fw_ref = xe_force_wake_get(gt_to_fw(gt), XE_FW_GT);
-	if (!xe_force_wake_ref_has_domain(fw_ref, XE_FW_GT)) {
-		ret = -EIO;
-		goto out;
-	}
+	CLASS(xe_force_wake, fw_ref)(gt_to_fw(gt), XE_FW_GT);
+	if (!xe_force_wake_ref_has_domain(fw_ref.domains, XE_FW_GT))
+		return -EIO;
 
 	/* terminate the hw session */
 	ret = xe_pxp_submit_session_termination(pxp, ARB_SESSION);
 	if (ret)
-		goto out;
+		return ret;
 
 	ret = pxp_wait_for_session_state(pxp, ARB_SESSION, false);
 	if (ret)
-		goto out;
+		return ret;
 
 	/* Trigger full HW cleanup */
 	xe_mmio_write32(&gt->mmio, KCR_GLOBAL_TERMINATE, 1);
 
 	/* now we can tell the GSC to clean up its own state */
-	ret = xe_pxp_submit_session_invalidation(&pxp->gsc_res, ARB_SESSION);
-
-out:
-	xe_force_wake_put(gt_to_fw(gt), fw_ref);
-	return ret;
+	return xe_pxp_submit_session_invalidation(&pxp->gsc_res, ARB_SESSION);
 }
 
 static void mark_termination_in_progress(struct xe_pxp *pxp)
@@ -326,14 +314,12 @@ static int kcr_pxp_set_status(const struct xe_pxp *pxp, bool enable)
 {
 	u32 val = enable ? _MASKED_BIT_ENABLE(KCR_INIT_ALLOW_DISPLAY_ME_WRITES) :
 		  _MASKED_BIT_DISABLE(KCR_INIT_ALLOW_DISPLAY_ME_WRITES);
-	unsigned int fw_ref;
 
-	fw_ref = xe_force_wake_get(gt_to_fw(pxp->gt), XE_FW_GT);
-	if (!xe_force_wake_ref_has_domain(fw_ref, XE_FW_GT))
+	CLASS(xe_force_wake, fw_ref)(gt_to_fw(pxp->gt), XE_FW_GT);
+	if (!xe_force_wake_ref_has_domain(fw_ref.domains, XE_FW_GT))
 		return -EIO;
 
 	xe_mmio_write32(&pxp->gt->mmio, KCR_INIT, val);
-	xe_force_wake_put(gt_to_fw(pxp->gt), fw_ref);
 
 	return 0;
 }
@@ -391,6 +377,18 @@ int xe_pxp_init(struct xe_device *xe)
 	if (!xe_uc_fw_is_loadable(&gt->uc.gsc.fw) ||
 	    !xe_uc_fw_is_loadable(&gt->uc.huc.fw)) {
 		drm_info(&xe->drm, "skipping PXP init due to missing FW dependencies");
+		return 0;
+	}
+
+	/*
+	 * On PTL, older GSC FWs have a bug that can cause them to crash during
+	 * PXP invalidation events, which leads to a complete loss of power
+	 * management on the media GT. Therefore, we can't use PXP on FWs that
+	 * have this bug, which was fixed in PTL GSC build 1396.
+	 */
+	if (xe->info.platform == XE_PANTHERLAKE &&
+	    gt->uc.gsc.fw.versions.found[XE_UC_FW_VER_RELEASE].build < 1396) {
+		drm_info(&xe->drm, "PXP requires PTL GSC build 1396 or newer\n");
 		return 0;
 	}
 
@@ -453,34 +451,28 @@ out:
 static int __pxp_start_arb_session(struct xe_pxp *pxp)
 {
 	int ret;
-	unsigned int fw_ref;
 
-	fw_ref = xe_force_wake_get(gt_to_fw(pxp->gt), XE_FW_GT);
-	if (!xe_force_wake_ref_has_domain(fw_ref, XE_FW_GT))
+	CLASS(xe_force_wake, fw_ref)(gt_to_fw(pxp->gt), XE_FW_GT);
+	if (!xe_force_wake_ref_has_domain(fw_ref.domains, XE_FW_GT))
 		return -EIO;
 
-	if (pxp_session_is_in_play(pxp, ARB_SESSION)) {
-		ret = -EEXIST;
-		goto out_force_wake;
-	}
+	if (pxp_session_is_in_play(pxp, ARB_SESSION))
+		return -EEXIST;
 
 	ret = xe_pxp_submit_session_init(&pxp->gsc_res, ARB_SESSION);
 	if (ret) {
 		drm_err(&pxp->xe->drm, "Failed to init PXP arb session: %pe\n", ERR_PTR(ret));
-		goto out_force_wake;
+		return ret;
 	}
 
 	ret = pxp_wait_for_session_state(pxp, ARB_SESSION, true);
 	if (ret) {
 		drm_err(&pxp->xe->drm, "PXP ARB session failed to go in play%pe\n", ERR_PTR(ret));
-		goto out_force_wake;
+		return ret;
 	}
 
 	drm_dbg(&pxp->xe->drm, "PXP ARB session is active\n");
-
-out_force_wake:
-	xe_force_wake_put(gt_to_fw(pxp->gt), fw_ref);
-	return ret;
+	return 0;
 }
 
 /**
@@ -504,69 +496,64 @@ int xe_pxp_exec_queue_set_type(struct xe_pxp *pxp, struct xe_exec_queue *q, u8 t
 	return 0;
 }
 
-static void __exec_queue_add(struct xe_pxp *pxp, struct xe_exec_queue *q)
-{
-	spin_lock_irq(&pxp->queues.lock);
-	list_add_tail(&q->pxp.link, &pxp->queues.list);
-	spin_unlock_irq(&pxp->queues.lock);
-}
-
-/**
- * xe_pxp_exec_queue_add - add a queue to the PXP list
- * @pxp: the xe->pxp pointer (it will be NULL if PXP is disabled)
- * @q: the queue to add to the list
- *
- * If PXP is enabled and the prerequisites are done, start the PXP ARB
- * session (if not already running) and add the queue to the PXP list. Note
- * that the queue must have previously been marked as using PXP with
- * xe_pxp_exec_queue_set_type.
- *
- * Returns 0 if the PXP ARB session is running and the queue is in the list,
- * -ENODEV if PXP is disabled, -EBUSY if the PXP prerequisites are not done,
- * other errno value if something goes wrong during the session start.
- */
-int xe_pxp_exec_queue_add(struct xe_pxp *pxp, struct xe_exec_queue *q)
+static int __exec_queue_add(struct xe_pxp *pxp, struct xe_exec_queue *q)
 {
 	int ret = 0;
+
+	/*
+	 * A queue can be added to the list only if the PXP is in active status,
+	 * otherwise the termination might not handle it correctly.
+	 */
+	mutex_lock(&pxp->mutex);
+
+	if (pxp->status == XE_PXP_ACTIVE) {
+		spin_lock_irq(&pxp->queues.lock);
+		list_add_tail(&q->pxp.link, &pxp->queues.list);
+		spin_unlock_irq(&pxp->queues.lock);
+	} else if (pxp->status == XE_PXP_ERROR || pxp->status == XE_PXP_SUSPENDED) {
+		ret = -EIO;
+	} else {
+		ret = -EBUSY; /* try again later */
+	}
+
+	mutex_unlock(&pxp->mutex);
+
+	return ret;
+}
+
+static int pxp_start(struct xe_pxp *pxp, u8 type)
+{
+	int ret = 0;
+	bool restart;
 
 	if (!xe_pxp_is_enabled(pxp))
 		return -ENODEV;
 
 	/* we only support HWDRM sessions right now */
-	xe_assert(pxp->xe, q->pxp.type == DRM_XE_PXP_TYPE_HWDRM);
-
-	/*
-	 * Runtime suspend kills PXP, so we take a reference to prevent it from
-	 * happening while we have active queues that use PXP
-	 */
-	xe_pm_runtime_get(pxp->xe);
+	xe_assert(pxp->xe, type == DRM_XE_PXP_TYPE_HWDRM);
 
 	/* get_readiness_status() returns 0 for in-progress and 1 for done */
 	ret = xe_pxp_get_readiness_status(pxp);
-	if (ret <= 0) {
-		if (!ret)
-			ret = -EBUSY;
-		goto out;
-	}
+	if (ret <= 0)
+		return ret ?: -EBUSY;
+
 	ret = 0;
 
 wait_for_idle:
 	/*
 	 * if there is an action in progress, wait for it. We need to wait
 	 * outside the lock because the completion is done from within the lock.
-	 * Note that the two action should never be pending at the same time.
+	 * Note that the two actions should never be pending at the same time.
 	 */
 	if (!wait_for_completion_timeout(&pxp->termination,
-					 msecs_to_jiffies(PXP_TERMINATION_TIMEOUT_MS))) {
-		ret = -ETIMEDOUT;
-		goto out;
-	}
+					 msecs_to_jiffies(PXP_TERMINATION_TIMEOUT_MS)))
+		return -ETIMEDOUT;
 
 	if (!wait_for_completion_timeout(&pxp->activation,
-					 msecs_to_jiffies(PXP_ACTIVATION_TIMEOUT_MS))) {
-		ret = -ETIMEDOUT;
-		goto out;
-	}
+					 msecs_to_jiffies(PXP_ACTIVATION_TIMEOUT_MS)))
+		return -ETIMEDOUT;
+
+	restart = false;
 
 	mutex_lock(&pxp->mutex);
 
@@ -574,11 +561,9 @@ wait_for_idle:
 	switch (pxp->status) {
 	case XE_PXP_ERROR:
 		ret = -EIO;
-		break;
+		goto out_unlock;
 	case XE_PXP_ACTIVE:
-		__exec_queue_add(pxp, q);
-		mutex_unlock(&pxp->mutex);
-		goto out;
+		goto out_unlock;
 	case XE_PXP_READY_TO_START:
 		pxp->status = XE_PXP_START_IN_PROGRESS;
 		reinit_completion(&pxp->activation);
@@ -586,8 +571,8 @@ wait_for_idle:
 	case XE_PXP_START_IN_PROGRESS:
 		/* If a start is in progress then the completion must not be done */
 		XE_WARN_ON(completion_done(&pxp->activation));
-		mutex_unlock(&pxp->mutex);
-		goto wait_for_idle;
+		restart = true;
+		goto out_unlock;
 	case XE_PXP_NEEDS_TERMINATION:
 		mark_termination_in_progress(pxp);
 		break;
@@ -595,19 +580,16 @@ wait_for_idle:
 	case XE_PXP_NEEDS_ADDITIONAL_TERMINATION:
 		/* If a termination is in progress then the completion must not be done */
 		XE_WARN_ON(completion_done(&pxp->termination));
-		mutex_unlock(&pxp->mutex);
-		goto wait_for_idle;
+		restart = true;
+		goto out_unlock;
 	case XE_PXP_SUSPENDED:
 	default:
 		drm_err(&pxp->xe->drm, "unexpected state during PXP start: %u\n", pxp->status);
 		ret = -EIO;
-		break;
+		goto out_unlock;
 	}
 
 	mutex_unlock(&pxp->mutex);
-
-	if (ret)
-		goto out;
 
 	if (!completion_done(&pxp->termination)) {
 		ret = pxp_terminate_hw(pxp);
@@ -615,9 +597,9 @@ wait_for_idle:
 			drm_err(&pxp->xe->drm, "PXP termination failed before start\n");
 			mutex_lock(&pxp->mutex);
 			pxp->status = XE_PXP_ERROR;
-			mutex_unlock(&pxp->mutex);
+			complete_all(&pxp->termination);
 
-			goto out;
+			goto out_unlock;
 		}
 
 		goto wait_for_idle;
@@ -639,21 +621,59 @@ wait_for_idle:
 	if (pxp->status != XE_PXP_START_IN_PROGRESS) {
 		drm_err(&pxp->xe->drm, "unexpected state after PXP start: %u\n", pxp->status);
 		pxp->status = XE_PXP_NEEDS_TERMINATION;
-		mutex_unlock(&pxp->mutex);
-		goto wait_for_idle;
+		restart = true;
+		goto out_unlock;
 	}
 
 	/* If everything went ok, update the status and add the queue to the list */
-	if (!ret) {
+	if (!ret)
 		pxp->status = XE_PXP_ACTIVE;
-		__exec_queue_add(pxp, q);
-	} else {
+	else
 		pxp->status = XE_PXP_ERROR;
-	}
 
+out_unlock:
 	mutex_unlock(&pxp->mutex);
 
-out:
+	if (restart)
+		goto wait_for_idle;
+
+	return ret;
+}
+
+/**
+ * xe_pxp_exec_queue_add - add a queue to the PXP list
+ * @pxp: the xe->pxp pointer (it will be NULL if PXP is disabled)
+ * @q: the queue to add to the list
+ *
+ * If PXP is enabled and the prerequisites are done, start the PXP default
+ * session (if not already running) and add the queue to the PXP list.
+ *
+ * Returns 0 if the PXP session is running and the queue is in the list,
+ * -ENODEV if PXP is disabled, -EBUSY if the PXP prerequisites are not done,
+ * other errno value if something goes wrong during the session start.
+ */
+int xe_pxp_exec_queue_add(struct xe_pxp *pxp, struct xe_exec_queue *q)
+{
+	int ret;
+
+	if (!xe_pxp_is_enabled(pxp))
+		return -ENODEV;
+
+	/*
+	 * Runtime suspend kills PXP, so we take a reference to prevent it from
+	 * happening while we have active queues that use PXP
+	 */
+	xe_pm_runtime_get(pxp->xe);
+
+start:
+	ret = pxp_start(pxp, q->pxp.type);
+
+	if (!ret) {
+		ret = __exec_queue_add(pxp, q);
+		if (ret == -EBUSY)
+			goto start;
+	}
+
 	/*
 	 * in the successful case the PM ref is released from
 	 * xe_pxp_exec_queue_remove
@@ -663,6 +683,7 @@ out:
 
 	return ret;
 }
+ALLOW_ERROR_INJECTION(xe_pxp_exec_queue_add, ERRNO);
 
 static void __pxp_exec_queue_remove(struct xe_pxp *pxp, struct xe_exec_queue *q, bool lock)
 {
@@ -864,11 +885,6 @@ wait_for_activation:
 		pxp->key_instance++;
 		needs_queue_inval = true;
 		break;
-	default:
-		drm_err(&pxp->xe->drm, "unexpected state during PXP suspend: %u",
-			pxp->status);
-		ret = -EIO;
-		goto out;
 	}
 
 	/*
@@ -893,7 +909,6 @@ wait_for_activation:
 
 	pxp->last_suspend_key_instance = pxp->key_instance;
 
-out:
 	return ret;
 }
 

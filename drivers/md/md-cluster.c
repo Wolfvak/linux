@@ -196,7 +196,7 @@ static struct dlm_lock_resource *lockres_init(struct mddev *mddev,
 	int ret, namelen;
 	struct md_cluster_info *cinfo = mddev->cluster_info;
 
-	res = kzalloc(sizeof(struct dlm_lock_resource), GFP_KERNEL);
+	res = kzalloc_obj(struct dlm_lock_resource);
 	if (!res)
 		return NULL;
 	init_waitqueue_head(&res->sync_locking);
@@ -337,11 +337,11 @@ static void recover_bitmaps(struct md_thread *thread)
 			md_wakeup_thread(mddev->sync_thread);
 
 		if (hi > 0) {
-			if (lo < mddev->recovery_cp)
-				mddev->recovery_cp = lo;
+			if (lo < mddev->resync_offset)
+				mddev->resync_offset = lo;
 			/* wake up thread to continue resync in case resync
 			 * is not finished */
-			if (mddev->recovery_cp != MaxSector) {
+			if (mddev->resync_offset != MaxSector) {
 				/*
 				 * clear the REMOTE flag since we will launch
 				 * resync thread in current node.
@@ -549,8 +549,13 @@ static void process_metadata_update(struct mddev *mddev, struct cluster_msg *msg
 
 	dlm_lock_sync(cinfo->no_new_dev_lockres, DLM_LOCK_CR);
 
-	/* daemaon thread must exist */
 	thread = rcu_dereference_protected(mddev->thread, true);
+	if (!thread) {
+		pr_warn("md-cluster: Received metadata update but MD thread is not ready\n");
+		dlm_unlock_sync(cinfo->no_new_dev_lockres);
+		return;
+	}
+
 	wait_event(thread->wqueue,
 		   (got_lock = mddev_trylock(mddev)) ||
 		    test_bit(MD_CLUSTER_HOLDING_MUTEX_FOR_RECVD, &cinfo->state));
@@ -630,7 +635,7 @@ static int process_recvd_msg(struct mddev *mddev, struct cluster_msg *msg)
 		if (le64_to_cpu(msg->high) != mddev->pers->size(mddev, 0, 0))
 			ret = mddev->bitmap_ops->resize(mddev,
 							le64_to_cpu(msg->high),
-							0, false);
+							0);
 		break;
 	default:
 		ret = -1;
@@ -863,9 +868,9 @@ static int gather_all_resync_info(struct mddev *mddev, int total_slots)
 			lockres_free(bm_lockres);
 			continue;
 		}
-		if ((hi > 0) && (lo < mddev->recovery_cp)) {
+		if ((hi > 0) && (lo < mddev->resync_offset)) {
 			set_bit(MD_RECOVERY_NEEDED, &mddev->recovery);
-			mddev->recovery_cp = lo;
+			mddev->resync_offset = lo;
 			md_check_recovery(mddev);
 		}
 
@@ -881,7 +886,7 @@ static int join(struct mddev *mddev, int nodes)
 	int ret, ops_rv;
 	char str[64];
 
-	cinfo = kzalloc(sizeof(struct md_cluster_info), GFP_KERNEL);
+	cinfo = kzalloc_obj(struct md_cluster_info);
 	if (!cinfo)
 		return -ENOMEM;
 
@@ -979,7 +984,7 @@ err:
 	lockres_free(cinfo->resync_lockres);
 	lockres_free(cinfo->bitmap_lockres);
 	if (cinfo->lockspace)
-		dlm_release_lockspace(cinfo->lockspace, 2);
+		dlm_release_lockspace(cinfo->lockspace, DLM_RELEASE_NORMAL);
 	mddev->cluster_info = NULL;
 	kfree(cinfo);
 	return ret;
@@ -1027,7 +1032,7 @@ static int leave(struct mddev *mddev)
 	 * Also, we should send BITMAP_NEEDS_SYNC message in
 	 * case reshaping is interrupted.
 	 */
-	if ((cinfo->slot_number > 0 && mddev->recovery_cp != MaxSector) ||
+	if ((cinfo->slot_number > 0 && mddev->resync_offset != MaxSector) ||
 	    (mddev->reshape_position != MaxSector &&
 	     test_bit(MD_CLOSING, &mddev->flags)))
 		resync_bitmap(mddev);
@@ -1042,7 +1047,7 @@ static int leave(struct mddev *mddev)
 	lockres_free(cinfo->resync_lockres);
 	lockres_free(cinfo->bitmap_lockres);
 	unlock_all_bitmaps(mddev);
-	dlm_release_lockspace(cinfo->lockspace, 2);
+	dlm_release_lockspace(cinfo->lockspace, DLM_RELEASE_NORMAL);
 	kfree(cinfo);
 	return 0;
 }
@@ -1538,8 +1543,8 @@ static int lock_all_bitmaps(struct mddev *mddev)
 	struct md_cluster_info *cinfo = mddev->cluster_info;
 
 	cinfo->other_bitmap_lockres =
-		kcalloc(mddev->bitmap_info.nodes - 1,
-			sizeof(struct dlm_lock_resource *), GFP_KERNEL);
+		kzalloc_objs(struct dlm_lock_resource *,
+			     mddev->bitmap_info.nodes - 1);
 	if (!cinfo->other_bitmap_lockres) {
 		pr_err("md: can't alloc mem for other bitmap locks\n");
 		return 0;
@@ -1605,8 +1610,8 @@ static int gather_bitmaps(struct md_rdev *rdev)
 			pr_warn("md-cluster: Could not gather bitmaps from slot %d", sn);
 			goto out;
 		}
-		if ((hi > 0) && (lo < mddev->recovery_cp))
-			mddev->recovery_cp = lo;
+		if ((hi > 0) && (lo < mddev->resync_offset))
+			mddev->resync_offset = lo;
 	}
 out:
 	return err;

@@ -919,9 +919,10 @@ static int hinic_set_channels(struct net_device *netdev,
 	return 0;
 }
 
-static int hinic_get_rss_hash_opts(struct hinic_dev *nic_dev,
-				   struct ethtool_rxnfc *cmd)
+static int hinic_get_rxfh_fields(struct net_device *netdev,
+				 struct ethtool_rxfh_fields *cmd)
 {
+	struct hinic_dev *nic_dev = netdev_priv(netdev);
 	struct hinic_rss_type rss_type = { 0 };
 	int err;
 
@@ -964,7 +965,7 @@ static int hinic_get_rss_hash_opts(struct hinic_dev *nic_dev,
 	return 0;
 }
 
-static int set_l4_rss_hash_ops(struct ethtool_rxnfc *cmd,
+static int set_l4_rss_hash_ops(const struct ethtool_rxfh_fields *cmd,
 			       struct hinic_rss_type *rss_type)
 {
 	u8 rss_l4_en = 0;
@@ -1000,16 +1001,18 @@ static int set_l4_rss_hash_ops(struct ethtool_rxnfc *cmd,
 	return 0;
 }
 
-static int hinic_set_rss_hash_opts(struct hinic_dev *nic_dev,
-				   struct ethtool_rxnfc *cmd)
+static int hinic_set_rxfh_fields(struct net_device *dev,
+				 const struct ethtool_rxfh_fields *cmd,
+				 struct netlink_ext_ack *extack)
 {
-	struct hinic_rss_type *rss_type = &nic_dev->rss_type;
+	struct hinic_dev *nic_dev = netdev_priv(dev);
+	struct hinic_rss_type *rss_type;
 	int err;
 
-	if (!(nic_dev->flags & HINIC_RSS_ENABLE)) {
-		cmd->data = 0;
+	rss_type = &nic_dev->rss_type;
+
+	if (!(nic_dev->flags & HINIC_RSS_ENABLE))
 		return -EOPNOTSUPP;
-	}
 
 	/* RSS does not support anything other than hashing
 	 * to queues on src and dst IPs and ports
@@ -1098,42 +1101,11 @@ static int __set_rss_rxfh(struct net_device *netdev,
 	return 0;
 }
 
-static int hinic_get_rxnfc(struct net_device *netdev,
-			   struct ethtool_rxnfc *cmd, u32 *rule_locs)
+static u32 hinic_get_rx_ring_count(struct net_device *netdev)
 {
 	struct hinic_dev *nic_dev = netdev_priv(netdev);
-	int err = 0;
 
-	switch (cmd->cmd) {
-	case ETHTOOL_GRXRINGS:
-		cmd->data = nic_dev->num_qps;
-		break;
-	case ETHTOOL_GRXFH:
-		err = hinic_get_rss_hash_opts(nic_dev, cmd);
-		break;
-	default:
-		err = -EOPNOTSUPP;
-		break;
-	}
-
-	return err;
-}
-
-static int hinic_set_rxnfc(struct net_device *netdev, struct ethtool_rxnfc *cmd)
-{
-	struct hinic_dev *nic_dev = netdev_priv(netdev);
-	int err = 0;
-
-	switch (cmd->cmd) {
-	case ETHTOOL_SRXFH:
-		err = hinic_set_rss_hash_opts(nic_dev, cmd);
-		break;
-	default:
-		err = -EOPNOTSUPP;
-		break;
-	}
-
-	return err;
+	return nic_dev->num_qps;
 }
 
 static int hinic_get_rxfh(struct net_device *netdev,
@@ -1420,7 +1392,7 @@ static void hinic_get_ethtool_stats(struct net_device *netdev,
 				sizeof(u64)) ? *(u64 *)p : *(u32 *)p;
 	}
 
-	port_stats = kzalloc(sizeof(*port_stats), GFP_KERNEL);
+	port_stats = kzalloc_obj(*port_stats);
 	if (!port_stats) {
 		memset(&data[i], 0,
 		       ARRAY_SIZE(hinic_port_stats) * sizeof(*data));
@@ -1796,12 +1768,13 @@ static const struct ethtool_ops hinic_ethtool_ops = {
 	.set_pauseparam = hinic_set_pauseparam,
 	.get_channels = hinic_get_channels,
 	.set_channels = hinic_set_channels,
-	.get_rxnfc = hinic_get_rxnfc,
-	.set_rxnfc = hinic_set_rxnfc,
+	.get_rx_ring_count = hinic_get_rx_ring_count,
 	.get_rxfh_key_size = hinic_get_rxfh_key_size,
 	.get_rxfh_indir_size = hinic_get_rxfh_indir_size,
 	.get_rxfh = hinic_get_rxfh,
 	.set_rxfh = hinic_set_rxfh,
+	.get_rxfh_fields = hinic_get_rxfh_fields,
+	.set_rxfh_fields = hinic_set_rxfh_fields,
 	.get_sset_count = hinic_get_sset_count,
 	.get_ethtool_stats = hinic_get_ethtool_stats,
 	.get_strings = hinic_get_strings,
@@ -1828,12 +1801,13 @@ static const struct ethtool_ops hinicvf_ethtool_ops = {
 	.set_per_queue_coalesce = hinic_set_per_queue_coalesce,
 	.get_channels = hinic_get_channels,
 	.set_channels = hinic_set_channels,
-	.get_rxnfc = hinic_get_rxnfc,
-	.set_rxnfc = hinic_set_rxnfc,
+	.get_rx_ring_count = hinic_get_rx_ring_count,
 	.get_rxfh_key_size = hinic_get_rxfh_key_size,
 	.get_rxfh_indir_size = hinic_get_rxfh_indir_size,
 	.get_rxfh = hinic_get_rxfh,
 	.set_rxfh = hinic_set_rxfh,
+	.get_rxfh_fields = hinic_get_rxfh_fields,
+	.set_rxfh_fields = hinic_set_rxfh_fields,
 	.get_sset_count = hinic_get_sset_count,
 	.get_ethtool_stats = hinic_get_ethtool_stats,
 	.get_strings = hinic_get_strings,

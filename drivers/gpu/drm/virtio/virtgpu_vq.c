@@ -32,6 +32,7 @@
 #include <linux/virtio_ring.h>
 
 #include <drm/drm_edid.h>
+#include <drm/drm_print.h>
 
 #include "virtgpu_drv.h"
 #include "virtgpu_trace.h"
@@ -248,6 +249,7 @@ void virtio_gpu_dequeue_ctrl_func(struct work_struct *work)
 		if (resp->type != cpu_to_le32(VIRTIO_GPU_RESP_OK_NODATA)) {
 			if (le32_to_cpu(resp->type) >= VIRTIO_GPU_RESP_ERR_UNSPEC) {
 				struct virtio_gpu_ctrl_hdr *cmd;
+
 				cmd = virtio_gpu_vbuf_ctrl_hdr(entry);
 				DRM_ERROR_RATELIMITED("response 0x%x (command 0x%x)\n",
 						      le32_to_cpu(resp->type),
@@ -310,7 +312,7 @@ static struct sg_table *vmalloc_to_sgt(char *data, uint32_t size, int *sg_ents)
 	if (WARN_ON(!PAGE_ALIGNED(data)))
 		return NULL;
 
-	sgt = kmalloc(sizeof(*sgt), GFP_KERNEL);
+	sgt = kmalloc_obj(*sgt);
 	if (!sgt)
 		return NULL;
 
@@ -468,6 +470,7 @@ static int virtio_gpu_queue_fenced_ctrl_buffer(struct virtio_gpu_device *vgdev,
 	if (vbuf->data_size) {
 		if (is_vmalloc_addr(vbuf->data_buf)) {
 			int sg_ents;
+
 			sgt = vmalloc_to_sgt(vbuf->data_buf, vbuf->data_size,
 					     &sg_ents);
 			if (!sgt) {
@@ -933,8 +936,7 @@ int virtio_gpu_cmd_get_display_info(struct virtio_gpu_device *vgdev)
 	struct virtio_gpu_vbuffer *vbuf;
 	void *resp_buf;
 
-	resp_buf = kzalloc(sizeof(struct virtio_gpu_resp_display_info),
-			   GFP_KERNEL);
+	resp_buf = kzalloc_obj(struct virtio_gpu_resp_display_info);
 	if (!resp_buf)
 		return -ENOMEM;
 
@@ -956,8 +958,7 @@ int virtio_gpu_cmd_get_capset_info(struct virtio_gpu_device *vgdev, int idx)
 	struct virtio_gpu_vbuffer *vbuf;
 	void *resp_buf;
 
-	resp_buf = kzalloc(sizeof(struct virtio_gpu_resp_capset_info),
-			   GFP_KERNEL);
+	resp_buf = kzalloc_obj(struct virtio_gpu_resp_capset_info);
 	if (!resp_buf)
 		return -ENOMEM;
 
@@ -992,7 +993,7 @@ int virtio_gpu_cmd_get_capset(struct virtio_gpu_device *vgdev,
 	if (version > vgdev->capsets[idx].max_version)
 		return -EINVAL;
 
-	cache_ent = kzalloc(sizeof(*cache_ent), GFP_KERNEL);
+	cache_ent = kzalloc_obj(*cache_ent);
 	if (!cache_ent)
 		return -ENOMEM;
 
@@ -1060,8 +1061,7 @@ int virtio_gpu_cmd_get_edids(struct virtio_gpu_device *vgdev)
 		return -EINVAL;
 
 	for (scanout = 0; scanout < vgdev->num_scanouts; scanout++) {
-		resp_buf = kzalloc(sizeof(struct virtio_gpu_resp_edid),
-				   GFP_KERNEL);
+		resp_buf = kzalloc_obj(struct virtio_gpu_resp_edid);
 		if (!resp_buf)
 			return -ENOMEM;
 
@@ -1338,7 +1338,7 @@ virtio_gpu_cmd_resource_assign_uuid(struct virtio_gpu_device *vgdev,
 	struct virtio_gpu_vbuffer *vbuf;
 	struct virtio_gpu_resp_resource_uuid *resp_buf;
 
-	resp_buf = kzalloc(sizeof(*resp_buf), GFP_KERNEL);
+	resp_buf = kzalloc_obj(*resp_buf);
 	if (!resp_buf) {
 		spin_lock(&vgdev->resource_export_lock);
 		bo->uuid_state = STATE_ERR;
@@ -1391,7 +1391,7 @@ int virtio_gpu_cmd_map(struct virtio_gpu_device *vgdev,
 	struct virtio_gpu_vbuffer *vbuf;
 	struct virtio_gpu_resp_map_info *resp_buf;
 
-	resp_buf = kzalloc(sizeof(*resp_buf), GFP_KERNEL);
+	resp_buf = kzalloc_obj(*resp_buf);
 	if (!resp_buf)
 		return -ENOMEM;
 

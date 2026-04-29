@@ -555,7 +555,6 @@ static void omap_rproc_kick(struct rproc *rproc, int vqid)
 		dev_err(dev, "failed to send mailbox message, status = %d\n",
 			ret);
 
-	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 }
 
@@ -656,7 +655,6 @@ static int omap_rproc_start(struct rproc *rproc)
 	pm_runtime_use_autosuspend(dev);
 	pm_runtime_get_noresume(dev);
 	pm_runtime_enable(dev);
-	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 
 	return 0;
@@ -714,7 +712,6 @@ enable_device:
 	reset_control_deassert(oproc->reset);
 out:
 	/* schedule the next auto-suspend */
-	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 	return ret;
 }
@@ -1211,7 +1208,7 @@ static int omap_rproc_of_get_internal_memories(struct platform_device *pdev,
 		oproc->mem[i].dev_addr = data->mems[i].dev_addr;
 		oproc->mem[i].size = resource_size(res);
 
-		dev_dbg(dev, "memory %8s: bus addr %pa size 0x%x va %pK da 0x%x\n",
+		dev_dbg(dev, "memory %8s: bus addr %pa size 0x%x va %p da 0x%x\n",
 			data->mems[i].name, &oproc->mem[i].bus_addr,
 			oproc->mem[i].size, oproc->mem[i].cpu_addr,
 			oproc->mem[i].dev_addr);

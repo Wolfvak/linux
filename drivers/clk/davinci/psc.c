@@ -239,7 +239,7 @@ davinci_lpsc_clk_register(struct device *dev, const char *name,
 	int ret;
 	bool is_on;
 
-	lpsc = kzalloc(sizeof(*lpsc), GFP_KERNEL);
+	lpsc = kzalloc_obj(*lpsc);
 	if (!lpsc)
 		return ERR_PTR(-ENOMEM);
 
@@ -277,6 +277,11 @@ davinci_lpsc_clk_register(struct device *dev, const char *name,
 
 	lpsc->pm_domain.name = devm_kasprintf(dev, GFP_KERNEL, "%s: %s",
 					      best_dev_name(dev), name);
+	if (!lpsc->pm_domain.name) {
+		clk_hw_unregister(&lpsc->hw);
+		kfree(lpsc);
+		return ERR_PTR(-ENOMEM);
+	}
 	lpsc->pm_domain.attach_dev = davinci_psc_genpd_attach_dev;
 	lpsc->pm_domain.detach_dev = davinci_psc_genpd_detach_dev;
 	lpsc->pm_domain.flags = GENPD_FLAG_PM_CLK;
@@ -367,11 +372,11 @@ __davinci_psc_register_clocks(struct device *dev,
 	struct regmap *regmap;
 	int i, ret;
 
-	psc = kzalloc(sizeof(*psc), GFP_KERNEL);
+	psc = kzalloc_obj(*psc);
 	if (!psc)
 		return ERR_PTR(-ENOMEM);
 
-	clks = kmalloc_array(num_clks, sizeof(*clks), GFP_KERNEL);
+	clks = kmalloc_objs(*clks, num_clks);
 	if (!clks) {
 		ret = -ENOMEM;
 		goto err_free_psc;
@@ -387,7 +392,7 @@ __davinci_psc_register_clocks(struct device *dev,
 	for (i = 0; i < num_clks; i++)
 		clks[i] = ERR_PTR(-ENOENT);
 
-	pm_domains = kcalloc(num_clks, sizeof(*pm_domains), GFP_KERNEL);
+	pm_domains = kzalloc_objs(*pm_domains, num_clks);
 	if (!pm_domains) {
 		ret = -ENOMEM;
 		goto err_free_clks;

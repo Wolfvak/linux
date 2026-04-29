@@ -404,8 +404,6 @@ static void ushc_clean_up(struct ushc_data *ushc)
 	kfree(ushc->int_data);
 	kfree(ushc->cbw);
 	kfree(ushc->csw);
-
-	mmc_free_host(ushc->mmc);
 }
 
 static const struct mmc_host_ops ushc_ops = {
@@ -425,7 +423,7 @@ static int ushc_probe(struct usb_interface *intf, const struct usb_device_id *id
 	if (intf->cur_altsetting->desc.bNumEndpoints < 1)
 		return -ENODEV;
 
-	mmc = mmc_alloc_host(sizeof(struct ushc_data), &intf->dev);
+	mmc = devm_mmc_alloc_host(&intf->dev, sizeof(*ushc));
 	if (mmc == NULL)
 		return -ENOMEM;
 	ushc = mmc_priv(mmc);
@@ -464,7 +462,7 @@ static int ushc_probe(struct usb_interface *intf, const struct usb_device_id *id
 		ret = -ENOMEM;
 		goto err;
 	}
-	ushc->int_data = kzalloc(sizeof(struct ushc_int_data), GFP_KERNEL);
+	ushc->int_data = kzalloc_obj(struct ushc_int_data);
 	if (ushc->int_data == NULL) {
 		ret = -ENOMEM;
 		goto err;
@@ -481,7 +479,7 @@ static int ushc_probe(struct usb_interface *intf, const struct usb_device_id *id
 		ret = -ENOMEM;
 		goto err;
 	}
-	ushc->cbw = kzalloc(sizeof(struct ushc_cbw), GFP_KERNEL);
+	ushc->cbw = kzalloc_obj(struct ushc_cbw);
 	if (ushc->cbw == NULL) {
 		ret = -ENOMEM;
 		goto err;
@@ -503,7 +501,7 @@ static int ushc_probe(struct usb_interface *intf, const struct usb_device_id *id
 		ret = -ENOMEM;
 		goto err;
 	}
-	ushc->csw = kzalloc(sizeof(struct ushc_csw), GFP_KERNEL);
+	ushc->csw = kzalloc_obj(struct ushc_csw);
 	if (ushc->csw == NULL) {
 		ret = -ENOMEM;
 		goto err;

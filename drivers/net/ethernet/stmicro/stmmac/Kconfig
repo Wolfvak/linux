@@ -10,6 +10,7 @@ config STMMAC_ETH
 	select PHYLINK
 	select CRC32
 	select RESET_CONTROLLER
+	select NET_DEVLINK
 	help
 	  This is the driver for the Ethernet IPs built around a
 	  Synopsys IP Core.
@@ -66,6 +67,15 @@ config DWMAC_ANARION
 	  Support for Adaptrum Anarion GMAC Ethernet controller.
 
 	  This selects the Anarion SoC glue layer support for the stmmac driver.
+
+config DWMAC_EIC7700
+	tristate "Support for Eswin eic7700 ethernet driver"
+	depends on OF && HAS_DMA && ARCH_ESWIN || COMPILE_TEST
+	help
+	  This driver supports the Eswin EIC7700 Ethernet controller,
+	  which integrates Synopsys DesignWare QoS features. It enables
+	  high-speed networking with DMA acceleration and is optimized
+	  for embedded systems.
 
 config DWMAC_INGENIC
 	tristate "Ingenic MAC support"
@@ -133,15 +143,17 @@ config DWMAC_QCOM_ETHQOS
 	  stmmac device driver.
 
 config DWMAC_RENESAS_GBETH
-	tristate "Renesas RZ/V2H(P) GBETH support"
+	tristate "Renesas RZ/V2H(P) GBETH and RZ/T2H, RZ/N2H GMAC support"
 	default ARCH_RENESAS
 	depends on OF && (ARCH_RENESAS || COMPILE_TEST)
+	select PCS_RZN1_MIIC
 	help
-	  Support for Gigabit Ethernet Interface (GBETH) on Renesas
-	  RZ/V2H(P) SoCs.
+	  Support for Gigabit Ethernet Interface (GBETH)/ Ethernet MAC (GMAC)
+	  on Renesas SoCs.
 
-	  This selects the Renesas RZ/V2H(P) Soc specific glue layer support
-	  for the stmmac device driver.
+	  This selects Renesas SoC glue layer support for the stmmac device
+	  driver. This driver is used for the RZ/V2H(P) family, RZ/T2H and
+	  RZ/N2H SoCs.
 
 config DWMAC_ROCKCHIP
 	tristate "Rockchip dwmac support"
@@ -263,6 +275,18 @@ config DWMAC_SUN8I
 	  stmmac device driver. This driver is used for H3/A83T/A64
 	  EMAC ethernet controller.
 
+config DWMAC_SUN55I
+	tristate "Allwinner sun55i GMAC200 support"
+	default ARCH_SUNXI
+	depends on OF && (ARCH_SUNXI || COMPILE_TEST)
+	select MDIO_BUS_MUX
+	help
+	  Support for Allwinner A523/T527 GMAC200 ethernet controllers.
+
+	  This selects Allwinner SoC glue layer support for the
+	  stmmac device driver. This driver is used for A523/T527
+	  GMAC200 ethernet controller.
+
 config DWMAC_THEAD
 	tristate "T-HEAD dwmac support"
 	depends on OF && (ARCH_THEAD || COMPILE_TEST)
@@ -325,6 +349,11 @@ config DWMAC_VISCONTI
 
 endif
 
+config STMMAC_LIBPCI
+	tristate
+	help
+	  This option enables the PCI bus helpers for the stmmac driver.
+
 config DWMAC_INTEL
 	tristate "Intel GMAC support"
 	default X86
@@ -338,16 +367,27 @@ config DWMAC_INTEL
 config DWMAC_LOONGSON
 	tristate "Loongson PCI DWMAC support"
 	default MACH_LOONGSON64
-	depends on (MACH_LOONGSON64 || COMPILE_TEST) && STMMAC_ETH && PCI
+	depends on (MACH_LOONGSON64 || COMPILE_TEST) && PCI
 	depends on COMMON_CLK
+	select STMMAC_LIBPCI
 	help
 	  This selects the LOONGSON PCI bus support for the stmmac driver,
 	  Support for ethernet controller on Loongson-2K1000 SoC and LS7A1000 bridge.
 
+config DWMAC_MOTORCOMM
+	tristate "Motorcomm PCI DWMAC support"
+	depends on PCI
+	select MOTORCOMM_PHY
+	select STMMAC_LIBPCI
+	help
+	  This enables glue driver for Motorcomm DWMAC-based PCI Ethernet
+	  controllers. Currently only YT6801 is supported.
+
 config STMMAC_PCI
 	tristate "STMMAC PCI bus support"
-	depends on STMMAC_ETH && PCI
+	depends on PCI
 	depends on COMMON_CLK
+	select STMMAC_LIBPCI
 	help
 	  This selects the platform specific bus support for the stmmac driver.
 	  This driver was tested on XLINX XC2V3000 FF1152AMT0221

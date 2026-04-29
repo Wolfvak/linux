@@ -672,13 +672,13 @@ static int pac1921_read_label(struct iio_dev *indio_dev,
 {
 	switch (chan->channel) {
 	case PAC1921_CHAN_VBUS:
-		return sprintf(label, "vbus\n");
+		return sysfs_emit(label, "vbus\n");
 	case PAC1921_CHAN_VSENSE:
-		return sprintf(label, "vsense\n");
+		return sysfs_emit(label, "vsense\n");
 	case PAC1921_CHAN_CURRENT:
-		return sprintf(label, "current\n");
+		return sysfs_emit(label, "current\n");
 	case PAC1921_CHAN_POWER:
-		return sprintf(label, "power\n");
+		return sysfs_emit(label, "power\n");
 	default:
 		return -EINVAL;
 	}
@@ -1279,8 +1279,7 @@ static int pac1921_probe(struct i2c_client *client)
 	ret = devm_add_action_or_reset(dev, pac1921_regulator_disable,
 				       priv->vdd);
 	if (ret)
-		return dev_err_probe(dev, ret,
-			"Cannot add action for vdd regulator disposal\n");
+		return ret;
 
 	msleep(PAC1921_POWERUP_TIME_MS);
 

@@ -27,7 +27,7 @@
 #endif /* LOCAL_CONFIG_HAVE_LIBURING */
 
 #include "../../../../mm/gup_test.h"
-#include "../kselftest.h"
+#include "kselftest.h"
 #include "vm_util.h"
 
 static size_t pagesize;
@@ -114,7 +114,15 @@ static void do_test(int fd, size_t size, enum test_type type, bool shared)
 	}
 
 	if (fallocate(fd, 0, 0, size)) {
-		if (size == pagesize) {
+		/*
+		 * Some filesystems (eg, NFSv3) don't support
+		 * fallocate(), report this as a skip rather than a
+		 * test failure.
+		 */
+		if (errno == EOPNOTSUPP) {
+			ksft_print_msg("fallocate() not supported by filesystem\n");
+			result = KSFT_SKIP;
+		} else if (size == pagesize) {
 			ksft_print_msg("fallocate() failed (%s)\n", strerror(errno));
 			result = KSFT_FAIL;
 		} else {
@@ -171,7 +179,7 @@ static void do_test(int fd, size_t size, enum test_type type, bool shared)
 		if (rw && shared && fs_is_unknown(fs_type)) {
 			ksft_print_msg("Unknown filesystem\n");
 			result = KSFT_SKIP;
-			return;
+			break;
 		}
 		/*
 		 * R/O pinning or pinning in a private mapping is always

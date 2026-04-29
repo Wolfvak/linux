@@ -22,7 +22,7 @@
 
 #define LOWCORE_ALT_ADDRESS	_AC(0x70000, UL)
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 struct pgm_tdb {
 	u64 data[32];
@@ -100,7 +100,8 @@ struct lowcore {
 
 	/* Save areas. */
 	__u64	save_area[8];			/* 0x0200 */
-	__u8	pad_0x0240[0x0280-0x0240];	/* 0x0240 */
+	__u64	stack_canary;			/* 0x0240 */
+	__u8	pad_0x0248[0x0280-0x0248];	/* 0x0248 */
 	__u64	save_area_restart[1];		/* 0x0280 */
 
 	__u64	pcpu;				/* 0x0288 */
@@ -237,7 +238,7 @@ static inline void set_prefix(__u32 address)
 	asm volatile("spx %0" : : "Q" (address) : "memory");
 }
 
-#else /* __ASSEMBLY__ */
+#else /* __ASSEMBLER__ */
 
 .macro GET_LC reg
 	ALTERNATIVE "lghi	\reg,0",					\
@@ -251,5 +252,5 @@ static inline void set_prefix(__u32 address)
 		ALT_FEATURE(MFEATURE_LOWCORE)
 .endm
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 #endif /* _ASM_S390_LOWCORE_H */

@@ -7,6 +7,8 @@
 #include <linux/seq_file.h>
 #include <linux/string_helpers.h>
 
+#include <drm/drm_print.h>
+
 #include "i915_drv.h"
 #include "i915_reg.h"
 #include "intel_gt.h"
@@ -22,7 +24,7 @@
 #include "intel_rps.h"
 #include "intel_runtime_pm.h"
 #include "intel_uncore.h"
-#include "vlv_sideband.h"
+#include "vlv_iosf_sb.h"
 
 void intel_gt_pm_debugfs_forcewake_user_open(struct intel_gt *gt)
 {
@@ -366,9 +368,9 @@ void intel_gt_pm_frequency_dump(struct intel_gt *gt, struct drm_printer *p)
 		drm_printf(p, "SW control enabled: %s\n",
 			   str_yes_no((rpmodectl & GEN6_RP_MEDIA_MODE_MASK) == GEN6_RP_MEDIA_SW_MODE));
 
-		vlv_punit_get(i915);
-		freq_sts = vlv_punit_read(i915, PUNIT_REG_GPU_FREQ_STS);
-		vlv_punit_put(i915);
+		vlv_iosf_sb_get(&i915->drm, BIT(VLV_IOSF_SB_PUNIT));
+		freq_sts = vlv_iosf_sb_read(&i915->drm, VLV_IOSF_SB_PUNIT, PUNIT_REG_GPU_FREQ_STS);
+		vlv_iosf_sb_put(&i915->drm, BIT(VLV_IOSF_SB_PUNIT));
 
 		drm_printf(p, "PUNIT_REG_GPU_FREQ_STS: 0x%08x\n", freq_sts);
 
@@ -586,13 +588,14 @@ DEFINE_SIMPLE_ATTRIBUTE(perf_limit_reasons_fops, perf_limit_reasons_get,
 void intel_gt_pm_debugfs_register(struct intel_gt *gt, struct dentry *root)
 {
 	static const struct intel_gt_debugfs_file files[] = {
-		{ "drpc", &drpc_fops, NULL },
-		{ "frequency", &frequency_fops, NULL },
-		{ "forcewake", &fw_domains_fops, NULL },
-		{ "forcewake_user", &forcewake_user_fops, NULL},
-		{ "llc", &llc_fops, llc_eval },
-		{ "rps_boost", &rps_boost_fops, rps_eval },
-		{ "perf_limit_reasons", &perf_limit_reasons_fops, perf_limit_reasons_eval },
+		{ .name = "drpc", .fops = &drpc_fops },
+		{ .name = "frequency", .fops = &frequency_fops },
+		{ .name = "forcewake", .fops = &fw_domains_fops },
+		{ .name = "forcewake_user", .fops = &forcewake_user_fops},
+		{ .name = "llc", .fops = &llc_fops, .eval = llc_eval },
+		{ .name = "rps_boost", .fops = &rps_boost_fops, .eval = rps_eval },
+		{ .name = "perf_limit_reasons", .fops = &perf_limit_reasons_fops,
+		  .eval = perf_limit_reasons_eval },
 	};
 
 	intel_gt_debugfs_register_files(root, files, ARRAY_SIZE(files), gt);

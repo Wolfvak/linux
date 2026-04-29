@@ -1880,7 +1880,7 @@ create_pipe(enum ia_css_pipe_mode mode,
 		return -EINVAL;
 	}
 
-	me = kmalloc(sizeof(*me), GFP_KERNEL);
+	me = kmalloc_obj(*me);
 	if (!me)
 		return -ENOMEM;
 
@@ -2001,10 +2001,6 @@ ia_css_uninit(void)
 	ia_css_debug_dtrace(IA_CSS_DEBUG_TRACE, "ia_css_uninit() enter: void\n");
 
 	sh_css_params_free_default_gdc_lut();
-
-	/* TODO: JB: implement decent check and handling of freeing mipi frames */
-	if (!mipi_is_free())
-		dev_warn(atomisp_dev, "mipi frames are not freed.\n");
 
 	/* cleanup generic data */
 	sh_css_params_uninit();
@@ -3743,23 +3739,6 @@ ia_css_pipe_dequeue_buffer(struct ia_css_pipe *pipe,
 			case IA_CSS_BUFFER_TYPE_INPUT_FRAME:
 			case IA_CSS_BUFFER_TYPE_OUTPUT_FRAME:
 			case IA_CSS_BUFFER_TYPE_SEC_OUTPUT_FRAME:
-				if (pipe && pipe->stop_requested) {
-					if (!IS_ISP2401) {
-						/*
-						 * free mipi frames only for old input
-						 * system for 2401 it is done in
-						 * ia_css_stream_destroy call
-						 */
-						return_err = free_mipi_frames(pipe);
-						if (return_err) {
-							IA_CSS_LOG("free_mipi_frames() failed");
-							IA_CSS_LEAVE_ERR(return_err);
-							return return_err;
-						}
-					}
-					pipe->stop_requested = false;
-				}
-				fallthrough;
 			case IA_CSS_BUFFER_TYPE_VF_OUTPUT_FRAME:
 			case IA_CSS_BUFFER_TYPE_SEC_VF_OUTPUT_FRAME:
 				frame = (struct ia_css_frame *)HOST_ADDRESS(ddr_buffer.kernel_ptr);
@@ -4095,8 +4074,6 @@ sh_css_pipe_start(struct ia_css_stream *stream)
 		return err;
 	}
 
-	pipe->stop_requested = false;
-
 	switch (pipe_id) {
 	case IA_CSS_PIPE_ID_PREVIEW:
 		err = preview_start(pipe);
@@ -4120,19 +4097,15 @@ sh_css_pipe_start(struct ia_css_stream *stream)
 		for (i = 1; i < stream->num_pipes && 0 == err ; i++) {
 			switch (stream->pipes[i]->mode) {
 			case IA_CSS_PIPE_ID_PREVIEW:
-				stream->pipes[i]->stop_requested = false;
 				err = preview_start(stream->pipes[i]);
 				break;
 			case IA_CSS_PIPE_ID_VIDEO:
-				stream->pipes[i]->stop_requested = false;
 				err = video_start(stream->pipes[i]);
 				break;
 			case IA_CSS_PIPE_ID_CAPTURE:
-				stream->pipes[i]->stop_requested = false;
 				err = capture_start(stream->pipes[i]);
 				break;
 			case IA_CSS_PIPE_ID_YUVPP:
-				stream->pipes[i]->stop_requested = false;
 				err = yuvpp_start(stream->pipes[i]);
 				break;
 			default:
@@ -4557,16 +4530,15 @@ static int load_video_binaries(struct ia_css_pipe *pipe)
 		if (err)
 			return err;
 		mycs->num_yuv_scaler = cas_scaler_descr.num_stage;
-		mycs->yuv_scaler_binary = kcalloc(cas_scaler_descr.num_stage,
-						  sizeof(struct ia_css_binary),
-						  GFP_KERNEL);
+		mycs->yuv_scaler_binary = kzalloc_objs(struct ia_css_binary,
+						       cas_scaler_descr.num_stage);
 		if (!mycs->yuv_scaler_binary) {
 			mycs->num_yuv_scaler = 0;
 			err = -ENOMEM;
 			return err;
 		}
-		mycs->is_output_stage = kcalloc(cas_scaler_descr.num_stage,
-						sizeof(bool), GFP_KERNEL);
+		mycs->is_output_stage = kzalloc_objs(bool,
+						     cas_scaler_descr.num_stage);
 		if (!mycs->is_output_stage) {
 			err = -ENOMEM;
 			return err;
@@ -5137,16 +5109,15 @@ static int load_primary_binaries(
 			return err;
 		}
 		mycs->num_yuv_scaler = cas_scaler_descr.num_stage;
-		mycs->yuv_scaler_binary = kcalloc(cas_scaler_descr.num_stage,
-						  sizeof(struct ia_css_binary),
-						  GFP_KERNEL);
+		mycs->yuv_scaler_binary = kzalloc_objs(struct ia_css_binary,
+						       cas_scaler_descr.num_stage);
 		if (!mycs->yuv_scaler_binary) {
 			err = -ENOMEM;
 			IA_CSS_LEAVE_ERR_PRIVATE(err);
 			return err;
 		}
-		mycs->is_output_stage = kcalloc(cas_scaler_descr.num_stage,
-						sizeof(bool), GFP_KERNEL);
+		mycs->is_output_stage = kzalloc_objs(bool,
+						     cas_scaler_descr.num_stage);
 		if (!mycs->is_output_stage) {
 			err = -ENOMEM;
 			IA_CSS_LEAVE_ERR_PRIVATE(err);
@@ -5997,9 +5968,8 @@ ia_css_pipe_create_cas_scaler_desc(struct ia_css_pipe *pipe,
 
 	descr->num_stage = num_stages;
 
-	descr->in_info = kmalloc_array(descr->num_stage,
-				       sizeof(struct ia_css_frame_info),
-				       GFP_KERNEL);
+	descr->in_info = kmalloc_objs(struct ia_css_frame_info,
+				      descr->num_stage);
 	if (!descr->in_info) {
 		err = -ENOMEM;
 		goto ERR;
@@ -6170,15 +6140,14 @@ load_yuvpp_binaries(struct ia_css_pipe *pipe)
 			goto ERR;
 		mycs->num_output = cas_scaler_descr.num_output_stage;
 		mycs->num_yuv_scaler = cas_scaler_descr.num_stage;
-		mycs->yuv_scaler_binary = kcalloc(cas_scaler_descr.num_stage,
-						  sizeof(struct ia_css_binary),
-						  GFP_KERNEL);
+		mycs->yuv_scaler_binary = kzalloc_objs(struct ia_css_binary,
+						       cas_scaler_descr.num_stage);
 		if (!mycs->yuv_scaler_binary) {
 			err = -ENOMEM;
 			goto ERR;
 		}
-		mycs->is_output_stage = kcalloc(cas_scaler_descr.num_stage,
-						sizeof(bool), GFP_KERNEL);
+		mycs->is_output_stage = kzalloc_objs(bool,
+						     cas_scaler_descr.num_stage);
 		if (!mycs->is_output_stage) {
 			err = -ENOMEM;
 			goto ERR;
@@ -6277,9 +6246,7 @@ load_yuvpp_binaries(struct ia_css_pipe *pipe)
 
 		mycs->num_vf_pp = 1;
 	}
-	mycs->vf_pp_binary = kcalloc(mycs->num_vf_pp,
-				     sizeof(struct ia_css_binary),
-				     GFP_KERNEL);
+	mycs->vf_pp_binary = kzalloc_objs(struct ia_css_binary, mycs->num_vf_pp);
 	if (!mycs->vf_pp_binary) {
 		err = -ENOMEM;
 		goto ERR;
@@ -7936,7 +7903,7 @@ ia_css_stream_create(const struct ia_css_stream_config *stream_config,
 	}
 
 	/* allocate the stream instance */
-	curr_stream = kzalloc(sizeof(struct ia_css_stream), GFP_KERNEL);
+	curr_stream = kzalloc_obj(struct ia_css_stream);
 	if (!curr_stream) {
 		err = -ENOMEM;
 		IA_CSS_LEAVE_ERR(err);
@@ -7947,7 +7914,7 @@ ia_css_stream_create(const struct ia_css_stream_config *stream_config,
 
 	/* allocate pipes */
 	curr_stream->num_pipes = num_pipes;
-	curr_stream->pipes = kcalloc(num_pipes, sizeof(struct ia_css_pipe *), GFP_KERNEL);
+	curr_stream->pipes = kzalloc_objs(struct ia_css_pipe *, num_pipes);
 	if (!curr_stream->pipes) {
 		curr_stream->num_pipes = 0;
 		kfree(curr_stream);

@@ -429,7 +429,7 @@ static void iwlagn_rx_statistics(struct iwl_priv *priv,
 	 * thermal update even if the uCode doesn't give
 	 * us one */
 	mod_timer(&priv->statistics_periodic, jiffies +
-		  msecs_to_jiffies(reg_recalib_period * 1000));
+		  secs_to_jiffies(reg_recalib_period));
 
 	if (unlikely(!test_bit(STATUS_SCANNING, &priv->status)) &&
 	    (pkt->hdr.cmd == STATISTICS_NOTIFICATION)) {
@@ -915,7 +915,7 @@ static void iwlagn_rx_noa_notification(struct iwl_priv *priv,
 		len += 1 + 2;
 		copylen += 1 + 2;
 
-		new_data = kmalloc(struct_size(new_data, data, len), GFP_ATOMIC);
+		new_data = kmalloc_flex(*new_data, data, len, GFP_ATOMIC);
 		if (new_data) {
 			new_data->length = len;
 			new_data->data[0] = WLAN_EID_VENDOR_SPECIFIC;

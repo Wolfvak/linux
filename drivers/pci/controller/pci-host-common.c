@@ -22,7 +22,7 @@ static void gen_pci_unmap_cfg(void *ptr)
 	pci_ecam_free((struct pci_config_window *)ptr);
 }
 
-static struct pci_config_window *gen_pci_init(struct device *dev,
+struct pci_config_window *pci_host_common_ecam_create(struct device *dev,
 		struct pci_host_bridge *bridge, const struct pci_ecam_ops *ops)
 {
 	int err;
@@ -32,7 +32,7 @@ static struct pci_config_window *gen_pci_init(struct device *dev,
 
 	err = of_address_to_resource(dev->of_node, 0, &cfgres);
 	if (err) {
-		dev_err(dev, "missing \"reg\" property\n");
+		dev_err(dev, "missing or malformed \"reg\" property\n");
 		return ERR_PTR(err);
 	}
 
@@ -50,24 +50,21 @@ static struct pci_config_window *gen_pci_init(struct device *dev,
 
 	return cfg;
 }
+EXPORT_SYMBOL_GPL(pci_host_common_ecam_create);
 
 int pci_host_common_init(struct platform_device *pdev,
+			 struct pci_host_bridge *bridge,
 			 const struct pci_ecam_ops *ops)
 {
 	struct device *dev = &pdev->dev;
-	struct pci_host_bridge *bridge;
 	struct pci_config_window *cfg;
-
-	bridge = devm_pci_alloc_host_bridge(dev, 0);
-	if (!bridge)
-		return -ENOMEM;
 
 	of_pci_check_probe_only();
 
 	platform_set_drvdata(pdev, bridge);
 
 	/* Parse and map our Configuration Space windows */
-	cfg = gen_pci_init(dev, bridge, ops);
+	cfg = pci_host_common_ecam_create(dev, bridge, ops);
 	if (IS_ERR(cfg))
 		return PTR_ERR(cfg);
 
@@ -84,12 +81,17 @@ EXPORT_SYMBOL_GPL(pci_host_common_init);
 int pci_host_common_probe(struct platform_device *pdev)
 {
 	const struct pci_ecam_ops *ops;
+	struct pci_host_bridge *bridge;
 
 	ops = of_device_get_match_data(&pdev->dev);
 	if (!ops)
 		return -ENODEV;
 
-	return pci_host_common_init(pdev, ops);
+	bridge = devm_pci_alloc_host_bridge(&pdev->dev, 0);
+	if (!bridge)
+		return -ENOMEM;
+
+	return pci_host_common_init(pdev, bridge, ops);
 }
 EXPORT_SYMBOL_GPL(pci_host_common_probe);
 

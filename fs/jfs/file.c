@@ -6,6 +6,7 @@
 
 #include <linux/mm.h>
 #include <linux/fs.h>
+#include <linux/filelock.h>
 #include <linux/posix_acl.h>
 #include <linux/quotaops.h>
 #include "jfs_incore.h"
@@ -26,8 +27,8 @@ int jfs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 		return rc;
 
 	inode_lock(inode);
-	if (!(inode->i_state & I_DIRTY_ALL) ||
-	    (datasync && !(inode->i_state & I_DIRTY_DATASYNC))) {
+	if (!(inode_state_read_once(inode) & I_DIRTY_ALL) ||
+	    (datasync && !(inode_state_read_once(inode) & I_DIRTY_DATASYNC))) {
 		/* Make sure committed changes hit the disk */
 		jfs_flush_journal(JFS_SBI(inode->i_sb)->log, 1);
 		inode_unlock(inode);
@@ -43,6 +44,9 @@ int jfs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 static int jfs_open(struct inode *inode, struct file *file)
 {
 	int rc;
+
+	if (S_ISREG(inode->i_mode) && inode->i_size < 0)
+		return -EIO;
 
 	if ((rc = dquot_file_open(inode, file)))
 		return rc;
@@ -143,11 +147,12 @@ const struct file_operations jfs_file_operations = {
 	.llseek		= generic_file_llseek,
 	.read_iter	= generic_file_read_iter,
 	.write_iter	= generic_file_write_iter,
-	.mmap		= generic_file_mmap,
+	.mmap_prepare	= generic_file_mmap_prepare,
 	.splice_read	= filemap_splice_read,
 	.splice_write	= iter_file_splice_write,
 	.fsync		= jfs_fsync,
 	.release	= jfs_release,
 	.unlocked_ioctl = jfs_ioctl,
 	.compat_ioctl	= compat_ptr_ioctl,
+	.setlease	= generic_setlease,
 };

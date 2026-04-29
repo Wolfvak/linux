@@ -1034,7 +1034,6 @@ static void dce_v6_0_program_watermarks(struct amdgpu_device *adev,
 
 	/* save values for DPM */
 	amdgpu_crtc->line_time = line_time;
-	amdgpu_crtc->wm_high = latency_watermark_a;
 
 	/* Save number of lines the linebuffer leads before the scanout */
 	amdgpu_crtc->lb_vblank_lead_lines = lb_vblank_lead_lines;
@@ -1451,16 +1450,11 @@ static int dce_v6_0_audio_init(struct amdgpu_device *adev)
 
 static void dce_v6_0_audio_fini(struct amdgpu_device *adev)
 {
-	int i;
-
 	if (!amdgpu_audio)
 		return;
 
 	if (!adev->mode_info.audio.enabled)
 		return;
-
-	for (i = 0; i < adev->mode_info.audio.num_pins; i++)
-		dce_v6_0_audio_enable(adev, &adev->mode_info.audio.pin[i], false);
 
 	adev->mode_info.audio.enabled = false;
 }
@@ -1824,7 +1818,7 @@ static int dce_v6_0_afmt_init(struct amdgpu_device *adev)
 
 	/* DCE6 has audio blocks tied to DIG encoders */
 	for (i = 0; i < adev->mode_info.num_dig; i++) {
-		adev->mode_info.afmt[i] = kzalloc(sizeof(struct amdgpu_afmt), GFP_KERNEL);
+		adev->mode_info.afmt[i] = kzalloc_obj(struct amdgpu_afmt);
 		if (adev->mode_info.afmt[i]) {
 			adev->mode_info.afmt[i]->offset = dig_offsets[i];
 			adev->mode_info.afmt[i]->id = i;
@@ -1882,7 +1876,7 @@ static void dce_v6_0_grph_enable(struct drm_crtc *crtc, bool enable)
 
 static int dce_v6_0_crtc_do_set_base(struct drm_crtc *crtc,
 				     struct drm_framebuffer *fb,
-				     int x, int y, int atomic)
+				     int x, int y)
 {
 	struct amdgpu_crtc *amdgpu_crtc = to_amdgpu_crtc(crtc);
 	struct drm_device *dev = crtc->dev;
@@ -1898,15 +1892,12 @@ static int dce_v6_0_crtc_do_set_base(struct drm_crtc *crtc,
 	bool bypass_lut = false;
 
 	/* no fb bound */
-	if (!atomic && !crtc->primary->fb) {
+	if (!crtc->primary->fb) {
 		DRM_DEBUG_KMS("No FB bound\n");
 		return 0;
 	}
 
-	if (atomic)
-		target_fb = fb;
-	else
-		target_fb = crtc->primary->fb;
+	target_fb = crtc->primary->fb;
 
 	/* If atomic, assume fb object is pinned & idle & fenced and
 	 * just update base pointers
@@ -1917,13 +1908,11 @@ static int dce_v6_0_crtc_do_set_base(struct drm_crtc *crtc,
 	if (unlikely(r != 0))
 		return r;
 
-	if (!atomic) {
-		abo->flags |= AMDGPU_GEM_CREATE_VRAM_CONTIGUOUS;
-		r = amdgpu_bo_pin(abo, AMDGPU_GEM_DOMAIN_VRAM);
-		if (unlikely(r != 0)) {
-			amdgpu_bo_unreserve(abo);
-			return -EINVAL;
-		}
+	abo->flags |= AMDGPU_GEM_CREATE_VRAM_CONTIGUOUS;
+	r = amdgpu_bo_pin(abo, AMDGPU_GEM_DOMAIN_VRAM);
+	if (unlikely(r != 0)) {
+		amdgpu_bo_unreserve(abo);
+		return -EINVAL;
 	}
 	fb_location = amdgpu_bo_gpu_offset(abo);
 
@@ -2089,7 +2078,7 @@ static int dce_v6_0_crtc_do_set_base(struct drm_crtc *crtc,
 	/* set pageflip to happen anywhere in vblank interval */
 	WREG32(mmMASTER_UPDATE_MODE + amdgpu_crtc->crtc_offset, 0);
 
-	if (!atomic && fb && fb != crtc->primary->fb) {
+	if (fb && fb != crtc->primary->fb) {
 		abo = gem_to_amdgpu_bo(fb->obj[0]);
 		r = amdgpu_bo_reserve(abo, true);
 		if (unlikely(r != 0))
@@ -2584,7 +2573,7 @@ static int dce_v6_0_crtc_mode_set(struct drm_crtc *crtc,
 
 	amdgpu_atombios_crtc_set_pll(crtc, adjusted_mode);
 	amdgpu_atombios_crtc_set_dtd_timing(crtc, adjusted_mode);
-	dce_v6_0_crtc_do_set_base(crtc, old_fb, x, y, 0);
+	dce_v6_0_crtc_do_set_base(crtc, old_fb, x, y);
 	amdgpu_atombios_crtc_overscan_setup(crtc, mode, adjusted_mode);
 	amdgpu_atombios_crtc_scaler_setup(crtc);
 	dce_v6_0_cursor_reset(crtc);
@@ -2632,14 +2621,7 @@ static bool dce_v6_0_crtc_mode_fixup(struct drm_crtc *crtc,
 static int dce_v6_0_crtc_set_base(struct drm_crtc *crtc, int x, int y,
 				  struct drm_framebuffer *old_fb)
 {
-	return dce_v6_0_crtc_do_set_base(crtc, old_fb, x, y, 0);
-}
-
-static int dce_v6_0_crtc_set_base_atomic(struct drm_crtc *crtc,
-					 struct drm_framebuffer *fb,
-					 int x, int y, enum mode_set_atomic state)
-{
-	return dce_v6_0_crtc_do_set_base(crtc, fb, x, y, 1);
+	return dce_v6_0_crtc_do_set_base(crtc, old_fb, x, y);
 }
 
 static const struct drm_crtc_helper_funcs dce_v6_0_crtc_helper_funcs = {
@@ -2647,7 +2629,6 @@ static const struct drm_crtc_helper_funcs dce_v6_0_crtc_helper_funcs = {
 	.mode_fixup = dce_v6_0_crtc_mode_fixup,
 	.mode_set = dce_v6_0_crtc_mode_set,
 	.mode_set_base = dce_v6_0_crtc_set_base,
-	.mode_set_base_atomic = dce_v6_0_crtc_set_base_atomic,
 	.prepare = dce_v6_0_crtc_prepare,
 	.commit = dce_v6_0_crtc_commit,
 	.disable = dce_v6_0_crtc_disable,
@@ -3432,7 +3413,7 @@ static void dce_v6_0_encoder_add(struct amdgpu_device *adev,
 	}
 
 	/* add a new one */
-	amdgpu_encoder = kzalloc(sizeof(struct amdgpu_encoder), GFP_KERNEL);
+	amdgpu_encoder = kzalloc_obj(struct amdgpu_encoder);
 	if (!amdgpu_encoder)
 		return;
 

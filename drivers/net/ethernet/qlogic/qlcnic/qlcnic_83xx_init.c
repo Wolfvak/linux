@@ -2051,7 +2051,7 @@ static void qlcnic_83xx_init_hw(struct qlcnic_adapter *p_dev)
 		dev_err(&p_dev->pdev->dev, "%s: failed\n", __func__);
 }
 
-/* POST FW related definations*/
+/* POST FW related definitions*/
 #define QLC_83XX_POST_SIGNATURE_REG	0x41602014
 #define QLC_83XX_POST_MODE_REG		0x41602018
 #define QLC_83XX_POST_FAST_MODE		0
@@ -2388,7 +2388,7 @@ static int qlcnic_83xx_get_fw_info(struct qlcnic_adapter *adapter)
 	struct qlc_83xx_fw_info *fw_info;
 	int err = 0;
 
-	ahw->fw_info = kzalloc(sizeof(*fw_info), GFP_KERNEL);
+	ahw->fw_info = kzalloc_obj(*fw_info);
 	if (!ahw->fw_info) {
 		err = -ENOMEM;
 	} else {

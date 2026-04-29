@@ -138,7 +138,7 @@ static int __init reloc_handler(u32 type, u32 *loc_orig, u32 *loc_new,
 		apply_r_mips_hi16_rel(loc_orig, loc_new, offset);
 		break;
 	default:
-		pr_err("Unhandled relocation type %d at 0x%pK\n", type,
+		pr_err("Unhandled relocation type %d at 0x%p\n", type,
 		       loc_orig);
 		return -ENOEXEC;
 	}
@@ -420,7 +420,20 @@ void *__init relocate_kernel(void)
 			goto out;
 
 		/* The current thread is now within the relocated image */
+#ifndef CONFIG_CC_IS_CLANG
 		__current_thread_info = RELOCATED(&init_thread_union);
+#else
+		/*
+		 * LLVM may wrongly restore $gp ($28) in epilog even if it's
+		 * intentionally modified. Work around this by using inline
+		 * assembly to assign $gp. $gp couldn't be listed as output or
+		 * clobber, or LLVM will still restore its original value.
+		 * See also LLVM upstream issue
+		 * https://github.com/llvm/llvm-project/issues/176546
+		 */
+		asm volatile("move $28, %0" : :
+			     "r" (RELOCATED(&init_thread_union)));
+#endif
 
 		/* Return the new kernel's entry point */
 		kernel_entry = RELOCATED(start_kernel);
@@ -439,10 +452,10 @@ static void show_kernel_relocation(const char *level)
 {
 	if (__kaslr_offset > 0) {
 		printk(level);
-		pr_cont("Kernel relocated by 0x%pK\n", (void *)__kaslr_offset);
-		pr_cont(" .text @ 0x%pK\n", _text);
-		pr_cont(" .data @ 0x%pK\n", _sdata);
-		pr_cont(" .bss  @ 0x%pK\n", __bss_start);
+		pr_cont("Kernel relocated by 0x%p\n", (void *)__kaslr_offset);
+		pr_cont(" .text @ 0x%p\n", _text);
+		pr_cont(" .data @ 0x%p\n", _sdata);
+		pr_cont(" .bss  @ 0x%p\n", __bss_start);
 	}
 }
 

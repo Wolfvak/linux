@@ -112,7 +112,7 @@ static umode_t soc_dev_attr_is_visible(struct kobject *kobj,
 }
 
 static const struct attribute_group soc_dapm_dev_group = {
-	.attrs = soc_dapm_dev_attrs,
+	.attrs = snd_soc_dapm_dev_attrs,
 	.is_visible = soc_dev_attr_is_visible,
 };
 
@@ -151,7 +151,7 @@ static void soc_init_component_debugfs(struct snd_soc_component *component)
 				component->card->debugfs_card_root);
 	}
 
-	snd_soc_dapm_debugfs_init(snd_soc_component_get_dapm(component),
+	snd_soc_dapm_debugfs_init(snd_soc_component_to_dapm(component),
 		component->debugfs_root);
 }
 
@@ -203,7 +203,7 @@ static void soc_init_card_debugfs(struct snd_soc_card *card)
 	debugfs_create_u32("dapm_pop_time", 0644, card->debugfs_card_root,
 			   &card->pop_time);
 
-	snd_soc_dapm_debugfs_init(&card->dapm, card->debugfs_card_root);
+	snd_soc_dapm_debugfs_init(snd_soc_card_to_dapm(card), card->debugfs_card_root);
 }
 
 static void soc_cleanup_card_debugfs(struct snd_soc_card *card)
@@ -369,20 +369,25 @@ struct snd_soc_component
 *snd_soc_lookup_component_nolocked(struct device *dev, const char *driver_name)
 {
 	struct snd_soc_component *component;
-	struct snd_soc_component *found_component;
 
-	found_component = NULL;
 	for_each_component(component) {
-		if ((dev == component->dev) &&
-		    (!driver_name ||
-		     (driver_name == component->driver->name) ||
-		     (strcmp(component->driver->name, driver_name) == 0))) {
-			found_component = component;
-			break;
-		}
+		if (dev != component->dev)
+			continue;
+
+		if (!driver_name)
+			return component;
+
+		if (!component->driver->name)
+			continue;
+
+		if (component->driver->name == driver_name)
+			return component;
+
+		if (strcmp(component->driver->name, driver_name) == 0)
+			return component;
 	}
 
-	return found_component;
+	return NULL;
 }
 EXPORT_SYMBOL_GPL(snd_soc_lookup_component_nolocked);
 
@@ -457,8 +462,7 @@ static void soc_free_pcm_runtime(struct snd_soc_pcm_runtime *rtd)
 
 	list_del(&rtd->list);
 
-	if (delayed_work_pending(&rtd->delayed_work))
-		flush_delayed_work(&rtd->delayed_work);
+	flush_delayed_work(&rtd->delayed_work);
 	snd_soc_pcm_component_free(rtd);
 
 	/*
@@ -502,7 +506,7 @@ static struct snd_soc_pcm_runtime *soc_new_pcm_runtime(
 	/*
 	 * for rtd->dev
 	 */
-	dev = kzalloc(sizeof(struct device), GFP_KERNEL);
+	dev = kzalloc_obj(struct device);
 	if (!dev)
 		return NULL;
 
@@ -539,6 +543,11 @@ static struct snd_soc_pcm_runtime *soc_new_pcm_runtime(
 	}
 	dev_set_drvdata(dev, rtd);
 	INIT_DELAYED_WORK(&rtd->delayed_work, close_delayed_work);
+
+	if ((dai_link->num_cpus + dai_link->num_codecs) == 0) {
+		dev_err(dev, "ASoC: it has no CPU or codec DAIs\n");
+		goto free_rtd;
+	}
 
 	/*
 	 * for rtd->dais
@@ -681,8 +690,8 @@ int snd_soc_suspend(struct device *dev)
 	soc_dapm_suspend_resume(card, SND_SOC_DAPM_STREAM_SUSPEND);
 
 	/* Recheck all endpoints too, their state is affected by suspend */
-	dapm_mark_endpoints_dirty(card);
-	snd_soc_dapm_sync(&card->dapm);
+	snd_soc_dapm_mark_endpoints_dirty(card);
+	snd_soc_dapm_sync(snd_soc_card_to_dapm(card));
 
 	/* suspend all COMPONENTs */
 	for_each_card_rtds(card, rtd) {
@@ -691,8 +700,7 @@ int snd_soc_suspend(struct device *dev)
 			continue;
 
 		for_each_rtd_components(rtd, i, component) {
-			struct snd_soc_dapm_context *dapm =
-				snd_soc_component_get_dapm(component);
+			struct snd_soc_dapm_context *dapm = snd_soc_component_to_dapm(component);
 
 			/*
 			 * ignore if component was already suspended
@@ -712,7 +720,7 @@ int snd_soc_suspend(struct device *dev)
 				 * means it's doing something,
 				 * otherwise fall through.
 				 */
-				if (dapm->idle_bias_off) {
+				if (!snd_soc_dapm_get_idle_bias(dapm)) {
 					dev_dbg(component->dev,
 						"ASoC: idle_bias_off CODEC on over suspend\n");
 					break;
@@ -778,8 +786,8 @@ static void soc_resume_deferred(struct work_struct *work)
 	dev_dbg(card->dev, "ASoC: resume work completed\n");
 
 	/* Recheck all endpoints too, their state is affected by suspend */
-	dapm_mark_endpoints_dirty(card);
-	snd_soc_dapm_sync(&card->dapm);
+	snd_soc_dapm_mark_endpoints_dirty(card);
+	snd_soc_dapm_sync(snd_soc_card_to_dapm(card));
 
 	/* userspace can access us now we are back as we were before */
 	snd_power_change_state(card->snd_card, SNDRV_CTL_POWER_D0);
@@ -1139,6 +1147,9 @@ sanity_check:
 void snd_soc_remove_pcm_runtime(struct snd_soc_card *card,
 				struct snd_soc_pcm_runtime *rtd)
 {
+	if (!rtd)
+		return;
+
 	lockdep_assert_held(&client_mutex);
 
 	/*
@@ -1582,7 +1593,7 @@ static void soc_remove_component(struct snd_soc_component *component,
 		snd_soc_component_remove(component);
 
 	list_del_init(&component->card_list);
-	snd_soc_dapm_free(snd_soc_component_get_dapm(component));
+	snd_soc_dapm_free(snd_soc_component_to_dapm(component));
 	soc_cleanup_component_debugfs(component);
 	component->card = NULL;
 	snd_soc_component_module_put_when_remove(component);
@@ -1591,8 +1602,7 @@ static void soc_remove_component(struct snd_soc_component *component,
 static int soc_probe_component(struct snd_soc_card *card,
 			       struct snd_soc_component *component)
 {
-	struct snd_soc_dapm_context *dapm =
-		snd_soc_component_get_dapm(component);
+	struct snd_soc_dapm_context *dapm = snd_soc_component_to_dapm(component);
 	struct snd_soc_dai *dai;
 	int probed = 0;
 	int ret;
@@ -1644,8 +1654,8 @@ static int soc_probe_component(struct snd_soc_card *card,
 	if (ret < 0)
 		goto err_probe;
 
-	WARN(dapm->idle_bias_off &&
-	     dapm->bias_level != SND_SOC_BIAS_OFF,
+	WARN(!snd_soc_dapm_get_idle_bias(dapm) &&
+	     snd_soc_dapm_get_bias_level(dapm) != SND_SOC_BIAS_OFF,
 	     "codec %s can not start from non-off bias with idle_bias_off==1\n",
 	     component->name);
 	probed = 1;
@@ -1853,11 +1863,14 @@ static void cleanup_dmi_name(char *name)
 
 /*
  * Check if a DMI field is valid, i.e. not containing any string
- * in the black list.
+ * in the black list and not the empty string.
  */
 static int is_dmi_valid(const char *field)
 {
 	int i = 0;
+
+	if (!field[0])
+		return 0;
 
 	while (dmi_blacklist[i]) {
 		if (strstr(field, dmi_blacklist[i]))
@@ -2111,6 +2124,9 @@ static void soc_cleanup_card_resources(struct snd_soc_card *card)
 	for_each_card_rtds(card, rtd)
 		if (rtd->initialized)
 			snd_soc_link_exit(rtd);
+	/* flush delayed work before removing DAIs and DAPM widgets */
+	snd_soc_flush_all_delayed_work(card);
+
 	/* remove and free each DAI */
 	soc_remove_link_dais(card);
 	soc_remove_link_components(card);
@@ -2122,7 +2138,7 @@ static void soc_cleanup_card_resources(struct snd_soc_card *card)
 	soc_remove_aux_devices(card);
 	soc_unbind_aux_dev(card);
 
-	snd_soc_dapm_free(&card->dapm);
+	snd_soc_dapm_free(snd_soc_card_to_dapm(card));
 	soc_cleanup_card_debugfs(card);
 
 	/* remove the card */
@@ -2148,12 +2164,13 @@ static int snd_soc_bind_card(struct snd_soc_card *card)
 {
 	struct snd_soc_pcm_runtime *rtd;
 	struct snd_soc_component *component;
+	struct snd_soc_dapm_context *dapm = snd_soc_card_to_dapm(card);
 	int ret;
 
 	snd_soc_card_mutex_lock_root(card);
 	snd_soc_fill_dummy_dai(card);
 
-	snd_soc_dapm_init(&card->dapm, card, NULL);
+	snd_soc_dapm_init(dapm, card, NULL);
 
 	/* check whether any platform is ignore machine FE and using topology */
 	soc_check_tplg_fes(card);
@@ -2183,12 +2200,12 @@ static int snd_soc_bind_card(struct snd_soc_card *card)
 
 	soc_resume_init(card);
 
-	ret = snd_soc_dapm_new_controls(&card->dapm, card->dapm_widgets,
+	ret = snd_soc_dapm_new_controls(dapm, card->dapm_widgets,
 					card->num_dapm_widgets);
 	if (ret < 0)
 		goto probe_end;
 
-	ret = snd_soc_dapm_new_controls(&card->dapm, card->of_dapm_widgets,
+	ret = snd_soc_dapm_new_controls(dapm, card->of_dapm_widgets,
 					card->num_of_dapm_widgets);
 	if (ret < 0)
 		goto probe_end;
@@ -2238,12 +2255,12 @@ static int snd_soc_bind_card(struct snd_soc_card *card)
 	if (ret < 0)
 		goto probe_end;
 
-	ret = snd_soc_dapm_add_routes(&card->dapm, card->dapm_routes,
+	ret = snd_soc_dapm_add_routes(dapm, card->dapm_routes,
 				      card->num_dapm_routes);
 	if (ret < 0)
 		goto probe_end;
 
-	ret = snd_soc_dapm_add_routes(&card->dapm, card->of_dapm_routes,
+	ret = snd_soc_dapm_add_routes(dapm, card->of_dapm_routes,
 				      card->num_of_dapm_routes);
 	if (ret < 0)
 		goto probe_end;
@@ -2286,8 +2303,8 @@ static int snd_soc_bind_card(struct snd_soc_card *card)
 	}
 
 	card->instantiated = 1;
-	dapm_mark_endpoints_dirty(card);
-	snd_soc_dapm_sync(&card->dapm);
+	snd_soc_dapm_mark_endpoints_dirty(card);
+	snd_soc_dapm_sync(dapm);
 
 	/* deactivate pins to sleep state */
 	for_each_card_components(card, component)
@@ -2544,6 +2561,10 @@ int snd_soc_register_card(struct snd_soc_card *card)
 	if (!card->name || !card->dev)
 		return -EINVAL;
 
+	card->dapm = snd_soc_dapm_alloc(card->dev);
+	if (!card->dapm)
+		return -ENOMEM;
+
 	dev_set_drvdata(card->dev, card);
 
 	INIT_LIST_HEAD(&card->widgets);
@@ -2604,6 +2625,7 @@ static char *fmt_single_name(struct device *dev, int *id)
 	const char *devname = dev_name(dev);
 	char *found, *name;
 	unsigned int id1, id2;
+	int __id;
 
 	if (devname == NULL)
 		return NULL;
@@ -2616,10 +2638,10 @@ static char *fmt_single_name(struct device *dev, int *id)
 	found = strstr(name, dev->driver->name);
 	if (found) {
 		/* get ID */
-		if (sscanf(&found[strlen(dev->driver->name)], ".%d", id) == 1) {
+		if (sscanf(&found[strlen(dev->driver->name)], ".%d", &__id) == 1) {
 
 			/* discard ID from name if ID == -1 */
-			if (*id == -1)
+			if (__id == -1)
 				found[strlen(dev->driver->name)] = '\0';
 		}
 
@@ -2627,15 +2649,18 @@ static char *fmt_single_name(struct device *dev, int *id)
 	} else if (sscanf(name, "%x-%x", &id1, &id2) == 2) {
 
 		/* create unique ID number from I2C addr and bus */
-		*id = ((id1 & 0xffff) << 16) + id2;
+		__id = ((id1 & 0xffff) << 16) + id2;
 
 		devm_kfree(dev, name);
 
 		/* sanitize component name for DAI link creation */
 		name = devm_kasprintf(dev, GFP_KERNEL, "%s.%s", dev->driver->name, devname);
 	} else {
-		*id = 0;
+		__id = 0;
 	}
+
+	if (id)
+		*id = __id;
 
 	return name;
 }
@@ -2659,6 +2684,8 @@ static inline char *fmt_multiple_name(struct device *dev,
 
 void snd_soc_unregister_dai(struct snd_soc_dai *dai)
 {
+	lockdep_assert_held(&client_mutex);
+
 	dev_dbg(dai->dev, "ASoC: Unregistered DAI '%s'\n", dai->name);
 	list_del(&dai->list);
 }
@@ -2824,14 +2851,19 @@ int snd_soc_component_initialize(struct snd_soc_component *component,
 				 const struct snd_soc_component_driver *driver,
 				 struct device *dev)
 {
+	component->dapm = snd_soc_dapm_alloc(dev);
+	if (!component->dapm)
+		return -ENOMEM;
+
 	INIT_LIST_HEAD(&component->dai_list);
 	INIT_LIST_HEAD(&component->dobj_list);
 	INIT_LIST_HEAD(&component->card_list);
 	INIT_LIST_HEAD(&component->list);
+	INIT_LIST_HEAD(&component->card_aux_list);
 	mutex_init(&component->io_mutex);
 
 	if (!component->name) {
-		component->name = fmt_single_name(dev, &component->id);
+		component->name = fmt_single_name(dev, NULL);
 		if (!component->name) {
 			dev_err(dev, "ASoC: Failed to allocate name\n");
 			return -ENOMEM;

@@ -44,7 +44,7 @@ void sas_hash_addr(u8 *hashed, const u8 *sas_addr);
 int sas_discover_root_expander(struct domain_device *dev);
 
 int sas_ex_revalidate_domain(struct domain_device *dev);
-void sas_unregister_domain_devices(struct asd_sas_port *port, int gone);
+void sas_unregister_domain_devices(struct asd_sas_port *port, bool gone);
 void sas_init_disc(struct sas_discovery *disc, struct asd_sas_port *port);
 void sas_discover_event(struct asd_sas_port *port, enum discover_event ev);
 
@@ -54,6 +54,7 @@ void sas_unregister_dev(struct asd_sas_port *port, struct domain_device *dev);
 void sas_scsi_recover_host(struct Scsi_Host *shost);
 
 int  sas_register_phys(struct sas_ha_struct *sas_ha);
+void sas_unregister_phys(struct sas_ha_struct *sas_ha);
 
 struct asd_sas_event *sas_alloc_event(struct asd_sas_phy *phy, gfp_t gfp_flags);
 void sas_free_event(struct asd_sas_event *event);
@@ -70,7 +71,7 @@ void sas_enable_revalidation(struct sas_ha_struct *ha);
 void sas_queue_deferred_work(struct sas_ha_struct *ha);
 void __sas_drain_work(struct sas_ha_struct *ha);
 
-void sas_deform_port(struct asd_sas_phy *phy, int gone);
+void sas_deform_port(struct asd_sas_phy *phy, bool gone);
 
 void sas_porte_bytes_dmaed(struct work_struct *work);
 void sas_porte_broadcast_rcvd(struct work_struct *work);
@@ -145,20 +146,6 @@ static inline void sas_fail_probe(struct domain_device *dev, const char *func, i
 		func, dev->parent ? "exp-attached" :
 		"direct-attached",
 		SAS_ADDR(dev->sas_addr), err);
-
-	/*
-	 * If the device probe failed, the expander phy attached address
-	 * needs to be reset so that the phy will not be treated as flutter
-	 * in the next revalidation
-	 */
-	if (dev->parent && !dev_is_expander(dev->dev_type)) {
-		struct sas_phy *phy = dev->phy;
-		struct domain_device *parent = dev->parent;
-		struct ex_phy *ex_phy = &parent->ex_dev.ex_phy[phy->number];
-
-		memset(ex_phy->attached_sas_addr, 0, SAS_ADDR_SIZE);
-	}
-
 	sas_unregister_dev(dev->port, dev);
 }
 
@@ -205,7 +192,7 @@ static inline void sas_phy_set_target(struct asd_sas_phy *p, struct domain_devic
 
 static inline struct domain_device *sas_alloc_device(void)
 {
-	struct domain_device *dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+	struct domain_device *dev = kzalloc_obj(*dev);
 
 	if (dev) {
 		INIT_LIST_HEAD(&dev->siblings);
@@ -221,5 +208,79 @@ static inline void sas_put_device(struct domain_device *dev)
 {
 	kref_put(&dev->kref, sas_free_device);
 }
+
+#ifdef CONFIG_SCSI_SAS_ATA
+
+int sas_ata_init(struct domain_device *dev);
+void sas_ata_task_abort(struct sas_task *task);
+int sas_discover_sata(struct domain_device *dev);
+int sas_ata_add_dev(struct domain_device *parent, struct ex_phy *phy,
+		    struct domain_device *child, int phy_id);
+void sas_ata_strategy_handler(struct Scsi_Host *shost);
+void sas_ata_eh(struct Scsi_Host *shost, struct list_head *work_q);
+void sas_ata_end_eh(struct ata_port *ap);
+void sas_ata_wait_eh(struct domain_device *dev);
+void sas_probe_sata(struct asd_sas_port *port);
+void sas_suspend_sata(struct asd_sas_port *port);
+void sas_resume_sata(struct asd_sas_port *port);
+
+#else
+
+static inline int sas_ata_init(struct domain_device *dev)
+{
+	return 0;
+}
+
+static inline void sas_ata_task_abort(struct sas_task *task)
+{
+}
+
+static inline void sas_ata_strategy_handler(struct Scsi_Host *shost)
+{
+}
+
+static inline void sas_ata_eh(struct Scsi_Host *shost, struct list_head *work_q)
+{
+}
+
+static inline void sas_ata_end_eh(struct ata_port *ap)
+{
+}
+
+static inline void sas_ata_wait_eh(struct domain_device *dev)
+{
+}
+
+static inline void sas_probe_sata(struct asd_sas_port *port)
+{
+}
+
+static inline void sas_suspend_sata(struct asd_sas_port *port)
+{
+}
+
+static inline void sas_resume_sata(struct asd_sas_port *port)
+{
+}
+
+static inline void sas_ata_disabled_notice(void)
+{
+	pr_notice_once("ATA device seen but CONFIG_SCSI_SAS_ATA=N\n");
+}
+
+static inline int sas_discover_sata(struct domain_device *dev)
+{
+	sas_ata_disabled_notice();
+	return -ENXIO;
+}
+
+static inline int sas_ata_add_dev(struct domain_device *parent, struct ex_phy *phy,
+				  struct domain_device *child, int phy_id)
+{
+	sas_ata_disabled_notice();
+	return -ENODEV;
+}
+
+#endif
 
 #endif /* _SAS_INTERNAL_H_ */

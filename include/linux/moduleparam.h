@@ -2,9 +2,21 @@
 #ifndef _LINUX_MODULE_PARAMS_H
 #define _LINUX_MODULE_PARAMS_H
 /* (C) Copyright 2001, 2002 Rusty Russell IBM Corporation */
+
+#include <linux/array_size.h>
+#include <linux/build_bug.h>
+#include <linux/compiler.h>
 #include <linux/init.h>
 #include <linux/stringify.h>
-#include <linux/kernel.h>
+#include <linux/sysfs.h>
+#include <linux/types.h>
+
+/*
+ * The maximum module name length, including the NUL byte.
+ * Chosen so that structs with an unsigned long line up, specifically
+ * modversion_info.
+ */
+#define __MODULE_NAME_LEN (64 - sizeof(unsigned long))
 
 /* You can override this manually, but generally this should match the
    module name. */
@@ -17,21 +29,22 @@
 #define __MODULE_INFO_PREFIX KBUILD_MODNAME "."
 #endif
 
-/* Chosen so that structs with an unsigned long line up. */
-#define MAX_PARAM_PREFIX_LEN (64 - sizeof(unsigned long))
-
-#define __MODULE_INFO(tag, name, info)					  \
-	static const char __UNIQUE_ID(name)[]				  \
+/* Generic info of form tag = "info" */
+#define MODULE_INFO(tag, info)					  \
+	static_assert(						  \
+		sizeof(info) - 1 == __builtin_strlen(info),	  \
+		"MODULE_INFO(" #tag ", ...) contains embedded NUL byte"); \
+	static const char __UNIQUE_ID(modinfo)[]			  \
 		__used __section(".modinfo") __aligned(1)		  \
 		= __MODULE_INFO_PREFIX __stringify(tag) "=" info
 
 #define __MODULE_PARM_TYPE(name, _type)					  \
-	__MODULE_INFO(parmtype, name##type, #name ":" _type)
+	MODULE_INFO(parmtype, #name ":" _type)
 
 /* One for each parameter, describing how to use it.  Some files do
    multiple of these per line, so can't just use MODULE_INFO. */
 #define MODULE_PARM_DESC(_parm, desc) \
-	__MODULE_INFO(parm, _parm, #_parm ":" desc)
+	MODULE_INFO(parm, #_parm ":" desc)
 
 struct kernel_param;
 
@@ -282,10 +295,9 @@ struct kparam_array
 #define __moduleparam_const const
 #endif
 
-/* This is the fundamental function for registering boot/module
-   parameters. */
+/* This is the fundamental function for registering boot/module parameters. */
 #define __module_param_call(prefix, name, ops, arg, perm, level, flags)	\
-	/* Default value instead of permissions? */			\
+	static_assert(sizeof(""prefix) - 1 <= __MODULE_NAME_LEN);	\
 	static const char __param_str_##name[] = prefix #name;		\
 	static struct kernel_param __moduleparam_const __param_##name	\
 	__used __section("__param")					\
@@ -345,6 +357,19 @@ static inline void kernel_param_unlock(struct module *mod)
 	__module_param_call("", name, &param_ops_##type, &var, perm,	\
 			    -1, KERNEL_PARAM_FL_UNSAFE)
 
+/**
+ * __core_param_cb - similar like core_param, with a set/get ops instead of type.
+ * @name: the name of the cmdline and sysfs parameter (often the same as var)
+ * @ops: the set & get operations for this parameter.
+ * @arg: the variable
+ * @perm: visibility in sysfs
+ *
+ * Ideally this should be called 'core_param_cb', but the name has been
+ * used for module core parameter, so add the '__' prefix
+ */
+#define __core_param_cb(name, ops, arg, perm) \
+	__module_param_call("", name, ops, arg, perm, -1, 0)
+
 #endif /* !MODULE */
 
 /**
@@ -370,7 +395,7 @@ static inline void kernel_param_unlock(struct module *mod)
  * @name1: parameter name 1
  * @name2: parameter name 2
  *
- * Returns true if the two parameter names are equal.
+ * Returns: true if the two parameter names are equal.
  * Dashes (-) are considered equal to underscores (_).
  */
 extern bool parameq(const char *name1, const char *name2);
@@ -382,6 +407,10 @@ extern bool parameq(const char *name1, const char *name2);
  * @n: the length to compare
  *
  * Similar to parameq(), except it compares @n characters.
+ *
+ * Returns: true if the first @n characters of the two parameter names
+ * are equal.
+ * Dashes (-) are considered equal to underscores (_).
  */
 extern bool parameqn(const char *name1, const char *name2, size_t n);
 

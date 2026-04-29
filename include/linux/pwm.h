@@ -2,8 +2,10 @@
 #ifndef __LINUX_PWM_H
 #define __LINUX_PWM_H
 
+#include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/err.h>
+#include <linux/gpio/driver.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
@@ -273,6 +275,8 @@ struct pwm_capture {
 	unsigned int duty_cycle;
 };
 
+#define PWM_WFHWSIZE 20
+
 /**
  * struct pwm_ops - PWM controller operations
  * @request: optional hook for requesting a PWM
@@ -311,12 +315,14 @@ struct pwm_ops {
 /**
  * struct pwm_chip - abstract a PWM controller
  * @dev: device providing the PWMs
+ * @cdev: &struct cdev for this device
  * @ops: callbacks for this PWM controller
  * @owner: module providing this chip
  * @id: unique number of this PWM chip
  * @npwm: number of PWMs controlled by this chip
  * @of_xlate: request a PWM device given a device tree PWM specifier
  * @atomic: can the driver's ->apply() be called in atomic context
+ * @gpio: &struct gpio_chip to operate this PWM chip's lines as GPO
  * @uses_pwmchip_alloc: signals if pwmchip_allow was used to allocate this chip
  * @operational: signals if the chip can be used (or is already deregistered)
  * @nonatomic_lock: mutex for nonatomic chips
@@ -325,6 +331,7 @@ struct pwm_ops {
  */
 struct pwm_chip {
 	struct device dev;
+	struct cdev cdev;
 	const struct pwm_ops *ops;
 	struct module *owner;
 	unsigned int id;
@@ -335,6 +342,7 @@ struct pwm_chip {
 	bool atomic;
 
 	/* only used internally by the PWM framework */
+	struct gpio_chip gpio;
 	bool uses_pwmchip_alloc;
 	bool operational;
 	union {
@@ -480,6 +488,12 @@ int __pwmchip_add(struct pwm_chip *chip, struct module *owner);
 #define pwmchip_add(chip) __pwmchip_add(chip, THIS_MODULE)
 void pwmchip_remove(struct pwm_chip *chip);
 
+/*
+ * For FFI wrapper use only:
+ * The Rust PWM abstraction needs this to properly free the pwm_chip.
+ */
+void pwmchip_release(struct device *dev);
+
 int __devm_pwmchip_add(struct device *dev, struct pwm_chip *chip, struct module *owner);
 #define devm_pwmchip_add(dev, chip) __devm_pwmchip_add(dev, chip, THIS_MODULE)
 
@@ -602,39 +616,6 @@ devm_fwnode_pwm_get(struct device *dev, struct fwnode_handle *fwnode,
 	return ERR_PTR(-ENODEV);
 }
 #endif
-
-static inline void pwm_apply_args(struct pwm_device *pwm)
-{
-	struct pwm_state state = { };
-
-	/*
-	 * PWM users calling pwm_apply_args() expect to have a fresh config
-	 * where the polarity and period are set according to pwm_args info.
-	 * The problem is, polarity can only be changed when the PWM is
-	 * disabled.
-	 *
-	 * PWM drivers supporting hardware readout may declare the PWM device
-	 * as enabled, and prevent polarity setting, which changes from the
-	 * existing behavior, where all PWM devices are declared as disabled
-	 * at startup (even if they are actually enabled), thus authorizing
-	 * polarity setting.
-	 *
-	 * To fulfill this requirement, we apply a new state which disables
-	 * the PWM device and set the reference period and polarity config.
-	 *
-	 * Note that PWM users requiring a smooth handover between the
-	 * bootloader and the kernel (like critical regulators controlled by
-	 * PWM devices) will have to switch to the atomic API and avoid calling
-	 * pwm_apply_args().
-	 */
-
-	state.enabled = false;
-	state.polarity = pwm->args.polarity;
-	state.period = pwm->args.period;
-	state.usage_power = false;
-
-	pwm_apply_might_sleep(pwm, &state);
-}
 
 struct pwm_lookup {
 	struct list_head list;

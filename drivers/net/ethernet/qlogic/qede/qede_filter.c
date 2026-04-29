@@ -413,7 +413,7 @@ qede_alloc_filter(struct qede_dev *edev, int min_hlen)
 	if (bit_id >= QEDE_RFS_MAX_FLTR)
 		return NULL;
 
-	n = kzalloc(sizeof(*n), GFP_ATOMIC);
+	n = kzalloc_obj(*n, GFP_ATOMIC);
 	if (!n)
 		return NULL;
 
@@ -682,7 +682,7 @@ int qede_vlan_rx_add_vid(struct net_device *dev, __be16 proto, u16 vid)
 
 	DP_VERBOSE(edev, NETIF_MSG_IFUP, "Adding vlan 0x%04x\n", vid);
 
-	vlan = kzalloc(sizeof(*vlan), GFP_KERNEL);
+	vlan = kzalloc_obj(*vlan);
 	if (!vlan) {
 		DP_INFO(edev, "Failed to allocate struct for vlan\n");
 		return -ENOMEM;
@@ -987,20 +987,17 @@ static int qede_udp_tunnel_sync(struct net_device *dev, unsigned int table)
 
 static const struct udp_tunnel_nic_info qede_udp_tunnels_both = {
 	.sync_table	= qede_udp_tunnel_sync,
-	.flags		= UDP_TUNNEL_NIC_INFO_MAY_SLEEP,
 	.tables		= {
 		{ .n_entries = 1, .tunnel_types = UDP_TUNNEL_TYPE_VXLAN,  },
 		{ .n_entries = 1, .tunnel_types = UDP_TUNNEL_TYPE_GENEVE, },
 	},
 }, qede_udp_tunnels_vxlan = {
 	.sync_table	= qede_udp_tunnel_sync,
-	.flags		= UDP_TUNNEL_NIC_INFO_MAY_SLEEP,
 	.tables		= {
 		{ .n_entries = 1, .tunnel_types = UDP_TUNNEL_TYPE_VXLAN,  },
 	},
 }, qede_udp_tunnels_geneve = {
 	.sync_table	= qede_udp_tunnel_sync,
-	.flags		= UDP_TUNNEL_NIC_INFO_MAY_SLEEP,
 	.tables		= {
 		{ .n_entries = 1, .tunnel_types = UDP_TUNNEL_TYPE_GENEVE, },
 	},
@@ -1919,7 +1916,7 @@ int qede_add_tc_flower_fltr(struct qede_dev *edev, __be16 proto,
 		goto unlock;
 	}
 
-	n = kzalloc(sizeof(*n), GFP_KERNEL);
+	n = kzalloc_obj(*n);
 	if (!n) {
 		rc = -ENOMEM;
 		goto unlock;
@@ -2062,7 +2059,7 @@ int qede_add_cls_rule(struct qede_dev *edev, struct ethtool_rxnfc *info)
 		goto unlock;
 	}
 
-	n = kzalloc(sizeof(*n), GFP_KERNEL);
+	n = kzalloc_obj(*n);
 	if (!n) {
 		rc = -ENOMEM;
 		goto unlock;

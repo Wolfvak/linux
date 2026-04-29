@@ -51,6 +51,17 @@
 #define C2PMSG_CMD_SPI_GET_ROM_IMAGE_ADDR_HI 0x10
 #define C2PMSG_CMD_SPI_GET_FLASH_IMAGE 0x11
 
+/* Command register bit 31 set to indicate readiness */
+#define MBOX_TOS_READY_FLAG (GFX_FLAG_RESPONSE)
+#define MBOX_TOS_READY_MASK (GFX_CMD_RESPONSE_MASK | GFX_CMD_STATUS_MASK)
+
+/* Values to check for a successful GFX_CMD response wait. Check against
+ * both status bits and response state - helps to detect a command failure
+ * or other unexpected cases like a device drop reading all 0xFFs
+ */
+#define MBOX_TOS_RESP_FLAG (GFX_FLAG_RESPONSE)
+#define MBOX_TOS_RESP_MASK (GFX_CMD_RESPONSE_MASK | GFX_CMD_STATUS_MASK)
+
 extern const struct attribute_group amdgpu_flash_attr_group;
 
 enum psp_shared_mem_size {
@@ -123,6 +134,9 @@ enum psp_reg_prog_id {
 	PSP_REG_LAST
 };
 
+#define PSP_WAITREG_CHANGED BIT(0) /* check if the value has changed */
+#define PSP_WAITREG_NOVERBOSE BIT(1) /* No error verbose */
+
 struct psp_funcs {
 	int (*init_microcode)(struct psp_context *psp);
 	int (*wait_for_bootloader)(struct psp_context *psp);
@@ -158,6 +172,8 @@ struct psp_funcs {
 	bool (*is_reload_needed)(struct psp_context *psp);
 	int (*reg_program_no_ring)(struct psp_context *psp, uint32_t val,
 				   enum psp_reg_prog_id id);
+	int (*get_fw_type)(struct amdgpu_firmware_info *ucode,
+			enum psp_gfx_fw_type *type);
 };
 
 struct ta_funcs {
@@ -510,6 +526,10 @@ struct amdgpu_psp_funcs {
 	((psp)->funcs->reg_program_no_ring ? \
 	(psp)->funcs->reg_program_no_ring((psp), val, id) : -EINVAL)
 
+#define psp_get_fw_type(psp, ucode, type) \
+	((psp)->funcs->get_fw_type ? \
+	(psp)->funcs->get_fw_type(ucode, type):amdgpu_psp_get_fw_type(ucode, type))
+
 extern const struct amd_ip_funcs psp_ip_funcs;
 
 extern const struct amdgpu_ip_block_version psp_v3_1_ip_block;
@@ -520,9 +540,11 @@ extern const struct amdgpu_ip_block_version psp_v12_0_ip_block;
 extern const struct amdgpu_ip_block_version psp_v13_0_ip_block;
 extern const struct amdgpu_ip_block_version psp_v13_0_4_ip_block;
 extern const struct amdgpu_ip_block_version psp_v14_0_ip_block;
+extern const struct amdgpu_ip_block_version psp_v15_0_ip_block;
+extern const struct amdgpu_ip_block_version psp_v15_0_8_ip_block;
 
-extern int psp_wait_for(struct psp_context *psp, uint32_t reg_index,
-			uint32_t field_val, uint32_t mask, bool check_changed);
+int psp_wait_for(struct psp_context *psp, uint32_t reg_index,
+		 uint32_t field_val, uint32_t mask, uint32_t flags);
 extern int psp_wait_for_spirom_update(struct psp_context *psp, uint32_t reg_index,
 			uint32_t field_val, uint32_t mask, uint32_t msec_timeout);
 
@@ -588,7 +610,7 @@ int psp_init_cap_microcode(struct psp_context *psp,
 			  const char *chip_name);
 int psp_get_fw_attestation_records_addr(struct psp_context *psp,
 					uint64_t *output_ptr);
-
+int psp_update_fw_reservation(struct psp_context *psp);
 int psp_load_fw_list(struct psp_context *psp,
 		     struct amdgpu_firmware_info **ucode_list, int ucode_count);
 void psp_copy_fw(struct psp_context *psp, uint8_t *start_addr, uint32_t bin_size);
@@ -607,6 +629,8 @@ bool amdgpu_psp_tos_reload_needed(struct amdgpu_device *adev);
 int amdgpu_psp_reg_program_no_ring(struct psp_context *psp, uint32_t val,
 				   enum psp_reg_prog_id id);
 void amdgpu_psp_debugfs_init(struct amdgpu_device *adev);
+int amdgpu_psp_get_fw_type(struct amdgpu_firmware_info *ucode,
+			   enum psp_gfx_fw_type *type);
 
 
 #endif

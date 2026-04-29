@@ -899,7 +899,7 @@ static void test_msg_redir_to_listening_with_link(struct test_sockmap_listen *sk
 
 	redir_to_listening(family, sotype, sock_map, verdict_map, REDIR_EGRESS);
 
-	bpf_link__detach(link);
+	bpf_link__destroy(link);
 }
 
 static void redir_partial(int family, int sotype, int sock_map, int parser_map)
@@ -924,6 +924,8 @@ static void redir_partial(int family, int sotype, int sock_map, int parser_map)
 		goto close;
 
 	n = xsend(c1, buf, sizeof(buf), 0);
+	if (n == -1)
+		goto close;
 	if (n < sizeof(buf))
 		FAIL("incomplete write");
 

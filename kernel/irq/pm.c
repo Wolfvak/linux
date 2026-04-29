@@ -13,17 +13,13 @@
 
 #include "internals.h"
 
-bool irq_pm_check_wakeup(struct irq_desc *desc)
+void irq_pm_handle_wakeup(struct irq_desc *desc)
 {
-	if (irqd_is_wakeup_armed(&desc->irq_data)) {
-		irqd_clear(&desc->irq_data, IRQD_WAKEUP_ARMED);
-		desc->istate |= IRQS_SUSPENDED | IRQS_PENDING;
-		desc->depth++;
-		irq_disable(desc);
-		pm_system_irq_wakeup(irq_desc_get_irq(desc));
-		return true;
-	}
-	return false;
+	irqd_clear(&desc->irq_data, IRQD_WAKEUP_ARMED);
+	desc->istate |= IRQS_SUSPENDED | IRQS_PENDING;
+	desc->depth++;
+	irq_disable(desc);
+	pm_system_irq_wakeup(irq_desc_get_irq(desc));
 }
 
 /*
@@ -215,21 +211,26 @@ void rearm_wake_irq(unsigned int irq)
 
 /**
  * irq_pm_syscore_resume - enable interrupt lines early
+ * @data: syscore context
  *
  * Enable all interrupt lines with %IRQF_EARLY_RESUME set.
  */
-static void irq_pm_syscore_resume(void)
+static void irq_pm_syscore_resume(void *data)
 {
 	resume_irqs(true);
 }
 
-static struct syscore_ops irq_pm_syscore_ops = {
+static const struct syscore_ops irq_pm_syscore_ops = {
 	.resume		= irq_pm_syscore_resume,
+};
+
+static struct syscore irq_pm_syscore = {
+	.ops = &irq_pm_syscore_ops,
 };
 
 static int __init irq_pm_init_ops(void)
 {
-	register_syscore_ops(&irq_pm_syscore_ops);
+	register_syscore(&irq_pm_syscore);
 	return 0;
 }
 

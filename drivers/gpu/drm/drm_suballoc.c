@@ -42,6 +42,8 @@
 
 #include <drm/drm_suballoc.h>
 #include <drm/drm_print.h>
+
+#include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
 #include <linux/wait.h>
@@ -327,7 +329,7 @@ drm_suballoc_new(struct drm_suballoc_manager *sa_manager, size_t size,
 	if (!align)
 		align = sa_manager->align;
 
-	sa = kmalloc(sizeof(*sa), gfp);
+	sa = kmalloc_obj(*sa, gfp);
 	if (!sa)
 		return ERR_PTR(-ENOMEM);
 	sa->manager = sa_manager;

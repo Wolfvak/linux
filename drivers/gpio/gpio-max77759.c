@@ -435,8 +435,6 @@ static int max77759_gpio_probe(struct platform_device *pdev)
 	int irq;
 	struct gpio_irq_chip *girq;
 	int ret;
-	unsigned long irq_flags;
-	struct irq_data *irqd;
 
 	chip = devm_kzalloc(&pdev->dev, sizeof(*chip), GFP_KERNEL);
 	if (!chip)
@@ -469,7 +467,7 @@ static int max77759_gpio_probe(struct platform_device *pdev)
 	chip->gc.direction_input = max77759_gpio_direction_input;
 	chip->gc.direction_output = max77759_gpio_direction_output;
 	chip->gc.get = max77759_gpio_get_value;
-	chip->gc.set_rv = max77759_gpio_set_value;
+	chip->gc.set = max77759_gpio_set_value;
 
 	girq = &chip->gc.irq;
 	gpio_irq_chip_set_chip(girq, &max77759_gpio_irq_chip);
@@ -486,13 +484,9 @@ static int max77759_gpio_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, ret,
 				     "Failed to add GPIO chip\n");
 
-	irq_flags = IRQF_ONESHOT | IRQF_SHARED;
-	irqd = irq_get_irq_data(irq);
-	if (irqd)
-		irq_flags |= irqd_get_trigger_type(irqd);
-
 	ret = devm_request_threaded_irq(&pdev->dev, irq, NULL,
-					max77759_gpio_irqhandler, irq_flags,
+					max77759_gpio_irqhandler,
+					IRQF_ONESHOT | IRQF_SHARED,
 					dev_name(&pdev->dev), chip);
 	if (ret < 0)
 		return dev_err_probe(&pdev->dev, ret,

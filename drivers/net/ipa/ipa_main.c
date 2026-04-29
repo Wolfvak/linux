@@ -9,7 +9,7 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_address.h>
+#include <linux/of_reserved_mem.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/types.h>
@@ -586,7 +586,6 @@ static void ipa_deconfig(struct ipa *ipa)
 static int ipa_firmware_load(struct device *dev)
 {
 	const struct firmware *fw;
-	struct device_node *node;
 	struct resource res;
 	phys_addr_t phys;
 	const char *path;
@@ -594,14 +593,7 @@ static int ipa_firmware_load(struct device *dev)
 	void *virt;
 	int ret;
 
-	node = of_parse_phandle(dev->of_node, "memory-region", 0);
-	if (!node) {
-		dev_err(dev, "DT error getting \"memory-region\" property\n");
-		return -EINVAL;
-	}
-
-	ret = of_address_to_resource(node, 0, &res);
-	of_node_put(node);
+	ret = of_reserved_mem_region_to_resource(dev->of_node, 0, &res);
 	if (ret) {
 		dev_err(dev, "error %d getting \"memory-region\" resource\n",
 			ret);
@@ -838,7 +830,7 @@ static int ipa_probe(struct platform_device *pdev)
 	}
 
 	/* No more EPROBE_DEFER.  Allocate and initialize the IPA structure */
-	ipa = kzalloc(sizeof(*ipa), GFP_KERNEL);
+	ipa = kzalloc_obj(*ipa);
 	if (!ipa) {
 		ret = -ENOMEM;
 		goto err_power_exit;
@@ -911,7 +903,6 @@ static int ipa_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_deconfig;
 done:
-	pm_runtime_mark_last_busy(dev);
 	(void)pm_runtime_put_autosuspend(dev);
 
 	return 0;

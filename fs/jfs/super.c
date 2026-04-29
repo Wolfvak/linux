@@ -449,7 +449,7 @@ static int jfs_fill_super(struct super_block *sb, struct fs_context *fc)
 
 	jfs_info("In jfs_read_super: s_flags=0x%lx", sb->s_flags);
 
-	sbi = kzalloc(sizeof(struct jfs_sb_info), GFP_KERNEL);
+	sbi = kzalloc_obj(struct jfs_sb_info);
 	if (!sbi)
 		return -ENOMEM;
 
@@ -542,7 +542,7 @@ static int jfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	sb->s_magic = JFS_SUPER_MAGIC;
 
 	if (sbi->mntflag & JFS_OS2)
-		sb->s_d_op = &jfs_ci_dentry_operations;
+		set_default_d_op(sb, &jfs_ci_dentry_operations);
 
 	inode = jfs_iget(sb, ROOT_I);
 	if (IS_ERR(inode)) {
@@ -912,7 +912,7 @@ static int jfs_init_fs_context(struct fs_context *fc)
 {
 	struct jfs_context *ctx;
 
-	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+	ctx = kzalloc_obj(*ctx);
 	if (!ctx)
 		return -ENOMEM;
 

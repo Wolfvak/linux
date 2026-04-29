@@ -16,6 +16,8 @@
 #include <linux/platform_device.h>
 #include <linux/sched/clock.h>
 
+#include <drm/drm_print.h>
+
 #include "v3d_drv.h"
 #include "v3d_regs.h"
 #include "v3d_trace.h"
@@ -42,11 +44,13 @@ v3d_overflow_mem_work(struct work_struct *work)
 		container_of(work, struct v3d_dev, overflow_mem_work);
 	struct drm_device *dev = &v3d->drm;
 	struct v3d_bo *bo = v3d_bo_create(dev, NULL /* XXX: GMP */, 256 * 1024);
+	struct v3d_queue_state *queue = &v3d->queue[V3D_BIN];
+	struct v3d_bin_job *bin_job;
 	struct drm_gem_object *obj;
 	unsigned long irqflags;
 
 	if (IS_ERR(bo)) {
-		DRM_ERROR("Couldn't allocate binner overflow mem\n");
+		drm_err(dev, "Couldn't allocate binner overflow mem\n");
 		return;
 	}
 	obj = &bo->base.base;
@@ -60,15 +64,17 @@ v3d_overflow_mem_work(struct work_struct *work)
 	 * bin job got scheduled, that's fine.  We'll just give them
 	 * some binner pool anyway.
 	 */
-	spin_lock_irqsave(&v3d->job_lock, irqflags);
-	if (!v3d->bin_job) {
-		spin_unlock_irqrestore(&v3d->job_lock, irqflags);
+	spin_lock_irqsave(&queue->queue_lock, irqflags);
+	bin_job = (struct v3d_bin_job *)queue->active_job;
+
+	if (!bin_job) {
+		spin_unlock_irqrestore(&queue->queue_lock, irqflags);
 		goto out;
 	}
 
 	drm_gem_object_get(obj);
-	list_add_tail(&bo->unref_head, &v3d->bin_job->render->unref_list);
-	spin_unlock_irqrestore(&v3d->job_lock, irqflags);
+	list_add_tail(&bo->unref_head, &bin_job->render->unref_list);
+	spin_unlock_irqrestore(&queue->queue_lock, irqflags);
 
 	v3d_mmu_flush_all(v3d);
 
@@ -77,6 +83,20 @@ v3d_overflow_mem_work(struct work_struct *work)
 
 out:
 	drm_gem_object_put(obj);
+}
+
+static void
+v3d_irq_signal_fence(struct v3d_dev *v3d, enum v3d_queue q,
+		     void (*trace_irq)(struct drm_device *, uint64_t))
+{
+	struct v3d_queue_state *queue = &v3d->queue[q];
+	struct v3d_fence *fence = to_v3d_fence(queue->active_job->irq_fence);
+
+	v3d_job_update_stats(queue->active_job, q);
+	trace_irq(&v3d->drm, fence->seqno);
+
+	queue->active_job = NULL;
+	dma_fence_signal(&fence->base);
 }
 
 static irqreturn_t
@@ -102,41 +122,17 @@ v3d_irq(int irq, void *arg)
 	}
 
 	if (intsts & V3D_INT_FLDONE) {
-		struct v3d_fence *fence =
-			to_v3d_fence(v3d->bin_job->base.irq_fence);
-
-		v3d_job_update_stats(&v3d->bin_job->base, V3D_BIN);
-		trace_v3d_bcl_irq(&v3d->drm, fence->seqno);
-
-		v3d->bin_job = NULL;
-		dma_fence_signal(&fence->base);
-
+		v3d_irq_signal_fence(v3d, V3D_BIN, trace_v3d_bcl_irq);
 		status = IRQ_HANDLED;
 	}
 
 	if (intsts & V3D_INT_FRDONE) {
-		struct v3d_fence *fence =
-			to_v3d_fence(v3d->render_job->base.irq_fence);
-
-		v3d_job_update_stats(&v3d->render_job->base, V3D_RENDER);
-		trace_v3d_rcl_irq(&v3d->drm, fence->seqno);
-
-		v3d->render_job = NULL;
-		dma_fence_signal(&fence->base);
-
+		v3d_irq_signal_fence(v3d, V3D_RENDER, trace_v3d_rcl_irq);
 		status = IRQ_HANDLED;
 	}
 
 	if (intsts & V3D_INT_CSDDONE(v3d->ver)) {
-		struct v3d_fence *fence =
-			to_v3d_fence(v3d->csd_job->base.irq_fence);
-
-		v3d_job_update_stats(&v3d->csd_job->base, V3D_CSD);
-		trace_v3d_csd_irq(&v3d->drm, fence->seqno);
-
-		v3d->csd_job = NULL;
-		dma_fence_signal(&fence->base);
-
+		v3d_irq_signal_fence(v3d, V3D_CSD, trace_v3d_csd_irq);
 		status = IRQ_HANDLED;
 	}
 
@@ -144,7 +140,7 @@ v3d_irq(int irq, void *arg)
 	 * always-allowed mode.
 	 */
 	if (v3d->ver < V3D_GEN_71 && (intsts & V3D_INT_GMPV))
-		dev_err(v3d->drm.dev, "GMP violation\n");
+		drm_err(&v3d->drm, "GMP violation\n");
 
 	/* V3D 4.2 wires the hub and core IRQs together, so if we &
 	 * didn't see the common one then check hub for MMU IRQs.
@@ -168,15 +164,7 @@ v3d_hub_irq(int irq, void *arg)
 	V3D_WRITE(V3D_HUB_INT_CLR, intsts);
 
 	if (intsts & V3D_HUB_INT_TFUC) {
-		struct v3d_fence *fence =
-			to_v3d_fence(v3d->tfu_job->base.irq_fence);
-
-		v3d_job_update_stats(&v3d->tfu_job->base, V3D_TFU);
-		trace_v3d_tfu_irq(&v3d->drm, fence->seqno);
-
-		v3d->tfu_job = NULL;
-		dma_fence_signal(&fence->base);
-
+		v3d_irq_signal_fence(v3d, V3D_TFU, trace_v3d_tfu_irq);
 		status = IRQ_HANDLED;
 	}
 
@@ -238,7 +226,7 @@ v3d_hub_irq(int irq, void *arg)
 			}
 		}
 
-		dev_err(v3d->drm.dev, "MMU error from client %s (0x%x) at 0x%llx%s%s%s\n",
+		drm_dbg(&v3d->drm, "MMU error from client %s (0x%x) at 0x%llx%s%s%s\n",
 			client, axi_id, (long long)vio_addr,
 			((intsts & V3D_HUB_INT_MMU_WRV) ?
 			 ", write violation" : ""),
@@ -250,7 +238,7 @@ v3d_hub_irq(int irq, void *arg)
 	}
 
 	if (v3d->ver >= V3D_GEN_71 && (intsts & V3D_V7_HUB_INT_GMPV)) {
-		dev_err(v3d->drm.dev, "GMP Violation\n");
+		drm_err(&v3d->drm, "GMP Violation\n");
 		status = IRQ_HANDLED;
 	}
 

@@ -15,7 +15,7 @@
  *   Signed-off-by: Michael Schwarz <michael.schwarz@iaik.tugraz.at>
  *
  * Major changes to the original code by: Dave Hansen <dave.hansen@intel.com>
- * Mostly rewritten by Thomas Gleixner <tglx@linutronix.de> and
+ * Mostly rewritten by Thomas Gleixner <tglx@kernel.org> and
  *		       Andy Lutomirsky <luto@amacapital.net>
  */
 #include <linux/kernel.h>
@@ -38,6 +38,7 @@
 #include <asm/desc.h>
 #include <asm/sections.h>
 #include <asm/set_memory.h>
+#include <asm/bugs.h>
 
 #undef pr_fmt
 #define pr_fmt(fmt)     "Kernel/User page tables isolation: " fmt
@@ -84,7 +85,8 @@ void __init pti_check_boottime_disable(void)
 		return;
 	}
 
-	if (cpu_mitigations_off())
+	if (pti_mode == PTI_AUTO &&
+	    !cpu_attack_vector_mitigated(CPU_MITIGATE_USER_KERNEL))
 		pti_mode = PTI_FORCE_OFF;
 	if (pti_mode == PTI_FORCE_OFF) {
 		pti_print_if_insecure("disabled on command line.");

@@ -59,14 +59,14 @@ static struct se_device *iblock_alloc_device(struct se_hba *hba, const char *nam
 {
 	struct iblock_dev *ib_dev = NULL;
 
-	ib_dev = kzalloc(sizeof(struct iblock_dev), GFP_KERNEL);
+	ib_dev = kzalloc_obj(struct iblock_dev);
 	if (!ib_dev) {
 		pr_err("Unable to allocate struct iblock_dev\n");
 		return NULL;
 	}
+	ib_dev->ibd_exclusive = true;
 
-	ib_dev->ibd_plug = kcalloc(nr_cpu_ids, sizeof(*ib_dev->ibd_plug),
-				   GFP_KERNEL);
+	ib_dev->ibd_plug = kzalloc_objs(*ib_dev->ibd_plug, nr_cpu_ids);
 	if (!ib_dev->ibd_plug)
 		goto free_dev;
 
@@ -83,8 +83,8 @@ static bool iblock_configure_unmap(struct se_device *dev)
 {
 	struct iblock_dev *ib_dev = IBLOCK_DEV(dev);
 
-	return target_configure_unmap_from_queue(&dev->dev_attrib,
-						 ib_dev->ibd_bd);
+	return target_configure_unmap_from_bdev(&dev->dev_attrib,
+						ib_dev->ibd_bd);
 }
 
 static int iblock_configure_device(struct se_device *dev)
@@ -95,6 +95,7 @@ static int iblock_configure_device(struct se_device *dev)
 	struct block_device *bd;
 	struct blk_integrity *bi;
 	blk_mode_t mode = BLK_OPEN_READ;
+	void *holder = ib_dev;
 	unsigned int max_write_zeroes_sectors;
 	int ret;
 
@@ -109,15 +110,18 @@ static int iblock_configure_device(struct se_device *dev)
 		goto out;
 	}
 
-	pr_debug( "IBLOCK: Claiming struct block_device: %s\n",
-			ib_dev->ibd_udev_path);
+	pr_debug("IBLOCK: Claiming struct block_device: %s: %d\n",
+		 ib_dev->ibd_udev_path, ib_dev->ibd_exclusive);
 
 	if (!ib_dev->ibd_readonly)
 		mode |= BLK_OPEN_WRITE;
 	else
 		dev->dev_flags |= DF_READ_ONLY;
 
-	bdev_file = bdev_file_open_by_path(ib_dev->ibd_udev_path, mode, ib_dev,
+	if (!ib_dev->ibd_exclusive)
+		holder = NULL;
+
+	bdev_file = bdev_file_open_by_path(ib_dev->ibd_udev_path, mode, holder,
 					NULL);
 	if (IS_ERR(bdev_file)) {
 		ret = PTR_ERR(bdev_file);
@@ -146,6 +150,8 @@ static int iblock_configure_device(struct se_device *dev)
 
 	if (bdev_nonrot(bd))
 		dev->dev_attrib.is_nonrot = 1;
+
+	target_configure_write_atomic_from_bdev(&dev->dev_attrib, bd);
 
 	bi = bdev_get_integrity(bd);
 	if (!bi)
@@ -516,7 +522,7 @@ iblock_execute_write_same(struct se_cmd *cmd)
 			return 0;
 	}
 
-	ibr = kzalloc(sizeof(struct iblock_req), GFP_KERNEL);
+	ibr = kzalloc_obj(struct iblock_req);
 	if (!ibr)
 		goto fail;
 	cmd->priv = ibr;
@@ -560,13 +566,14 @@ fail:
 }
 
 enum {
-	Opt_udev_path, Opt_readonly, Opt_force, Opt_err
+	Opt_udev_path, Opt_readonly, Opt_force, Opt_exclusive, Opt_err,
 };
 
 static match_table_t tokens = {
 	{Opt_udev_path, "udev_path=%s"},
 	{Opt_readonly, "readonly=%d"},
 	{Opt_force, "force=%d"},
+	{Opt_exclusive, "exclusive=%d"},
 	{Opt_err, NULL}
 };
 
@@ -576,7 +583,7 @@ static ssize_t iblock_set_configfs_dev_params(struct se_device *dev,
 	struct iblock_dev *ib_dev = IBLOCK_DEV(dev);
 	char *orig, *ptr, *arg_p, *opts;
 	substring_t args[MAX_OPT_ARGS];
-	int ret = 0, token;
+	int ret = 0, token, tmp_exclusive;
 	unsigned long tmp_readonly;
 
 	opts = kstrdup(page, GFP_KERNEL);
@@ -623,6 +630,22 @@ static ssize_t iblock_set_configfs_dev_params(struct se_device *dev,
 			ib_dev->ibd_readonly = tmp_readonly;
 			pr_debug("IBLOCK: readonly: %d\n", ib_dev->ibd_readonly);
 			break;
+		case Opt_exclusive:
+			arg_p = match_strdup(&args[0]);
+			if (!arg_p) {
+				ret = -ENOMEM;
+				break;
+			}
+			ret = kstrtoint(arg_p, 0, &tmp_exclusive);
+			kfree(arg_p);
+			if (ret < 0) {
+				pr_err("kstrtoul() failed for exclusive=\n");
+				goto out;
+			}
+			ib_dev->ibd_exclusive = tmp_exclusive;
+			pr_debug("IBLOCK: exclusive: %d\n",
+				 ib_dev->ibd_exclusive);
+			break;
 		case Opt_force:
 			break;
 		default:
@@ -647,6 +670,7 @@ static ssize_t iblock_show_configfs_dev_params(struct se_device *dev, char *b)
 		bl += sprintf(b + bl, "  UDEV PATH: %s",
 				ib_dev->ibd_udev_path);
 	bl += sprintf(b + bl, "  readonly: %d\n", ib_dev->ibd_readonly);
+	bl += sprintf(b + bl, "  exclusive: %d\n", ib_dev->ibd_exclusive);
 
 	bl += sprintf(b + bl, "        ");
 	if (bd) {
@@ -750,12 +774,15 @@ iblock_execute_rw(struct se_cmd *cmd, struct scatterlist *sgl, u32 sgl_nents,
 			else if (!bdev_write_cache(ib_dev->ibd_bd))
 				opf |= REQ_FUA;
 		}
+
+		if (cmd->se_cmd_flags & SCF_ATOMIC)
+			opf |= REQ_ATOMIC;
 	} else {
 		opf = REQ_OP_READ;
 		miter_dir = SG_MITER_FROM_SG;
 	}
 
-	ibr = kzalloc(sizeof(struct iblock_req), GFP_KERNEL);
+	ibr = kzalloc_obj(struct iblock_req);
 	if (!ibr)
 		goto fail;
 	cmd->priv = ibr;

@@ -98,7 +98,7 @@ struct vmci_ctx_chkpt_buf_info {
 };
 
 /*
- * VMCINotificationReceiveInfo: Used to recieve pending notifications
+ * VMCINotificationReceiveInfo: Used to receive pending notifications
  * for doorbells and queue pairs.
  */
 struct vmci_ctx_notify_recv_info {
@@ -132,7 +132,6 @@ bool vmci_ctx_supports_host_qp(struct vmci_ctx *context);
 int vmci_ctx_enqueue_datagram(u32 cid, struct vmci_datagram *dg);
 int vmci_ctx_dequeue_datagram(struct vmci_ctx *context,
 			      size_t *max_size, struct vmci_datagram **dg);
-int vmci_ctx_pending_datagrams(u32 cid, u32 *pending);
 struct vmci_ctx *vmci_ctx_get(u32 cid);
 void vmci_ctx_put(struct vmci_ctx *context);
 bool vmci_ctx_exists(u32 cid);
@@ -153,7 +152,6 @@ void vmci_ctx_unset_notify(struct vmci_ctx *context);
 
 int vmci_ctx_dbell_create(u32 context_id, struct vmci_handle handle);
 int vmci_ctx_dbell_destroy(u32 context_id, struct vmci_handle handle);
-int vmci_ctx_dbell_destroy_all(u32 context_id);
 int vmci_ctx_notify_dbell(u32 cid, struct vmci_handle handle,
 			  u32 src_priv_flags);
 

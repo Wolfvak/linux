@@ -13,6 +13,7 @@ config PCI_AARDVARK
 	depends on OF
 	depends on PCI_MSI
 	select PCI_BRIDGE_EMUL
+	select IRQ_MSI_LIB
 	help
 	 Add support for Aardvark 64bit PCIe Host Controller. This
 	 controller is part of the South Bridge of the Marvel Armada
@@ -29,6 +30,7 @@ config PCIE_ALTERA_MSI
 	tristate "Altera PCIe MSI feature"
 	depends on PCIE_ALTERA
 	depends on PCI_MSI
+	select IRQ_MSI_LIB
 	help
 	  Say Y here if you want PCIe MSI support for the Altera FPGA.
 	  This MSI driver supports Altera MSI to GIC controller IP.
@@ -56,12 +58,29 @@ config PCI_VERSATILE
 	bool "ARM Versatile PB PCI controller"
 	depends on ARCH_VERSATILE || COMPILE_TEST
 
+config PCIE_ASPEED
+	bool "ASPEED PCIe controller"
+	depends on ARCH_ASPEED || COMPILE_TEST
+	depends on OF
+	depends on PCI_MSI
+	select IRQ_MSI_LIB
+	help
+	  Enable this option to support the PCIe controller found on ASPEED
+	  SoCs.
+
+	  This driver provides initialization and management for PCIe
+	  Root Complex functionality, including INTx and MSI support.
+
+	  Select Y if your platform uses an ASPEED SoC and requires PCIe
+	  connectivity.
+
 config PCIE_BRCMSTB
 	tristate "Broadcom Brcmstb PCIe controller"
 	depends on ARCH_BRCMSTB || ARCH_BCM2835 || ARCH_BCMBCA || \
 		   BMIPS_GENERIC || COMPILE_TEST
 	depends on OF
 	depends on PCI_MSI
+	select IRQ_MSI_LIB
 	default ARCH_BRCMSTB || BMIPS_GENERIC
 	help
 	  Say Y here to enable PCIe host controller support for
@@ -98,6 +117,7 @@ config PCIE_IPROC_MSI
 	bool "Broadcom iProc PCIe MSI support"
 	depends on PCIE_IPROC_PLATFORM || PCIE_IPROC_BCMA
 	depends on PCI_MSI
+	select IRQ_MSI_LIB
 	default ARCH_BCM_IPROC
 	help
 	  Say Y here if you want to enable MSI support for Broadcom's iProc
@@ -142,7 +162,7 @@ config PCIE_HISI_ERR
 
 config PCI_IXP4XX
 	bool "Intel IXP4xx PCI controller"
-	depends on ARM && OF
+	depends on OF
 	depends on ARCH_IXP4XX || COMPILE_TEST
 	default ARCH_IXP4XX
 	help
@@ -152,6 +172,7 @@ config PCI_IXP4XX
 config VMD
 	depends on PCI_MSI && X86_64 && !UML
 	tristate "Intel Volume Management Device Driver"
+	select IRQ_MSI_LIB
 	help
 	  Adds support for the Intel Volume Management Device (VMD). VMD is a
 	  secondary PCI host bridge that allows PCI Express root ports,
@@ -191,6 +212,7 @@ config PCIE_MEDIATEK
 	depends on ARCH_AIROHA || ARCH_MEDIATEK || COMPILE_TEST
 	depends on OF
 	depends on PCI_MSI
+	select IRQ_MSI_LIB
 	help
 	  Say Y here if you want to enable PCIe controller support on
 	  MediaTek SoCs.
@@ -199,6 +221,7 @@ config PCIE_MEDIATEK_GEN3
 	tristate "MediaTek Gen3 PCIe controller"
 	depends on ARCH_AIROHA || ARCH_MEDIATEK || COMPILE_TEST
 	depends on PCI_MSI
+	select IRQ_MSI_LIB
 	help
 	  Adds support for PCIe Gen3 MAC controller for MediaTek SoCs.
 	  This PCIe controller is compatible with Gen3, Gen2 and Gen1 speed,
@@ -225,7 +248,7 @@ config PCI_HYPERV_INTERFACE
 	  driver.
 
 config PCI_TEGRA
-	bool "NVIDIA Tegra PCIe controller"
+	tristate "NVIDIA Tegra PCIe controller"
 	depends on ARCH_TEGRA || COMPILE_TEST
 	depends on PCI_MSI
 	select IRQ_MSI_LIB
@@ -236,7 +259,9 @@ config PCI_TEGRA
 config PCIE_RCAR_HOST
 	bool "Renesas R-Car PCIe controller (host mode)"
 	depends on ARCH_RENESAS || COMPILE_TEST
+	depends on OF
 	depends on PCI_MSI
+	select IRQ_MSI_LIB
 	help
 	  Say Y here if you want PCIe controller support on R-Car SoCs in host
 	  mode.
@@ -251,12 +276,20 @@ config PCIE_RCAR_EP
 
 config PCI_RCAR_GEN2
 	bool "Renesas R-Car Gen2 Internal PCI controller"
-	depends on ARCH_RENESAS || COMPILE_TEST
-	depends on ARM
+	depends on (ARCH_RENESAS && ARM) || COMPILE_TEST
 	help
 	  Say Y here if you want internal PCI support on R-Car Gen2 SoC.
-	  There are 3 internal PCI controllers available with a single
-	  built-in EHCI/OHCI host controller present on each one.
+	  Each internal PCI controller contains a single built-in EHCI/OHCI
+	  host controller.
+
+config PCIE_RENESAS_RZG3S_HOST
+	bool "Renesas RZ/G3S PCIe host controller"
+	depends on ARCH_RENESAS || COMPILE_TEST
+	select MFD_SYSCON
+	select IRQ_MSI_LIB
+	help
+	  Say Y here if you want PCIe host controller support on Renesas RZ/G3S
+	  SoC.
 
 config PCIE_ROCKCHIP
 	bool
@@ -315,6 +348,7 @@ config PCIE_XILINX
 	bool "Xilinx AXI PCIe controller"
 	depends on OF
 	depends on PCI_MSI
+	select IRQ_MSI_LIB
 	help
 	  Say 'Y' here if you want kernel to support the Xilinx AXI PCIe
 	  Host Bridge driver.
@@ -324,6 +358,7 @@ config PCIE_XILINX_DMA_PL
 	depends on ARCH_ZYNQMP || COMPILE_TEST
 	depends on PCI_MSI
 	select PCI_HOST_COMMON
+	select IRQ_MSI_LIB
 	help
 	  Say 'Y' here if you want kernel support for the Xilinx PL DMA
 	  PCIe host bridge. The controller is a Soft IP which can act as
@@ -334,6 +369,7 @@ config PCIE_XILINX_NWL
 	bool "Xilinx NWL PCIe controller"
 	depends on ARCH_ZYNQMP || COMPILE_TEST
 	depends on PCI_MSI
+	select IRQ_MSI_LIB
 	help
 	 Say 'Y' here if you want kernel support for Xilinx
 	 NWL PCIe controller. The controller can act as Root Port

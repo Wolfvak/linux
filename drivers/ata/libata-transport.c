@@ -202,7 +202,7 @@ show_ata_port_##name(struct device *dev,				\
 {									\
 	struct ata_port *ap = transport_class_to_port(dev);		\
 									\
-	return scnprintf(buf, 20, format_string, cast ap->field);	\
+	return sysfs_emit(buf, format_string, cast ap->field);	        \
 }
 
 #define ata_port_simple_attr(field, name, format_string, type)		\
@@ -389,7 +389,7 @@ show_ata_dev_##field(struct device *dev,				\
 {									\
 	struct ata_device *ata_dev = transport_class_to_dev(dev);	\
 									\
-	return scnprintf(buf, 20, format_string, cast ata_dev->field);	\
+	return sysfs_emit(buf, format_string, cast ata_dev->field);	\
 }
 
 #define ata_dev_simple_attr(field, format_string, type)		\
@@ -758,7 +758,7 @@ struct scsi_transport_template *ata_attach_transport(void)
 	struct ata_internal *i;
 	int count;
 
-	i = kzalloc(sizeof(struct ata_internal), GFP_KERNEL);
+	i = kzalloc_obj(struct ata_internal);
 	if (!i)
 		return NULL;
 

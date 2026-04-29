@@ -3,7 +3,7 @@
  * Copyright (C) 2018-2023 Oracle.  All Rights Reserved.
  * Author: Darrick J. Wong <djwong@kernel.org>
  */
-#include "xfs.h"
+#include "xfs_platform.h"
 #include "xfs_fs.h"
 #include "xfs_shared.h"
 #include "xfs_format.h"
@@ -1110,7 +1110,7 @@ xrep_will_attempt(
 		return true;
 
 	/* Let debug users force us into the repair routines. */
-	if (XFS_TEST_ERROR(false, sc->mp, XFS_ERRTAG_FORCE_SCRUB_REPAIR))
+	if (XFS_TEST_ERROR(sc->mp, XFS_ERRTAG_FORCE_SCRUB_REPAIR))
 		return true;
 
 	/* Metadata is corrupt or failed cross-referencing. */
@@ -1136,6 +1136,9 @@ xrep_metadata_inode_subtype(
 	 * setup/teardown routines.
 	 */
 	sub = xchk_scrub_create_subord(sc, scrub_type);
+	if (!sub)
+		return -ENOMEM;
+
 	error = sub->sc.ops->scrub(&sub->sc);
 	if (error)
 		goto out;
@@ -1266,42 +1269,6 @@ xrep_setup_xfbtree(
 	ASSERT(sc->tp == NULL);
 
 	return xmbuf_alloc(sc->mp, descr, &sc->xmbtp);
-}
-
-/*
- * Create a dummy transaction for use in a live update hook function.  This
- * function MUST NOT be called from regular repair code because the current
- * process' transaction is saved via the cookie.
- */
-int
-xrep_trans_alloc_hook_dummy(
-	struct xfs_mount	*mp,
-	void			**cookiep,
-	struct xfs_trans	**tpp)
-{
-	int			error;
-
-	*cookiep = current->journal_info;
-	current->journal_info = NULL;
-
-	error = xfs_trans_alloc_empty(mp, tpp);
-	if (!error)
-		return 0;
-
-	current->journal_info = *cookiep;
-	*cookiep = NULL;
-	return error;
-}
-
-/* Cancel a dummy transaction used by a live update hook function. */
-void
-xrep_trans_cancel_hook_dummy(
-	void			**cookiep,
-	struct xfs_trans	*tp)
-{
-	xfs_trans_cancel(tp);
-	current->journal_info = *cookiep;
-	*cookiep = NULL;
 }
 
 /*

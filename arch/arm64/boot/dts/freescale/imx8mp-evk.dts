@@ -56,6 +56,16 @@
 		      <0x1 0x00000000 0 0xc0000000>;
 	};
 
+	flexcan_phy: can-phy {
+		compatible = "nxp,tja1048";
+		#phy-cells = <1>;
+		max-bitrate = <5000000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_flexcan_phy>;
+		standby-gpios = <&gpio5 5 GPIO_ACTIVE_LOW>,
+				<&gpio4 27 GPIO_ACTIVE_LOW>;
+	};
+
 	native-hdmi-connector {
 		compatible = "hdmi-connector";
 		label = "HDMI OUT";
@@ -72,6 +82,27 @@
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
 		clock-frequency = <100000000>;
+	};
+
+	reg_1v5: regulator-1v5 {
+		compatible = "regulator-fixed";
+		regulator-name = "1v5";
+		regulator-min-microvolt = <1500000>;
+		regulator-max-microvolt = <1500000>;
+	};
+
+	reg_1v8: regulator-1v8 {
+		compatible = "regulator-fixed";
+		regulator-name = "1v8";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+	};
+
+	reg_2v8: regulator-1v8 {
+		compatible = "regulator-fixed";
+		regulator-name = "2v8";
+		regulator-min-microvolt = <2800000>;
+		regulator-max-microvolt = <2800000>;
 	};
 
 	reg_audio_3v3: regulator-audio-3v3 {
@@ -100,28 +131,6 @@
 		regulator-min-microvolt = <3300000>;
 		regulator-max-microvolt = <3300000>;
 		gpio = <&gpio4 29 GPIO_ACTIVE_HIGH>;
-		enable-active-high;
-	};
-
-	reg_can1_stby: regulator-can1-stby {
-		compatible = "regulator-fixed";
-		regulator-name = "can1-stby";
-		pinctrl-names = "default";
-		pinctrl-0 = <&pinctrl_flexcan1_reg>;
-		regulator-min-microvolt = <3300000>;
-		regulator-max-microvolt = <3300000>;
-		gpio = <&gpio5 5 GPIO_ACTIVE_HIGH>;
-		enable-active-high;
-	};
-
-	reg_can2_stby: regulator-can2-stby {
-		compatible = "regulator-fixed";
-		regulator-name = "can2-stby";
-		pinctrl-names = "default";
-		pinctrl-0 = <&pinctrl_flexcan2_reg>;
-		regulator-min-microvolt = <3300000>;
-		regulator-max-microvolt = <3300000>;
-		gpio = <&gpio4 27 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 	};
 
@@ -168,37 +177,6 @@
 		#sound-dai-cells = <1>;
 	};
 
-	sound {
-		compatible = "simple-audio-card";
-		simple-audio-card,name = "wm8960-audio";
-		simple-audio-card,format = "i2s";
-		simple-audio-card,frame-master = <&cpudai>;
-		simple-audio-card,bitclock-master = <&cpudai>;
-		simple-audio-card,widgets =
-			"Headphone", "Headphone Jack",
-			"Speaker", "External Speaker",
-			"Microphone", "Mic Jack";
-		simple-audio-card,routing =
-			"Headphone Jack", "HP_L",
-			"Headphone Jack", "HP_R",
-			"External Speaker", "SPK_LP",
-			"External Speaker", "SPK_LN",
-			"External Speaker", "SPK_RP",
-			"External Speaker", "SPK_RN",
-			"LINPUT1", "Mic Jack",
-			"LINPUT3", "Mic Jack",
-			"Mic Jack", "MICB";
-
-		cpudai: simple-audio-card,cpu {
-			sound-dai = <&sai3>;
-		};
-
-		simple-audio-card,codec {
-			sound-dai = <&wm8960>;
-		};
-
-	};
-
 	sound-bt-sco {
 		compatible = "simple-audio-card";
 		simple-audio-card,name = "bt-sco-audio";
@@ -237,6 +215,26 @@
 				sound-dai = <&micfil>;
 			};
 		};
+	};
+
+	sound-wm8960 {
+		compatible = "fsl,imx-audio-wm8960";
+		audio-asrc = <&easrc>;
+		audio-codec = <&wm8960>;
+		audio-cpu = <&sai3>;
+		audio-routing = "Headphone Jack", "HP_L",
+			"Headphone Jack", "HP_R",
+			"Ext Spk", "SPK_LP",
+			"Ext Spk", "SPK_LN",
+			"Ext Spk", "SPK_RP",
+			"Ext Spk", "SPK_RN",
+			"LINPUT1", "Mic Jack",
+			"LINPUT3", "Mic Jack",
+			"Mic Jack", "MICB";
+		hp-det-gpio = <&gpio4 28 GPIO_ACTIVE_HIGH>;
+		model = "wm8960-audio";
+		pinctrl-0 = <&pinctrl_hpdet>;
+		pinctrl-names = "default";
 	};
 
 	sound-xcvr {
@@ -316,6 +314,11 @@
 &dsp {
 	memory-region = <&dsp_vdev0buffer>, <&dsp_vdev0vring0>,
 			<&dsp_vdev0vring1>, <&dsp_reserved>;
+	status = "okay";
+};
+
+&easrc {
+	fsl,asrc-rate = <48000>;
 	status = "okay";
 };
 
@@ -437,15 +440,19 @@
 &flexcan1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_flexcan1>;
-	xceiver-supply = <&reg_can1_stby>;
+	phys = <&flexcan_phy 0>;
 	status = "okay";
 };
 
 &flexcan2 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_flexcan2>;
-	xceiver-supply = <&reg_can2_stby>;
+	phys = <&flexcan_phy 1>;
 	status = "disabled";/* can2 pin conflict with pdm */
+};
+
+&hdmi_pai {
+	status = "okay";
 };
 
 &hdmi_pvi {
@@ -562,6 +569,30 @@
 	pinctrl-0 = <&pinctrl_i2c2>;
 	status = "okay";
 
+	camera@3c {
+	       compatible = "ovti,ov5640";
+	       reg = <0x3c>;
+	       pinctrl-names = "default";
+	       pinctrl-0 = <&pinctrl_csi0_pwn>, <&pinctrl_csi0_rst>, <&pinctrl_csi_mclk>;
+	       clocks = <&clk IMX8MP_CLK_IPP_DO_CLKO2>;
+	       clock-names = "xclk";
+	       assigned-clocks = <&clk IMX8MP_CLK_IPP_DO_CLKO2>;
+	       assigned-clock-parents = <&clk IMX8MP_CLK_24M>;
+	       assigned-clock-rates = <24000000>;
+	       powerdown-gpios = <&gpio2 11 GPIO_ACTIVE_HIGH>;
+	       AVDD-supply = <&reg_2v8>;
+	       DVDD-supply = <&reg_1v5>;
+	       DOVDD-supply = <&reg_1v8>;
+	       status = "okay";
+
+	       port {
+		       ov5640_mipi_0_ep: endpoint {
+			       remote-endpoint = <&mipi_csi0_ep>;
+			       data-lanes = <1 2>;
+		       };
+	       };
+	};
+
 	hdmi@3d {
 		compatible = "adi,adv7535";
 		reg = <0x3d>;
@@ -666,6 +697,10 @@
 	 */
 };
 
+&isi_0 {
+	status = "okay";
+};
+
 &lcdif1 {
 	status = "okay";
 };
@@ -682,6 +717,19 @@
 	assigned-clock-parents = <&clk IMX8MP_AUDIO_PLL1_OUT>;
 	assigned-clock-rates = <196608000>;
 	status = "okay";
+};
+
+&mipi_csi_0 {
+	status = "okay";
+
+	ports {
+	       port@0 {
+		       mipi_csi0_ep: endpoint {
+				remote-endpoint = <&ov5640_mipi_0_ep>;
+				data-lanes = <1 2>;
+		       };
+	       };
+	};
 };
 
 &mipi_dsi {
@@ -716,6 +764,8 @@
 	pinctrl-0 = <&pinctrl_pcie0>;
 	reset-gpio = <&gpio2 7 GPIO_ACTIVE_LOW>;
 	vpcie-supply = <&reg_pcie0>;
+	vpcie3v3aux-supply = <&reg_pcie0>;
+	supports-clkreq;
 	status = "okay";
 };
 
@@ -855,6 +905,24 @@
 		>;
 	};
 
+	pinctrl_csi_mclk: csi_mclk_grp {
+		fsl,pins = <
+			MX8MP_IOMUXC_GPIO1_IO15__CCM_CLKO2	0x50
+		>;
+	};
+
+	pinctrl_csi0_pwn: csi0_pwn_grp {
+		fsl,pins = <
+			MX8MP_IOMUXC_SD1_STROBE__GPIO2_IO11	0x10
+		>;
+	};
+
+	pinctrl_csi0_rst: csi0_rst_grp {
+		fsl,pins = <
+			MX8MP_IOMUXC_GPIO1_IO06__GPIO1_IO06	0x10
+		>;
+	};
+
 	pinctrl_eqos: eqosgrp {
 		fsl,pins = <
 			MX8MP_IOMUXC_ENET_MDC__ENET_QOS_MDC				0x2
@@ -909,14 +977,9 @@
 		>;
 	};
 
-	pinctrl_flexcan1_reg: flexcan1reggrp {
+	pinctrl_flexcan_phy: flexcanphygrp {
 		fsl,pins = <
 			MX8MP_IOMUXC_SPDIF_EXT_CLK__GPIO5_IO05  0x154   /* CAN1_STBY */
-		>;
-	};
-
-	pinctrl_flexcan2_reg: flexcan2reggrp {
-		fsl,pins = <
 			MX8MP_IOMUXC_SAI2_MCLK__GPIO4_IO27      0x154   /* CAN2_STBY */
 		>;
 	};
@@ -949,6 +1012,12 @@
 	pinctrl_hog: hoggrp {
 		fsl,pins = <
 			MX8MP_IOMUXC_HDMI_HPD__HDMIMIX_HDMI_HPD		0x40000010
+		>;
+	};
+
+	pinctrl_hpdet: hpdetgrp {
+		fsl,pins = <
+			MX8MP_IOMUXC_SAI3_RXFS__GPIO4_IO28		0xd6
 		>;
 	};
 

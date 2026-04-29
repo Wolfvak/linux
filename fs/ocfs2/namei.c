@@ -23,6 +23,7 @@
 #include <linux/fs.h>
 #include <linux/types.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 #include <linux/highmem.h>
 #include <linux/quotaops.h>
 #include <linux/iversion.h>
@@ -142,6 +143,8 @@ static struct dentry *ocfs2_lookup(struct inode *dir, struct dentry *dentry,
 
 bail_add:
 	ret = d_splice_alias(inode, dentry);
+	if (IS_ERR(ret))
+		goto bail_unlock;
 
 	if (inode) {
 		/*
@@ -154,15 +157,16 @@ bail_add:
 		 * NOTE: This dentry already has ->d_op set from
 		 * ocfs2_get_parent() and ocfs2_get_dentry()
 		 */
-		if (!IS_ERR_OR_NULL(ret))
+		if (ret)
 			dentry = ret;
 
 		status = ocfs2_dentry_attach_lock(dentry, inode,
 						  OCFS2_I(dir)->ip_blkno);
 		if (status) {
 			mlog_errno(status);
+			if (ret)
+				dput(ret);
 			ret = ERR_PTR(status);
-			goto bail_unlock;
 		}
 	} else
 		ocfs2_dentry_attach_gen(dentry);
@@ -565,7 +569,7 @@ static int __ocfs2_mknod_locked(struct inode *dir,
 	ocfs2_set_links_count(fe, inode->i_nlink);
 
 	fe->i_last_eb_blk = 0;
-	strcpy(fe->i_signature, OCFS2_INODE_SIGNATURE);
+	strscpy(fe->i_signature, OCFS2_INODE_SIGNATURE);
 	fe->i_flags |= cpu_to_le32(OCFS2_VALID_FL);
 	ktime_get_coarse_real_ts64(&ts);
 	fe->i_atime = fe->i_ctime = fe->i_mtime =
@@ -1452,8 +1456,8 @@ static int ocfs2_rename(struct mnt_idmap *idmap,
 		newfe = (struct ocfs2_dinode *) newfe_bh->b_data;
 
 		trace_ocfs2_rename_over_existing(
-		     (unsigned long long)newfe_blkno, newfe_bh, newfe_bh ?
-		     (unsigned long long)newfe_bh->b_blocknr : 0ULL);
+		     (unsigned long long)newfe_blkno, newfe_bh,
+		     (unsigned long long)newfe_bh->b_blocknr);
 
 		if (S_ISDIR(new_inode->i_mode) || (new_inode->i_nlink == 1)) {
 			status = ocfs2_prepare_orphan_dir(osb, &orphan_dir,
@@ -1732,7 +1736,7 @@ static int ocfs2_create_symlink_data(struct ocfs2_super *osb,
 		goto bail;
 	}
 
-	bhs = kcalloc(blocks, sizeof(struct buffer_head *), GFP_KERNEL);
+	bhs = kzalloc_objs(struct buffer_head *, blocks);
 	if (!bhs) {
 		status = -ENOMEM;
 		mlog_errno(status);

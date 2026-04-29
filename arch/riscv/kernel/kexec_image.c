@@ -22,7 +22,7 @@ static int image_probe(const char *kernel_buf, unsigned long kernel_len)
 	if (!h || kernel_len < sizeof(*h))
 		return -EINVAL;
 
-	/* According to Documentation/riscv/boot-image-header.rst,
+	/* According to Documentation/arch/riscv/boot-image-header.rst,
 	 * use "magic2" field to check when version >= 0.2.
 	 */
 
@@ -41,7 +41,7 @@ static void *image_load(struct kimage *image,
 	struct riscv_image_header *h;
 	u64 flags;
 	bool be_image, be_kernel;
-	struct kexec_buf kbuf;
+	struct kexec_buf kbuf = {};
 	int ret;
 
 	/* Check Image header */

@@ -96,6 +96,8 @@ static u64 get_pd_power_uw(struct dtpm *dtpm)
 	int i;
 
 	pd = em_cpu_get(dtpm_cpu->cpu);
+	if (!pd)
+		return 0;
 
 	pd_mask = em_span_cpus(pd);
 
@@ -210,7 +212,7 @@ static int __dtpm_cpu_setup(int cpu, struct dtpm *parent)
 		goto release_policy;
 	}
 
-	dtpm_cpu = kzalloc(sizeof(*dtpm_cpu), GFP_KERNEL);
+	dtpm_cpu = kzalloc_obj(*dtpm_cpu);
 	if (!dtpm_cpu) {
 		ret = -ENOMEM;
 		goto release_policy;

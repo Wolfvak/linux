@@ -11,18 +11,18 @@ struct xfs_open_zone {
 	atomic_t		oz_ref;
 
 	/*
-	 * oz_write_pointer is the write pointer at which space is handed out
-	 * for conventional zones, or simple the count of blocks handed out
-	 * so far for sequential write required zones and is protected by
-	 * oz_alloc_lock/
+	 * oz_allocated is the amount of space already allocated out of the zone
+	 * and is protected by oz_alloc_lock.
+	 *
+	 * For conventional zones it also is the offset of the next write.
 	 */
 	spinlock_t		oz_alloc_lock;
-	xfs_rgblock_t		oz_write_pointer;
+	xfs_rgblock_t		oz_allocated;
 
 	/*
-	 * oz_written is the number of blocks for which we've received a
-	 * write completion.  oz_written must always be <= oz_write_pointer
-	 * and is protected by the ILOCK of the rmap inode.
+	 * oz_written is the number of blocks for which we've received a write
+	 * completion.  oz_written must always be <= oz_allocated and is
+	 * protected by the ILOCK of the rmap inode.
 	 */
 	xfs_rgblock_t		oz_written;
 
@@ -44,6 +44,8 @@ struct xfs_open_zone {
 	 * the life time of an open zone.
 	 */
 	struct xfs_rtgroup	*oz_rtg;
+
+	struct rcu_head		oz_rcu;
 };
 
 /*
@@ -70,7 +72,6 @@ struct xfs_zone_info {
 	/*
 	 * Free zone search cursor and number of free zones:
 	 */
-	unsigned long		zi_free_zone_cursor;
 	atomic_t		zi_nr_free_zones;
 
 	/*
@@ -111,6 +112,7 @@ struct xfs_open_zone *xfs_open_zone(struct xfs_mount *mp,
 
 int xfs_zone_gc_reset_sync(struct xfs_rtgroup *rtg);
 bool xfs_zoned_need_gc(struct xfs_mount *mp);
+bool xfs_zoned_have_reclaimable(struct xfs_zone_info *zi);
 int xfs_zone_gc_mount(struct xfs_mount *mp);
 void xfs_zone_gc_unmount(struct xfs_mount *mp);
 

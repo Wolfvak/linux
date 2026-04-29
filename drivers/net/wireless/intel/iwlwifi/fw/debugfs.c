@@ -7,6 +7,7 @@
 #include "api/commands.h"
 #include "debugfs.h"
 #include "dbg.h"
+#include <linux/hex.h>
 #include <linux/seq_file.h>
 
 #define FWRT_DEBUGFS_OPEN_WRAPPER(name, buflen, argtype)		\
@@ -198,7 +199,7 @@ void iwl_fw_trigger_timestamp(struct iwl_fw_runtime *fwrt, u32 delay)
 
 	iwl_fw_cancel_timestamp(fwrt);
 
-	fwrt->timestamp.delay = msecs_to_jiffies(delay * 1000);
+	fwrt->timestamp.delay = secs_to_jiffies(delay);
 
 	schedule_delayed_work(&fwrt->timestamp.wk,
 			      round_jiffies_relative(fwrt->timestamp.delay));
@@ -359,7 +360,7 @@ static void *iwl_dbgfs_fw_info_seq_start(struct seq_file *seq, loff_t *pos)
 	if (*pos >= fw->ucode_capa.n_cmd_versions)
 		return NULL;
 
-	state = kzalloc(sizeof(*state), GFP_KERNEL);
+	state = kzalloc_obj(*state);
 	if (!state)
 		return NULL;
 	state->pos = *pos;
@@ -388,6 +389,12 @@ static int iwl_dbgfs_fw_info_seq_show(struct seq_file *seq, void *v)
 		seq_printf(seq,
 			   "    %d: %d\n",
 			   IWL_UCODE_TLV_CAPA_CHINA_22_REG_SUPPORT,
+			   has_capa);
+		has_capa = fw_has_capa(&fw->ucode_capa,
+				       IWL_UCODE_TLV_CAPA_FW_ACCEPTS_RAW_DSM_TABLE) ? 1 : 0;
+		seq_printf(seq,
+			   "    %d: %d\n",
+			   IWL_UCODE_TLV_CAPA_FW_ACCEPTS_RAW_DSM_TABLE,
 			   has_capa);
 		seq_puts(seq, "fw_api_ver:\n");
 	}

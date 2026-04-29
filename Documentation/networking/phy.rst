@@ -20,7 +20,7 @@ sometimes quite different) ethernet controllers connected to the same
 management bus, it is difficult to ensure safe use of the bus.
 
 Since the PHYs are devices, and the management busses through which they are
-accessed are, in fact, busses, the PHY Abstraction Layer treats them as such.
+accessed are, in fact, busses, the PHY Abstraction Layer (PAL) treats them as such.
 In doing so, it has these goals:
 
 #. Increase code-reuse
@@ -333,6 +333,13 @@ Some of the interface modes are described below:
     SerDes lane, each port having speeds of 2.5G / 1G / 100M / 10M achieved
     through symbol replication. The PCS expects the standard USXGMII code word.
 
+``PHY_INTERFACE_MODE_MIILITE``
+    Non-standard, simplified MII mode, without TXER, RXER, CRS and COL signals
+    as defined for the MII. The absence of COL signal makes half-duplex link
+    modes impossible but does not interfere with BroadR-Reach link modes on
+    Broadcom (and other two-wire Ethernet) PHYs, because they are full-duplex
+    only.
+
 Pause frames / flow control
 ===========================
 
@@ -517,32 +524,12 @@ When a match is found, the PHY layer will invoke the run function associated
 with the fixup.  This function is passed a pointer to the phy_device of
 interest.  It should therefore only operate on that PHY.
 
-The platform code can either register the fixup using phy_register_fixup()::
-
-	int phy_register_fixup(const char *phy_id,
-		u32 phy_uid, u32 phy_uid_mask,
-		int (*run)(struct phy_device *));
-
-Or using one of the two stubs, phy_register_fixup_for_uid() and
-phy_register_fixup_for_id()::
+The platform code can register the fixup using one of::
 
  int phy_register_fixup_for_uid(u32 phy_uid, u32 phy_uid_mask,
 		int (*run)(struct phy_device *));
  int phy_register_fixup_for_id(const char *phy_id,
 		int (*run)(struct phy_device *));
-
-The stubs set one of the two matching criteria, and set the other one to
-match anything.
-
-When phy_register_fixup() or \*_for_uid()/\*_for_id() is called at module load
-time, the module needs to unregister the fixup and free allocated memory when
-it's unloaded.
-
-Call one of following function before unloading module::
-
- int phy_unregister_fixup(const char *phy_id, u32 phy_uid, u32 phy_uid_mask);
- int phy_unregister_fixup_for_uid(u32 phy_uid, u32 phy_uid_mask);
- int phy_register_fixup_for_id(const char *phy_id);
 
 Standards
 =========

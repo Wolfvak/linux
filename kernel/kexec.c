@@ -152,7 +152,7 @@ static int do_kexec_load(unsigned long entry, unsigned long nr_segments,
 		goto out;
 
 	for (i = 0; i < nr_segments; i++) {
-		ret = kimage_load_segment(image, &image->segment[i]);
+		ret = kimage_load_segment(image, i);
 		if (ret)
 			goto out;
 	}
@@ -284,8 +284,7 @@ COMPAT_SYSCALL_DEFINE4(kexec_load, compat_ulong_t, entry,
 	if ((flags & KEXEC_ARCH_MASK) == KEXEC_ARCH_DEFAULT)
 		return -EINVAL;
 
-	ksegments = kmalloc_array(nr_segments, sizeof(ksegments[0]),
-			GFP_KERNEL);
+	ksegments = kmalloc_objs(ksegments[0], nr_segments);
 	if (!ksegments)
 		return -ENOMEM;
 

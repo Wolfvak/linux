@@ -15,12 +15,11 @@
 #include <linux/pinctrl/pinconf-generic.h>
 #include <linux/pinctrl/pinctrl.h>
 #include <linux/pinctrl/pinmux.h>
+#include <linux/platform_data/pic32.h>
 #include <linux/platform_device.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
-
-#include <asm/mach-pic32/pic32.h>
 
 #include "pinctrl-utils.h"
 #include "pinctrl-pic32.h"
@@ -1828,8 +1827,8 @@ static int pic32_gpio_get(struct gpio_chip *chip, unsigned offset)
 	return !!(readl(bank->reg_base + PORT_REG) & BIT(offset));
 }
 
-static void pic32_gpio_set(struct gpio_chip *chip, unsigned offset,
-			       int value)
+static int pic32_gpio_set(struct gpio_chip *chip, unsigned int offset,
+			  int value)
 {
 	struct pic32_gpio_bank *bank = gpiochip_get_data(chip);
 	u32 mask = BIT(offset);
@@ -1838,6 +1837,8 @@ static void pic32_gpio_set(struct gpio_chip *chip, unsigned offset,
 		writel(mask, bank->reg_base + PIC32_SET(PORT_REG));
 	else
 		writel(mask, bank->reg_base + PIC32_CLR(PORT_REG));
+
+	return 0;
 }
 
 static int pic32_gpio_direction_output(struct gpio_chip *chip,
@@ -1903,7 +1904,7 @@ static int pic32_pinconf_get(struct pinctrl_dev *pctldev, unsigned pin,
 	case PIN_CONFIG_INPUT_ENABLE:
 		arg = !!(readl(bank->reg_base + TRIS_REG) & mask);
 		break;
-	case PIN_CONFIG_OUTPUT:
+	case PIN_CONFIG_LEVEL:
 		arg = !(readl(bank->reg_base + TRIS_REG) & mask);
 		break;
 	default:
@@ -1958,7 +1959,7 @@ static int pic32_pinconf_set(struct pinctrl_dev *pctldev, unsigned pin,
 		case PIN_CONFIG_INPUT_ENABLE:
 			pic32_gpio_direction_input(&bank->gpio_chip, offset);
 			break;
-		case PIN_CONFIG_OUTPUT:
+		case PIN_CONFIG_LEVEL:
 			pic32_gpio_direction_output(&bank->gpio_chip,
 						    offset, arg);
 			break;

@@ -12,7 +12,8 @@
 	HOW(ROC)			\
 	HOW(NON_BSS)			\
 	HOW(TMP_NON_BSS)		\
-	HOW(TPT)
+	HOW(TPT)			\
+	HOW(NAN)
 
 static const char *
 iwl_mld_get_emlsr_blocked_string(enum iwl_mld_emlsr_blocked blocked)
@@ -31,11 +32,9 @@ static void iwl_mld_print_emlsr_blocked(struct iwl_mld *mld, u32 mask)
 {
 #define NAME_FMT(x) "%s"
 #define NAME_PR(x) (mask & IWL_MLD_EMLSR_BLOCKED_##x) ? "[" #x "]" : "",
-	IWL_DEBUG_INFO(mld,
-		       "EMLSR blocked = " HANDLE_EMLSR_BLOCKED_REASONS(NAME_FMT)
-		       " (0x%x)\n",
-		       HANDLE_EMLSR_BLOCKED_REASONS(NAME_PR)
-		       mask);
+	IWL_DEBUG_EHT(mld,
+		      "EMLSR blocked = " HANDLE_EMLSR_BLOCKED_REASONS(NAME_FMT)
+		      " (0x%x)\n", HANDLE_EMLSR_BLOCKED_REASONS(NAME_PR) mask);
 #undef NAME_FMT
 #undef NAME_PR
 }
@@ -72,11 +71,9 @@ static void iwl_mld_print_emlsr_exit(struct iwl_mld *mld, u32 mask)
 {
 #define NAME_FMT(x) "%s"
 #define NAME_PR(x) (mask & IWL_MLD_EMLSR_EXIT_##x) ? "[" #x "]" : "",
-	IWL_DEBUG_INFO(mld,
-		       "EMLSR exit = " HANDLE_EMLSR_EXIT_REASONS(NAME_FMT)
-		       " (0x%x)\n",
-		       HANDLE_EMLSR_EXIT_REASONS(NAME_PR)
-		       mask);
+	IWL_DEBUG_EHT(mld,
+		      "EMLSR exit = " HANDLE_EMLSR_EXIT_REASONS(NAME_FMT)
+		      " (0x%x)\n", HANDLE_EMLSR_EXIT_REASONS(NAME_PR) mask);
 #undef NAME_FMT
 #undef NAME_PR
 }
@@ -170,10 +167,10 @@ static void iwl_mld_check_emlsr_prevention(struct iwl_mld *mld,
 		WARN_ON(mld_vif->emlsr.exit_repeat_count > 3);
 	}
 
-	IWL_DEBUG_INFO(mld,
-		       "Preventing EMLSR for %ld seconds due to %u exits with the reason = %s (0x%x)\n",
-		       delay / HZ, mld_vif->emlsr.exit_repeat_count,
-		       iwl_mld_get_emlsr_exit_string(reason), reason);
+	IWL_DEBUG_EHT(mld,
+		      "Preventing EMLSR for %ld seconds due to %u exits with the reason = %s (0x%x)\n",
+		      delay / HZ, mld_vif->emlsr.exit_repeat_count,
+		      iwl_mld_get_emlsr_exit_string(reason), reason);
 
 	wiphy_delayed_work_queue(mld->wiphy,
 				 &mld_vif->emlsr.prevent_done_wk, delay);
@@ -217,10 +214,10 @@ static int _iwl_mld_exit_emlsr(struct iwl_mld *mld, struct ieee80211_vif *vif,
 		link_to_keep = __ffs(vif->active_links);
 
 	new_active_links = BIT(link_to_keep);
-	IWL_DEBUG_INFO(mld,
-		       "Exiting EMLSR. reason = %s (0x%x). Current active links=0x%x, new active links = 0x%x\n",
-		       iwl_mld_get_emlsr_exit_string(exit), exit,
-		       vif->active_links, new_active_links);
+	IWL_DEBUG_EHT(mld,
+		      "Exiting EMLSR. reason = %s (0x%x). Current active links=0x%x, new active links = 0x%x\n",
+		      iwl_mld_get_emlsr_exit_string(exit), exit,
+		      vif->active_links, new_active_links);
 
 	if (sync)
 		ret = ieee80211_set_active_links(vif, new_active_links);
@@ -262,9 +259,8 @@ static int _iwl_mld_emlsr_block(struct iwl_mld *mld, struct ieee80211_vif *vif,
 
 	mld_vif->emlsr.blocked_reasons |= reason;
 
-	IWL_DEBUG_INFO(mld,
-		       "Blocking EMLSR mode. reason = %s (0x%x)\n",
-		       iwl_mld_get_emlsr_blocked_string(reason), reason);
+	IWL_DEBUG_EHT(mld, "Blocking EMLSR mode. reason = %s (0x%x)\n",
+		      iwl_mld_get_emlsr_blocked_string(reason), reason);
 	iwl_mld_print_emlsr_blocked(mld, mld_vif->emlsr.blocked_reasons);
 
 	if (reason == IWL_MLD_EMLSR_BLOCKED_TPT)
@@ -287,6 +283,36 @@ int iwl_mld_block_emlsr_sync(struct iwl_mld *mld, struct ieee80211_vif *vif,
 	return _iwl_mld_emlsr_block(mld, vif, reason, link_to_keep, true);
 }
 
+#define IWL_MLD_EMLSR_BLOCKED_TMP_NON_BSS_TIMEOUT (10 * HZ)
+
+static void iwl_mld_vif_iter_emlsr_block_tmp_non_bss(void *_data, u8 *mac,
+						     struct ieee80211_vif *vif)
+{
+	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
+	int ret;
+
+	if (!iwl_mld_vif_has_emlsr_cap(vif))
+		return;
+
+	ret = iwl_mld_block_emlsr_sync(mld_vif->mld, vif,
+				       IWL_MLD_EMLSR_BLOCKED_TMP_NON_BSS,
+				       iwl_mld_get_primary_link(vif));
+	if (ret)
+		return;
+
+	wiphy_delayed_work_queue(mld_vif->mld->wiphy,
+				 &mld_vif->emlsr.tmp_non_bss_done_wk,
+				 IWL_MLD_EMLSR_BLOCKED_TMP_NON_BSS_TIMEOUT);
+}
+
+void iwl_mld_emlsr_block_tmp_non_bss(struct iwl_mld *mld)
+{
+	ieee80211_iterate_active_interfaces_mtx(mld->hw,
+						IEEE80211_IFACE_ITER_NORMAL,
+						iwl_mld_vif_iter_emlsr_block_tmp_non_bss,
+						NULL);
+}
+
 static void _iwl_mld_select_links(struct iwl_mld *mld,
 				  struct ieee80211_vif *vif);
 
@@ -305,9 +331,8 @@ void iwl_mld_unblock_emlsr(struct iwl_mld *mld, struct ieee80211_vif *vif,
 
 	mld_vif->emlsr.blocked_reasons &= ~reason;
 
-	IWL_DEBUG_INFO(mld,
-		       "Unblocking EMLSR mode. reason = %s (0x%x)\n",
-		       iwl_mld_get_emlsr_blocked_string(reason), reason);
+	IWL_DEBUG_EHT(mld, "Unblocking EMLSR mode. reason = %s (0x%x)\n",
+		      iwl_mld_get_emlsr_blocked_string(reason), reason);
 	iwl_mld_print_emlsr_blocked(mld, mld_vif->emlsr.blocked_reasons);
 
 	if (reason == IWL_MLD_EMLSR_BLOCKED_TPT)
@@ -318,7 +343,7 @@ void iwl_mld_unblock_emlsr(struct iwl_mld *mld, struct ieee80211_vif *vif,
 	if (mld_vif->emlsr.blocked_reasons)
 		return;
 
-	IWL_DEBUG_INFO(mld, "EMLSR is unblocked\n");
+	IWL_DEBUG_EHT(mld, "EMLSR is unblocked\n");
 	iwl_mld_int_mlo_scan(mld, vif);
 }
 
@@ -327,38 +352,25 @@ iwl_mld_vif_iter_emlsr_mode_notif(void *data, u8 *mac,
 				  struct ieee80211_vif *vif)
 {
 	const struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
-	enum iwl_mvm_fw_esr_recommendation action;
-	const struct iwl_esr_mode_notif *notif = NULL;
-
-	if (iwl_fw_lookup_notif_ver(mld_vif->mld->fw, DATA_PATH_GROUP,
-				    ESR_MODE_NOTIF, 0) > 1) {
-		notif = (void *)data;
-		action = le32_to_cpu(notif->action);
-	} else {
-		const struct iwl_esr_mode_notif_v1 *notif_v1 = (void *)data;
-
-		action = le32_to_cpu(notif_v1->action);
-	}
+	const struct iwl_esr_mode_notif *notif = (void *)data;
+	enum iwl_mvm_fw_esr_recommendation action = le32_to_cpu(notif->action);
 
 	if (!iwl_mld_vif_has_emlsr_cap(vif))
 		return;
 
 	switch (action) {
 	case ESR_RECOMMEND_LEAVE:
-		if (notif)
-			IWL_DEBUG_INFO(mld_vif->mld,
-				       "FW recommend leave reason = 0x%x\n",
-				       le32_to_cpu(notif->leave_reason_mask));
+		IWL_DEBUG_EHT(mld_vif->mld,
+			      "FW recommend leave reason = 0x%x\n",
+			      le32_to_cpu(notif->leave_reason_mask));
 
 		iwl_mld_exit_emlsr(mld_vif->mld, vif,
 				   IWL_MLD_EMLSR_EXIT_FW_REQUEST,
 				   iwl_mld_get_primary_link(vif));
 		break;
 	case ESR_FORCE_LEAVE:
-		if (notif)
-			IWL_DEBUG_INFO(mld_vif->mld,
-				       "FW force leave reason = 0x%x\n",
-				       le32_to_cpu(notif->leave_reason_mask));
+		IWL_DEBUG_EHT(mld_vif->mld, "FW force leave reason = 0x%x\n",
+			      le32_to_cpu(notif->leave_reason_mask));
 		fallthrough;
 	case ESR_RECOMMEND_ENTER:
 	default:
@@ -394,11 +406,12 @@ void iwl_mld_handle_emlsr_trans_fail_notif(struct iwl_mld *mld,
 	struct ieee80211_bss_conf *bss_conf =
 		iwl_mld_fw_id_to_link_conf(mld, fw_link_id);
 
-	IWL_DEBUG_INFO(mld, "Failed to %s EMLSR on link %d (FW: %d), reason %d\n",
-		       le32_to_cpu(notif->activation) ? "enter" : "exit",
-		       bss_conf ? bss_conf->link_id : -1,
-		       le32_to_cpu(notif->link_id),
-		       le32_to_cpu(notif->err_code));
+	IWL_DEBUG_EHT(mld,
+		      "Failed to %s EMLSR on link %d (FW: %d), reason %d\n",
+		      le32_to_cpu(notif->activation) ? "enter" : "exit",
+		      bss_conf ? bss_conf->link_id : -1,
+		      le32_to_cpu(notif->link_id),
+		      le32_to_cpu(notif->err_code));
 
 	if (IWL_FW_CHECK(mld, !bss_conf,
 			 "FW reported failure to %sactivate EMLSR on a non-existing link: %d\n",
@@ -439,27 +452,47 @@ static void iwl_mld_count_non_bss_links(void *_data, u8 *mac,
 
 struct iwl_mld_update_emlsr_block_data {
 	bool block;
+	enum iwl_mld_emlsr_blocked reason;
 	int result;
 };
 
 static void
-iwl_mld_vif_iter_update_emlsr_non_bss_block(void *_data, u8 *mac,
-					    struct ieee80211_vif *vif)
+iwl_mld_vif_iter_update_emlsr_block(void *_data, u8 *mac,
+				    struct ieee80211_vif *vif)
 {
 	struct iwl_mld_update_emlsr_block_data *data = _data;
 	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
 	int ret;
 
+	if (!iwl_mld_vif_has_emlsr_cap(vif))
+		return;
+
 	if (data->block) {
 		ret = iwl_mld_block_emlsr_sync(mld_vif->mld, vif,
-					       IWL_MLD_EMLSR_BLOCKED_NON_BSS,
+					       data->reason,
 					       iwl_mld_get_primary_link(vif));
 		if (ret)
 			data->result = ret;
 	} else {
 		iwl_mld_unblock_emlsr(mld_vif->mld, vif,
-				      IWL_MLD_EMLSR_BLOCKED_NON_BSS);
+				      data->reason);
 	}
+}
+
+int iwl_mld_update_emlsr_block(struct iwl_mld *mld, bool block,
+			       enum iwl_mld_emlsr_blocked reason)
+{
+	struct iwl_mld_update_emlsr_block_data block_data = {
+		.block = block,
+		.reason = reason,
+	};
+
+	ieee80211_iterate_active_interfaces_mtx(mld->hw,
+						IEEE80211_IFACE_ITER_NORMAL,
+						iwl_mld_vif_iter_update_emlsr_block,
+						&block_data);
+
+	return block_data.result;
 }
 
 int iwl_mld_emlsr_check_non_bss_block(struct iwl_mld *mld,
@@ -469,7 +502,6 @@ int iwl_mld_emlsr_check_non_bss_block(struct iwl_mld *mld,
 	 * block EMLSR on the bss vif. Upon deactivation, check if this link
 	 * was the last non-station link active, and if so unblock the bss vif
 	 */
-	struct iwl_mld_update_emlsr_block_data block_data = {};
 	int count = pending_link_changes;
 
 	/* No need to count if we are activating a non-BSS link */
@@ -483,14 +515,8 @@ int iwl_mld_emlsr_check_non_bss_block(struct iwl_mld *mld,
 	 * We could skip updating it if the block change did not change (and
 	 * pending_link_changes is non-zero).
 	 */
-	block_data.block = !!count;
-
-	ieee80211_iterate_active_interfaces_mtx(mld->hw,
-						IEEE80211_IFACE_ITER_NORMAL,
-						iwl_mld_vif_iter_update_emlsr_non_bss_block,
-						&block_data);
-
-	return block_data.result;
+	return iwl_mld_update_emlsr_block(mld, !!count,
+					  IWL_MLD_EMLSR_BLOCKED_NON_BSS);
 }
 
 #define EMLSR_SEC_LINK_MIN_PERC 10
@@ -530,10 +556,12 @@ void iwl_mld_emlsr_check_tpt(struct wiphy *wiphy, struct wiphy_work *wk)
 	/*
 	 * TPT is unblocked, need to check if the TPT criteria is still met.
 	 *
-	 * If EMLSR is active, then we also need to check the secondar link
-	 * requirements.
+	 * If EMLSR is active for at least 5 seconds, then we also
+	 * need to check the secondary link requirements.
 	 */
-	if (iwl_mld_emlsr_active(vif)) {
+	if (iwl_mld_emlsr_active(vif) &&
+	    time_is_before_jiffies(mld_vif->emlsr.last_entry_ts +
+				   IWL_MLD_TPT_COUNT_WINDOW)) {
 		sec_link_id = iwl_mld_get_other_link(vif, iwl_mld_get_primary_link(vif));
 		sec_link = iwl_mld_link_dereference_check(mld_vif, sec_link_id);
 		if (WARN_ON_ONCE(!sec_link))
@@ -570,8 +598,8 @@ void iwl_mld_emlsr_check_tpt(struct wiphy *wiphy, struct wiphy_work *wk)
 		spin_unlock_bh(&queue_counter->lock);
 	}
 
-	IWL_DEBUG_INFO(mld, "total Tx MPDUs: %ld. total Rx MPDUs: %ld\n",
-		       total_tx, total_rx);
+	IWL_DEBUG_EHT(mld, "total Tx MPDUs: %ld. total Rx MPDUs: %ld\n",
+		      total_tx, total_rx);
 
 	/* If we don't have enough MPDUs - exit EMLSR */
 	if (total_tx < IWL_MLD_ENTER_EMLSR_TPT_THRESH &&
@@ -583,10 +611,10 @@ void iwl_mld_emlsr_check_tpt(struct wiphy *wiphy, struct wiphy_work *wk)
 
 	/* EMLSR is not active */
 	if (sec_link_id == -1)
-		return;
+		goto schedule;
 
-	IWL_DEBUG_INFO(mld, "Secondary Link %d: Tx MPDUs: %ld. Rx MPDUs: %ld\n",
-		       sec_link_id, sec_link_tx, sec_link_rx);
+	IWL_DEBUG_EHT(mld, "Secondary Link %d: Tx MPDUs: %ld. Rx MPDUs: %ld\n",
+		      sec_link_id, sec_link_tx, sec_link_rx);
 
 	/* Calculate the percentage of the secondary link TX/RX */
 	sec_link_tx_perc = total_tx ? sec_link_tx * 100 / total_tx : 0;
@@ -605,6 +633,7 @@ void iwl_mld_emlsr_check_tpt(struct wiphy *wiphy, struct wiphy_work *wk)
 		return;
 	}
 
+schedule:
 	/* Check again when the next window ends  */
 	wiphy_delayed_work_queue(mld_vif->mld->wiphy,
 				 &mld_vif->emlsr.check_tpt_wk,
@@ -657,42 +686,6 @@ s8 iwl_mld_get_emlsr_rssi_thresh(struct iwl_mld *mld,
 #undef RSSI_THRESHOLD
 }
 
-#define IWL_MLD_BT_COEX_DISABLE_EMLSR_RSSI_THRESH	-69
-#define IWL_MLD_BT_COEX_ENABLE_EMLSR_RSSI_THRESH	-63
-#define IWL_MLD_BT_COEX_WIFI_LOSS_THRESH		7
-
-VISIBLE_IF_IWLWIFI_KUNIT
-bool
-iwl_mld_bt_allows_emlsr(struct iwl_mld *mld, struct ieee80211_bss_conf *link,
-			bool check_entry)
-{
-	int bt_penalty, rssi_thresh;
-	s32 link_rssi;
-
-	if (WARN_ON_ONCE(!link->bss))
-		return false;
-
-	link_rssi = MBM_TO_DBM(link->bss->signal);
-	rssi_thresh = check_entry ?
-		      IWL_MLD_BT_COEX_ENABLE_EMLSR_RSSI_THRESH :
-		      IWL_MLD_BT_COEX_DISABLE_EMLSR_RSSI_THRESH;
-	/* No valid RSSI - force to take low rssi */
-	if (!link_rssi)
-		link_rssi = rssi_thresh - 1;
-
-	if (link_rssi > rssi_thresh)
-		bt_penalty = max(mld->last_bt_notif.wifi_loss_mid_high_rssi[PHY_BAND_24][0],
-				 mld->last_bt_notif.wifi_loss_mid_high_rssi[PHY_BAND_24][1]);
-	else
-		bt_penalty = max(mld->last_bt_notif.wifi_loss_low_rssi[PHY_BAND_24][0],
-				 mld->last_bt_notif.wifi_loss_low_rssi[PHY_BAND_24][1]);
-
-	IWL_DEBUG_EHT(mld, "BT penalty for link-id %0X is %d\n",
-		      link->link_id, bt_penalty);
-	return bt_penalty < IWL_MLD_BT_COEX_WIFI_LOSS_THRESH;
-}
-EXPORT_SYMBOL_IF_IWLWIFI_KUNIT(iwl_mld_bt_allows_emlsr);
-
 static u32
 iwl_mld_emlsr_disallowed_with_link(struct iwl_mld *mld,
 				   struct ieee80211_vif *vif,
@@ -707,8 +700,7 @@ iwl_mld_emlsr_disallowed_with_link(struct iwl_mld *mld,
 	if (WARN_ON_ONCE(!conf))
 		return IWL_MLD_EMLSR_EXIT_INVALID;
 
-	if (link->chandef->chan->band == NL80211_BAND_2GHZ &&
-	    !iwl_mld_bt_allows_emlsr(mld, conf, true))
+	if (link->chandef->chan->band == NL80211_BAND_2GHZ && mld->bt_is_active)
 		ret |= IWL_MLD_EMLSR_EXIT_BT_COEX;
 
 	if (link->signal <
@@ -719,10 +711,8 @@ iwl_mld_emlsr_disallowed_with_link(struct iwl_mld *mld,
 		ret |= IWL_MLD_EMLSR_EXIT_CSA;
 
 	if (ret) {
-		IWL_DEBUG_INFO(mld,
-			       "Link %d is not allowed for EMLSR as %s\n",
-			       link->link_id,
-			       primary ? "primary" : "secondary");
+		IWL_DEBUG_EHT(mld, "Link %d is not allowed for EMLSR as %s\n",
+			      link->link_id, primary ? "primary" : "secondary");
 		iwl_mld_print_emlsr_exit(mld, ret);
 	}
 
@@ -740,12 +730,6 @@ iwl_mld_set_link_sel_data(struct iwl_mld *mld,
 	u16 max_grade = 0;
 	unsigned long link_id;
 
-	/*
-	 * TODO: don't select links that weren't discovered in the last scan
-	 * This requires mac80211 (or cfg80211) changes to forward/track when
-	 * a BSS was last updated. cfg80211 already tracks this information but
-	 * it is not exposed within the kernel.
-	 */
 	for_each_set_bit(link_id, &usable_links, IEEE80211_MLD_MAX_NUM_LINKS) {
 		struct ieee80211_bss_conf *link_conf =
 			link_conf_dereference_protected(vif, link_id);
@@ -755,7 +739,7 @@ iwl_mld_set_link_sel_data(struct iwl_mld *mld,
 
 		/* Ignore any BSS that was not seen in the last MLO scan */
 		if (ktime_before(link_conf->bss->ts_boottime,
-				 mld->scan.last_mlo_scan_time))
+				 mld->scan.last_mlo_scan_start_time))
 			continue;
 
 		data[n_data].link_id = link_id;
@@ -874,9 +858,9 @@ iwl_mld_emlsr_pair_state(struct ieee80211_vif *vif,
 		if (c_low->chan->center_freq > c_high->chan->center_freq)
 			swap(c_low, c_high);
 
-		c_low_upper_edge = c_low->chan->center_freq +
+		c_low_upper_edge = c_low->center_freq1 +
 				   cfg80211_chandef_get_width(c_low) / 2;
-		c_high_lower_edge = c_high->chan->center_freq -
+		c_high_lower_edge = c_high->center_freq1 -
 				    cfg80211_chandef_get_width(c_high) / 2;
 
 		if (a->chandef->chan->band == NL80211_BAND_5GHZ &&
@@ -892,13 +876,12 @@ iwl_mld_emlsr_pair_state(struct ieee80211_vif *vif,
 		reason_mask |= IWL_MLD_EMLSR_EXIT_CHAN_LOAD;
 
 	if (reason_mask) {
-		IWL_DEBUG_INFO(mld,
-			       "Links %d and %d are not a valid pair for EMLSR\n",
-			       a->link_id, b->link_id);
-		IWL_DEBUG_INFO(mld,
-			       "Links bandwidth are: %d and %d\n",
-			       nl80211_chan_width_to_mhz(a->chandef->width),
-			       nl80211_chan_width_to_mhz(b->chandef->width));
+		IWL_DEBUG_EHT(mld,
+			      "Links %d and %d are not a valid pair for EMLSR\n",
+			      a->link_id, b->link_id);
+		IWL_DEBUG_EHT(mld, "Links bandwidth are: %d and %d\n",
+			      nl80211_chan_width_to_mhz(a->chandef->width),
+			      nl80211_chan_width_to_mhz(b->chandef->width));
 		iwl_mld_print_emlsr_exit(mld, reason_mask);
 	}
 
@@ -962,7 +945,7 @@ static void _iwl_mld_select_links(struct iwl_mld *mld,
 	if (!mld_vif->authorized || hweight16(usable_links) <= 1)
 		return;
 
-	if (WARN(ktime_before(mld->scan.last_mlo_scan_time,
+	if (WARN(ktime_before(mld->scan.last_mlo_scan_start_time,
 			      ktime_sub_ns(ktime_get_boottime_ns(),
 					   5ULL * NSEC_PER_SEC)),
 		"Last MLO scan was too long ago, can't select links\n"))
@@ -1016,8 +999,8 @@ static void _iwl_mld_select_links(struct iwl_mld *mld,
 	}
 
 set_active:
-	IWL_DEBUG_INFO(mld, "Link selection result: 0x%x. Primary = %d\n",
-		       new_active, new_primary);
+	IWL_DEBUG_EHT(mld, "Link selection result: 0x%x. Primary = %d\n",
+		      new_active, new_primary);
 
 	mld_vif->emlsr.selected_primary = new_primary;
 	mld_vif->emlsr.selected_links = new_active;
@@ -1046,41 +1029,30 @@ static void iwl_mld_emlsr_check_bt_iter(void *_data, u8 *mac,
 					struct ieee80211_vif *vif)
 {
 	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
-	const struct iwl_bt_coex_profile_notif zero_notif = {};
 	struct iwl_mld *mld = mld_vif->mld;
 	struct ieee80211_bss_conf *link;
 	unsigned int link_id;
-	const struct iwl_bt_coex_profile_notif *notif = &mld->last_bt_notif;
 
 	if (!iwl_mld_vif_has_emlsr_cap(vif))
 		return;
 
-	/* zeroed structure means that BT is OFF */
-	if (!memcmp(notif, &zero_notif, sizeof(*notif))) {
+	if (!mld->bt_is_active) {
 		iwl_mld_retry_emlsr(mld, vif);
 		return;
 	}
 
-	for_each_vif_active_link(vif, link, link_id) {
-		bool emlsr_active, emlsr_allowed;
+	/* BT is turned ON but we are not in EMLSR, nothing to do */
+	if (!iwl_mld_emlsr_active(vif))
+		return;
 
+	/* In EMLSR and BT is turned ON */
+
+	for_each_vif_active_link(vif, link, link_id) {
 		if (WARN_ON(!link->chanreq.oper.chan))
 			continue;
 
-		if (link->chanreq.oper.chan->band != NL80211_BAND_2GHZ)
-			continue;
-
-		emlsr_active = iwl_mld_emlsr_active(vif);
-		emlsr_allowed = iwl_mld_bt_allows_emlsr(mld, link,
-							!emlsr_active);
-		if (emlsr_allowed && !emlsr_active) {
-			iwl_mld_retry_emlsr(mld, vif);
-			return;
-		}
-
-		if (!emlsr_allowed && emlsr_active) {
-			iwl_mld_exit_emlsr(mld, vif,
-					   IWL_MLD_EMLSR_EXIT_BT_COEX,
+		if (link->chanreq.oper.chan->band == NL80211_BAND_2GHZ) {
+			iwl_mld_exit_emlsr(mld, vif, IWL_MLD_EMLSR_EXIT_BT_COEX,
 					   iwl_mld_get_primary_link(vif));
 			return;
 		}
@@ -1167,8 +1139,8 @@ void iwl_mld_retry_emlsr(struct iwl_mld *mld, struct ieee80211_vif *vif)
 {
 	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
 
-	if (!iwl_mld_vif_has_emlsr_cap(vif) || iwl_mld_emlsr_active(vif) ||
-	    mld_vif->emlsr.blocked_reasons)
+	if (!IWL_MLD_AUTO_EML_ENABLE || !iwl_mld_vif_has_emlsr_cap(vif) ||
+	    iwl_mld_emlsr_active(vif) || mld_vif->emlsr.blocked_reasons)
 		return;
 
 	iwl_mld_int_mlo_scan(mld, vif);
@@ -1238,4 +1210,17 @@ void iwl_mld_stop_ignoring_tpt_updates(struct iwl_mld *mld)
 						IEEE80211_IFACE_ITER_NORMAL,
 						iwl_mld_ignore_tpt_iter,
 						&start);
+}
+
+int iwl_mld_emlsr_check_nan_block(struct iwl_mld *mld, struct ieee80211_vif *vif)
+{
+	if (mld->nan_device_vif &&
+	    ieee80211_vif_nan_started(mld->nan_device_vif))
+		return iwl_mld_block_emlsr_sync(mld, vif,
+						IWL_MLD_EMLSR_BLOCKED_NAN,
+						iwl_mld_get_primary_link(vif));
+
+	iwl_mld_unblock_emlsr(mld, vif, IWL_MLD_EMLSR_BLOCKED_NAN);
+
+	return 0;
 }

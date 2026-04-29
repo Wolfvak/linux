@@ -402,7 +402,7 @@ static int idt821034_kctrl_gain_get(struct snd_kcontrol *kcontrol,
 				    struct snd_ctl_elem_value *ucontrol)
 {
 	struct soc_mixer_control *mc = (struct soc_mixer_control *)kcontrol->private_value;
-	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
 	struct idt821034 *idt821034 = snd_soc_component_get_drvdata(component);
 	int min = mc->min;
 	int max = mc->max;
@@ -433,7 +433,7 @@ static int idt821034_kctrl_gain_put(struct snd_kcontrol *kcontrol,
 				    struct snd_ctl_elem_value *ucontrol)
 {
 	struct soc_mixer_control *mc = (struct soc_mixer_control *)kcontrol->private_value;
-	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
 	struct idt821034 *idt821034 = snd_soc_component_get_drvdata(component);
 	struct idt821034_amp *amp;
 	int min = mc->min;
@@ -487,7 +487,7 @@ end:
 static int idt821034_kctrl_mute_get(struct snd_kcontrol *kcontrol,
 				    struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
 	struct idt821034 *idt821034 = snd_soc_component_get_drvdata(component);
 	int id = kcontrol->private_value;
 	bool is_muted;
@@ -509,7 +509,7 @@ static int idt821034_kctrl_mute_get(struct snd_kcontrol *kcontrol,
 static int idt821034_kctrl_mute_put(struct snd_kcontrol *kcontrol,
 				    struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
 	struct idt821034 *idt821034 = snd_soc_component_get_drvdata(component);
 	int id = kcontrol->private_value;
 	struct idt821034_amp *amp;
@@ -548,14 +548,14 @@ end:
 	return ret;
 }
 
-static const DECLARE_TLV_DB_LINEAR(idt821034_gain_in, -6520, 1306);
-#define IDT821034_GAIN_IN_MIN_RAW	1 /* -65.20 dB -> 10^(-65.2/20.0) * 1820 = 1 */
-#define IDT821034_GAIN_IN_MAX_RAW	8191 /* 13.06 dB -> 10^(13.06/20.0) * 1820 = 8191 */
+static const DECLARE_TLV_DB_LINEAR(idt821034_gain_in, -300, 1300);
+#define IDT821034_GAIN_IN_MIN_RAW	1288 /* -3.0 dB -> 10^(-3.0/20.0) * 1820 = 1288 */
+#define IDT821034_GAIN_IN_MAX_RAW	8130 /* 13.0 dB -> 10^(13.0/20.0) * 1820 = 8130 */
 #define IDT821034_GAIN_IN_INIT_RAW	1820 /* 0dB -> 10^(0/20) * 1820 = 1820 */
 
-static const DECLARE_TLV_DB_LINEAR(idt821034_gain_out, -6798, 1029);
-#define IDT821034_GAIN_OUT_MIN_RAW	1 /* -67.98 dB -> 10^(-67.98/20.0) * 2506 = 1*/
-#define IDT821034_GAIN_OUT_MAX_RAW	8191 /* 10.29 dB -> 10^(10.29/20.0) * 2506 = 8191 */
+static const DECLARE_TLV_DB_LINEAR(idt821034_gain_out, -1300, 300);
+#define IDT821034_GAIN_OUT_MIN_RAW	561 /* -13.0 dB -> 10^(-13.0/20.0) * 2506 = 561 */
+#define IDT821034_GAIN_OUT_MAX_RAW	3540 /* 3.0 dB -> 10^(3.0/20.0) * 2506 = 3540 */
 #define IDT821034_GAIN_OUT_INIT_RAW	2506 /* 0dB -> 10^(0/20) * 2506 = 2506 */
 
 static const struct snd_kcontrol_new idt821034_controls[] = {
@@ -1067,7 +1067,7 @@ static int idt821034_chip_direction_output(struct gpio_chip *c, unsigned int off
 
 	ret = idt821034_set_slic_conf(idt821034, ch, slic_conf);
 	if (ret) {
-		dev_err(&idt821034->spi->dev, "dir in gpio %d (%u, 0x%x) failed (%d)\n",
+		dev_err(&idt821034->spi->dev, "dir out gpio %d (%u, 0x%x) failed (%d)\n",
 			offset, ch, mask, ret);
 	}
 
@@ -1117,7 +1117,7 @@ static int idt821034_gpio_init(struct idt821034 *idt821034)
 	idt821034->gpio_chip.direction_input = idt821034_chip_direction_input;
 	idt821034->gpio_chip.direction_output = idt821034_chip_direction_output;
 	idt821034->gpio_chip.get = idt821034_chip_gpio_get;
-	idt821034->gpio_chip.set_rv = idt821034_chip_gpio_set;
+	idt821034->gpio_chip.set = idt821034_chip_gpio_set;
 	idt821034->gpio_chip.can_sleep = true;
 
 	return devm_gpiochip_add_data(&idt821034->spi->dev, &idt821034->gpio_chip,

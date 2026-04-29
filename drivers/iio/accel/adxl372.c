@@ -295,7 +295,6 @@ struct adxl372_state {
 	u32				inact_time_ms;
 	u8				fifo_set_size;
 	unsigned long			int1_bitmask;
-	unsigned long			int2_bitmask;
 	u16				watermark;
 	__be16				fifo_buf[ADXL372_FIFO_SIZE];
 	bool				peak_fifo_mode_en;
@@ -600,10 +599,9 @@ static int adxl372_get_status(struct adxl372_state *st,
 
 static void adxl372_arrange_axis_data(struct adxl372_state *st, __be16 *sample)
 {
-	__be16	axis_sample[3];
+	__be16 axis_sample[3] = { };
 	int i = 0;
 
-	memset(axis_sample, 0, 3 * sizeof(__be16));
 	if (ADXL372_X_AXIS_EN(st->fifo_axis_mask))
 		axis_sample[i++] = sample[0];
 	if (ADXL372_Y_AXIS_EN(st->fifo_axis_mask))
@@ -1248,11 +1246,10 @@ int adxl372_probe(struct device *dev, struct regmap *regmap,
 
 		indio_dev->trig = iio_trigger_get(st->dready_trig);
 
-		ret = devm_request_threaded_irq(dev, st->irq,
-					iio_trigger_generic_data_rdy_poll,
-					NULL,
-					IRQF_TRIGGER_RISING | IRQF_ONESHOT,
-					indio_dev->name, st->dready_trig);
+		ret = devm_request_irq(dev, st->irq,
+				       iio_trigger_generic_data_rdy_poll,
+				       IRQF_TRIGGER_RISING | IRQF_NO_THREAD,
+				       indio_dev->name, st->dready_trig);
 		if (ret < 0)
 			return ret;
 	}

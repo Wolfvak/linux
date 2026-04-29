@@ -192,8 +192,13 @@ struct ext4_allocation_context {
 	 */
 	ext4_grpblk_t	ac_orig_goal_len;
 
+	ext4_group_t ac_prefetch_grp;
+	unsigned int ac_prefetch_ios;
+	unsigned int ac_prefetch_nr;
+
+	int ac_first_err;
+
 	__u32 ac_flags;		/* allocation hints */
-	__u32 ac_groups_linear_remaining;
 	__u16 ac_groups_scanned;
 	__u16 ac_found;
 	__u16 ac_cX_found[EXT4_MB_NUM_CRS];
@@ -204,6 +209,8 @@ struct ext4_allocation_context {
 	__u8 ac_2order;		/* if request is to allocate 2^N blocks and
 				 * N > 0, the field stores N, otherwise 0 */
 	__u8 ac_op;		/* operation, for history only */
+
+	struct ext4_buddy *ac_e4b;
 	struct folio *ac_bitmap_folio;
 	struct folio *ac_buddy_folio;
 	struct ext4_prealloc_space *ac_pa;
@@ -263,4 +270,34 @@ ext4_mballoc_query_range(
 	ext4_mballoc_query_range_fn	formatter,
 	void				*priv);
 
+extern int ext4_mb_mark_context(handle_t *handle,
+		struct super_block *sb, bool state,
+		ext4_group_t group, ext4_grpblk_t blkoff,
+		ext4_grpblk_t len, int flags,
+		ext4_grpblk_t *ret_changed);
+#if IS_ENABLED(CONFIG_EXT4_KUNIT_TESTS)
+extern void mb_clear_bits_test(void *bm, int cur, int len);
+extern ext4_fsblk_t
+ext4_mb_new_blocks_simple_test(struct ext4_allocation_request *ar,
+			       int *errp);
+extern int mb_find_next_zero_bit_test(void *addr, int max, int start);
+extern int mb_find_next_bit_test(void *addr, int max, int start);
+extern void mb_clear_bit_test(int bit, void *addr);
+extern int mb_test_bit_test(int bit, void *addr);
+extern int
+ext4_mb_mark_diskspace_used_test(struct ext4_allocation_context *ac,
+				 handle_t *handle);
+extern int mb_mark_used_test(struct ext4_buddy *e4b,
+			     struct ext4_free_extent *ex);
+extern void ext4_mb_generate_buddy_test(struct super_block *sb,
+		void *buddy, void *bitmap, ext4_group_t group,
+		struct ext4_group_info *grp);
+extern int ext4_mb_load_buddy_test(struct super_block *sb,
+		ext4_group_t group, struct ext4_buddy *e4b);
+extern void ext4_mb_unload_buddy_test(struct ext4_buddy *e4b);
+extern void mb_free_blocks_test(struct inode *inode,
+		struct ext4_buddy *e4b, int first, int count);
+extern void ext4_free_blocks_simple_test(struct inode *inode,
+		ext4_fsblk_t block, unsigned long count);
+#endif
 #endif

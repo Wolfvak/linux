@@ -2,7 +2,7 @@
 /*
  *  hrtimers - High-resolution kernel timers
  *
- *   Copyright(C) 2005, Thomas Gleixner <tglx@linutronix.de>
+ *   Copyright(C) 2005, Linutronix GmbH, Thomas Gleixner <tglx@kernel.org>
  *   Copyright(C) 2005, Red Hat, Inc., Ingo Molnar
  *
  *  data type definitions, declarations, prototypes
@@ -112,12 +112,6 @@ static inline void hrtimer_set_expires_range_ns(struct hrtimer *timer, ktime_t t
 	timer->node.expires = ktime_add_safe(time, ns_to_ktime(delta));
 }
 
-static inline void hrtimer_set_expires_tv64(struct hrtimer *timer, s64 tv64)
-{
-	timer->node.expires = tv64;
-	timer->_softexpires = tv64;
-}
-
 static inline void hrtimer_add_expires(struct hrtimer *timer, ktime_t time)
 {
 	timer->node.expires = ktime_add_safe(timer->node.expires, time);
@@ -140,28 +134,16 @@ static inline ktime_t hrtimer_get_softexpires(const struct hrtimer *timer)
 	return timer->_softexpires;
 }
 
-static inline s64 hrtimer_get_expires_tv64(const struct hrtimer *timer)
-{
-	return timer->node.expires;
-}
-static inline s64 hrtimer_get_softexpires_tv64(const struct hrtimer *timer)
-{
-	return timer->_softexpires;
-}
-
 static inline s64 hrtimer_get_expires_ns(const struct hrtimer *timer)
 {
 	return ktime_to_ns(timer->node.expires);
 }
 
+ktime_t hrtimer_cb_get_time(const struct hrtimer *timer);
+
 static inline ktime_t hrtimer_expires_remaining(const struct hrtimer *timer)
 {
-	return ktime_sub(timer->node.expires, timer->base->get_time());
-}
-
-static inline ktime_t hrtimer_cb_get_time(struct hrtimer *timer)
-{
-	return timer->base->get_time();
+	return ktime_sub(timer->node.expires, hrtimer_cb_get_time(timer));
 }
 
 static inline int hrtimer_is_hres_active(struct hrtimer *timer)
@@ -200,8 +182,7 @@ __hrtimer_expires_remaining_adjusted(const struct hrtimer *timer, ktime_t now)
 static inline ktime_t
 hrtimer_expires_remaining_adjusted(const struct hrtimer *timer)
 {
-	return __hrtimer_expires_remaining_adjusted(timer,
-						    timer->base->get_time());
+	return __hrtimer_expires_remaining_adjusted(timer, hrtimer_cb_get_time(timer));
 }
 
 #ifdef CONFIG_TIMERFD
@@ -363,7 +344,7 @@ hrtimer_forward(struct hrtimer *timer, ktime_t now, ktime_t interval);
 static inline u64 hrtimer_forward_now(struct hrtimer *timer,
 				      ktime_t interval)
 {
-	return hrtimer_forward(timer, timer->base->get_time(), interval);
+	return hrtimer_forward(timer, hrtimer_cb_get_time(timer), interval);
 }
 
 /* Precise sleep: */

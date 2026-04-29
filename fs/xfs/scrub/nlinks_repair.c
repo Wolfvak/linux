@@ -3,7 +3,7 @@
  * Copyright (c) 2021-2024 Oracle.  All Rights Reserved.
  * Author: Darrick J. Wong <djwong@kernel.org>
  */
-#include "xfs.h"
+#include "xfs_platform.h"
 #include "xfs_fs.h"
 #include "xfs_shared.h"
 #include "xfs_format.h"
@@ -340,9 +340,7 @@ xrep_nlinks(
 		 * We can only push the inactivation workqueues with an empty
 		 * transaction.
 		 */
-		error = xchk_trans_alloc_empty(sc);
-		if (error)
-			break;
+		xchk_trans_alloc_empty(sc);
 	}
 	xchk_iscan_iter_finish(&xnc->compare_iscan);
 	xchk_iscan_teardown(&xnc->compare_iscan);

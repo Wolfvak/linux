@@ -11,6 +11,7 @@
 
 #define DSS_SUBSYS_NAME "MANAGER"
 
+#include <linux/export.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/module.h>
@@ -31,8 +32,7 @@ int dss_init_overlay_managers(void)
 
 	num_managers = dss_feat_get_num_mgrs();
 
-	managers = kcalloc(num_managers, sizeof(struct omap_overlay_manager),
-			   GFP_KERNEL);
+	managers = kzalloc_objs(struct omap_overlay_manager, num_managers);
 
 	BUG_ON(managers == NULL);
 

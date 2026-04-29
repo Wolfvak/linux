@@ -711,6 +711,13 @@ static int dpaa2_eth_update_cls_rule(struct net_device *net_dev,
 	return 0;
 }
 
+static u32 dpaa2_eth_get_rx_ring_count(struct net_device *net_dev)
+{
+	struct dpaa2_eth_priv *priv = netdev_priv(net_dev);
+
+	return dpaa2_eth_queue_count(priv);
+}
+
 static int dpaa2_eth_get_rxnfc(struct net_device *net_dev,
 			       struct ethtool_rxnfc *rxnfc, u32 *rule_locs)
 {
@@ -719,16 +726,6 @@ static int dpaa2_eth_get_rxnfc(struct net_device *net_dev,
 	int i, j = 0;
 
 	switch (rxnfc->cmd) {
-	case ETHTOOL_GRXFH:
-		/* we purposely ignore cmd->flow_type for now, because the
-		 * classifier only supports a single set of fields for all
-		 * protocols
-		 */
-		rxnfc->data = priv->rx_hash_fields;
-		break;
-	case ETHTOOL_GRXRINGS:
-		rxnfc->data = dpaa2_eth_queue_count(priv);
-		break;
 	case ETHTOOL_GRXCLSRLCNT:
 		rxnfc->rule_cnt = 0;
 		rxnfc->rule_cnt = dpaa2_eth_num_cls_rules(priv);
@@ -767,11 +764,6 @@ static int dpaa2_eth_set_rxnfc(struct net_device *net_dev,
 	int err = 0;
 
 	switch (rxnfc->cmd) {
-	case ETHTOOL_SRXFH:
-		if ((rxnfc->data & DPAA2_RXH_SUPPORTED) != rxnfc->data)
-			return -EOPNOTSUPP;
-		err = dpaa2_eth_set_hash(net_dev, rxnfc->data);
-		break;
 	case ETHTOOL_SRXCLSRLINS:
 		err = dpaa2_eth_update_cls_rule(net_dev, &rxnfc->fs, rxnfc->fs.location);
 		break;
@@ -783,6 +775,28 @@ static int dpaa2_eth_set_rxnfc(struct net_device *net_dev,
 	}
 
 	return err;
+}
+
+static int dpaa2_eth_get_rxfh_fields(struct net_device *net_dev,
+				     struct ethtool_rxfh_fields *rxnfc)
+{
+	struct dpaa2_eth_priv *priv = netdev_priv(net_dev);
+
+	/* we purposely ignore cmd->flow_type for now, because the
+	 * classifier only supports a single set of fields for all
+	 * protocols
+	 */
+	rxnfc->data = priv->rx_hash_fields;
+	return 0;
+}
+
+static int dpaa2_eth_set_rxfh_fields(struct net_device *net_dev,
+				     const struct ethtool_rxfh_fields *rxnfc,
+				     struct netlink_ext_ack *extack)
+{
+	if ((rxnfc->data & DPAA2_RXH_SUPPORTED) != rxnfc->data)
+		return -EOPNOTSUPP;
+	return dpaa2_eth_set_hash(net_dev, rxnfc->data);
 }
 
 int dpaa2_phc_index = -1;
@@ -939,6 +953,9 @@ const struct ethtool_ops dpaa2_ethtool_ops = {
 	.get_strings = dpaa2_eth_get_strings,
 	.get_rxnfc = dpaa2_eth_get_rxnfc,
 	.set_rxnfc = dpaa2_eth_set_rxnfc,
+	.get_rx_ring_count = dpaa2_eth_get_rx_ring_count,
+	.get_rxfh_fields = dpaa2_eth_get_rxfh_fields,
+	.set_rxfh_fields = dpaa2_eth_set_rxfh_fields,
 	.get_ts_info = dpaa2_eth_get_ts_info,
 	.get_tunable = dpaa2_eth_get_tunable,
 	.set_tunable = dpaa2_eth_set_tunable,

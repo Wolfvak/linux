@@ -3,8 +3,10 @@
  * Copyright © 2022 Intel Corporation
  */
 
-#include "i915_drv.h"
-#include "i915_irq.h"
+#include <linux/iopoll.h>
+
+#include <drm/drm_print.h>
+
 #include "i915_reg.h"
 #include "intel_backlight_regs.h"
 #include "intel_combo_phy.h"
@@ -13,6 +15,7 @@
 #include "intel_de.h"
 #include "intel_display_irq.h"
 #include "intel_display_power_well.h"
+#include "intel_display_regs.h"
 #include "intel_display_rpm.h"
 #include "intel_display_types.h"
 #include "intel_dkl_phy.h"
@@ -23,6 +26,7 @@
 #include "intel_dpio_phy.h"
 #include "intel_dpll.h"
 #include "intel_hotplug.h"
+#include "intel_parent.h"
 #include "intel_pcode.h"
 #include "intel_pps.h"
 #include "intel_psr.h"
@@ -30,8 +34,20 @@
 #include "intel_vga.h"
 #include "skl_watermark.h"
 #include "vlv_dpio_phy_regs.h"
+#include "vlv_iosf_sb_reg.h"
 #include "vlv_sideband.h"
-#include "vlv_sideband_reg.h"
+
+/*
+ * PG0 is HW controlled, so doesn't have a corresponding power well control knob
+ *
+ * {ICL,SKL}_DISP_PW1_IDX..{ICL,SKL}_DISP_PW4_IDX -> PG1..PG4
+ */
+static enum skl_power_gate pw_idx_to_pg(struct intel_display *display, int pw_idx)
+{
+	int pw1_idx = DISPLAY_VER(display) >= 11 ? ICL_PW_CTL_IDX_PW_1 : SKL_PW_CTL_IDX_PW_1;
+
+	return pw_idx - pw1_idx + SKL_PG1;
+}
 
 struct i915_power_well_regs {
 	i915_reg_t bios;
@@ -241,8 +257,9 @@ aux_ch_to_digital_port(struct intel_display *display,
 	return NULL;
 }
 
-static enum phy icl_aux_pw_to_phy(struct intel_display *display,
-				  const struct i915_power_well *power_well)
+static struct intel_encoder *
+icl_aux_pw_to_encoder(struct intel_display *display,
+		      const struct i915_power_well *power_well)
 {
 	enum aux_ch aux_ch = icl_aux_pw_to_ch(power_well);
 	struct intel_digital_port *dig_port = aux_ch_to_digital_port(display, aux_ch);
@@ -254,7 +271,23 @@ static enum phy icl_aux_pw_to_phy(struct intel_display *display,
 	 * as HDMI-only and routed to a combo PHY, the encoder either won't be
 	 * present at all or it will not have an aux_ch assigned.
 	 */
-	return dig_port ? intel_encoder_to_phy(&dig_port->base) : PHY_NONE;
+	return dig_port ? &dig_port->base : NULL;
+}
+
+static enum phy icl_aux_pw_to_phy(struct intel_display *display,
+				  const struct i915_power_well *power_well)
+{
+	struct intel_encoder *encoder = icl_aux_pw_to_encoder(display, power_well);
+
+	return encoder ? intel_encoder_to_phy(encoder) : PHY_NONE;
+}
+
+static bool icl_aux_pw_is_tc_phy(struct intel_display *display,
+				 const struct i915_power_well *power_well)
+{
+	struct intel_encoder *encoder = icl_aux_pw_to_encoder(display, power_well);
+
+	return encoder && intel_encoder_is_tc(encoder);
 }
 
 static void hsw_wait_for_power_well_enable(struct intel_display *display,
@@ -276,8 +309,8 @@ static void hsw_wait_for_power_well_enable(struct intel_display *display,
 	}
 
 	/* Timeout for PW1:10 us, AUX:not specified, other PWs:20 us. */
-	if (intel_de_wait_for_set(display, regs->driver,
-				  HSW_PWR_WELL_CTL_STATE(pw_idx), timeout)) {
+	if (intel_de_wait_for_set_ms(display, regs->driver,
+				     HSW_PWR_WELL_CTL_STATE(pw_idx), timeout)) {
 		drm_dbg_kms(display->drm, "%s power well enable timeout\n",
 			    intel_power_well_name(power_well));
 
@@ -307,8 +340,8 @@ static void hsw_wait_for_power_well_disable(struct intel_display *display,
 {
 	const struct i915_power_well_regs *regs = power_well->desc->ops->regs;
 	int pw_idx = i915_power_well_instance(power_well)->hsw.idx;
-	bool disabled;
 	u32 reqs;
+	int ret;
 
 	/*
 	 * Bspec doesn't require waiting for PWs to get disabled, but still do
@@ -319,11 +352,17 @@ static void hsw_wait_for_power_well_disable(struct intel_display *display,
 	 * Skip the wait in case any of the request bits are set and print a
 	 * diagnostic message.
 	 */
-	wait_for((disabled = !(intel_de_read(display, regs->driver) &
-			       HSW_PWR_WELL_CTL_STATE(pw_idx))) ||
-		 (reqs = hsw_power_well_requesters(display, regs, pw_idx)), 1);
-	if (disabled)
+	reqs = hsw_power_well_requesters(display, regs, pw_idx);
+
+	ret = intel_de_wait_for_clear_ms(display, regs->driver,
+					 HSW_PWR_WELL_CTL_STATE(pw_idx),
+					 reqs ? 0 : 1);
+	if (!ret)
 		return;
+
+	/* Refresh requesters in case they popped up during the wait. */
+	if (!reqs)
+		reqs = hsw_power_well_requesters(display, regs, pw_idx);
 
 	drm_dbg_kms(display->drm,
 		    "%s forced on (bios:%d driver:%d kvmr:%d debug:%d)\n",
@@ -336,8 +375,8 @@ static void gen9_wait_for_power_well_fuses(struct intel_display *display,
 {
 	/* Timeout 5us for PG#0, for other PGs 1us */
 	drm_WARN_ON(display->drm,
-		    intel_de_wait_for_set(display, SKL_FUSE_STATUS,
-					  SKL_FUSE_PG_DIST_STATUS(pg), 1));
+		    intel_de_wait_for_set_ms(display, SKL_FUSE_STATUS,
+					     SKL_FUSE_PG_DIST_STATUS(pg), 1));
 }
 
 static void hsw_power_well_enable(struct intel_display *display,
@@ -349,8 +388,7 @@ static void hsw_power_well_enable(struct intel_display *display,
 	if (power_well->desc->has_fuses) {
 		enum skl_power_gate pg;
 
-		pg = DISPLAY_VER(display) >= 11 ? ICL_PW_CTL_IDX_TO_PG(pw_idx) :
-						 SKL_PW_CTL_IDX_TO_PG(pw_idx);
+		pg = pw_idx_to_pg(display, pw_idx);
 
 		/* Wa_16013190616:adlp */
 		if (display->platform.alderlake_p && pg == SKL_PG1)
@@ -374,8 +412,8 @@ static void hsw_power_well_enable(struct intel_display *display,
 	if (power_well->desc->has_fuses) {
 		enum skl_power_gate pg;
 
-		pg = DISPLAY_VER(display) >= 11 ? ICL_PW_CTL_IDX_TO_PG(pw_idx) :
-						 SKL_PW_CTL_IDX_TO_PG(pw_idx);
+		pg = pw_idx_to_pg(display, pw_idx);
+
 		gen9_wait_for_power_well_fuses(display, pg);
 	}
 
@@ -481,12 +519,10 @@ static void icl_tc_port_assert_ref_held(struct intel_display *display,
 
 static void icl_tc_cold_exit(struct intel_display *display)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
 	int ret, tries = 0;
 
 	while (1) {
-		ret = snb_pcode_write_timeout(&i915->uncore, ICL_PCODE_EXIT_TCCOLD, 0,
-					      250, 1);
+		ret = intel_pcode_write(display->drm, ICL_PCODE_EXIT_TCCOLD, 0);
 		if (ret != -EAGAIN || ++tries == 3)
 			break;
 		msleep(1);
@@ -497,7 +533,7 @@ static void icl_tc_cold_exit(struct intel_display *display)
 		msleep(1);
 
 	/* TODO: turn failure into a error as soon i915 CI updates ICL IFWI */
-	drm_dbg_kms(&i915->drm, "TC cold block %s\n", ret ? "failed" :
+	drm_dbg_kms(display->drm, "TC cold block %s\n", ret ? "failed" :
 		    "succeeded");
 }
 
@@ -510,6 +546,8 @@ icl_tc_phy_aux_power_well_enable(struct intel_display *display,
 	const struct i915_power_well_regs *regs = power_well->desc->ops->regs;
 	bool is_tbt = power_well->desc->is_tc_tbt;
 	bool timeout_expected;
+	u32 val;
+	int ret;
 
 	icl_tc_port_assert_ref_held(display, power_well, dig_port);
 
@@ -536,10 +574,11 @@ icl_tc_phy_aux_power_well_enable(struct intel_display *display,
 
 		tc_port = TGL_AUX_PW_TO_TC_PORT(i915_power_well_instance(power_well)->hsw.idx);
 
-		if (wait_for(intel_dkl_phy_read(display, DKL_CMN_UC_DW_27(tc_port)) &
-			     DKL_CMN_UC_DW27_UC_HEALTH, 1))
-			drm_warn(display->drm,
-				 "Timeout waiting TC uC health\n");
+		ret = poll_timeout_us(val = intel_dkl_phy_read(display, DKL_CMN_UC_DW_27(tc_port)),
+				      val & DKL_CMN_UC_DW27_UC_HEALTH,
+				      100, 1000, false);
+		if (ret)
+			drm_warn(display->drm, "Timeout waiting TC uC health\n");
 	}
 }
 
@@ -547,9 +586,7 @@ static void
 icl_aux_power_well_enable(struct intel_display *display,
 			  struct i915_power_well *power_well)
 {
-	enum phy phy = icl_aux_pw_to_phy(display, power_well);
-
-	if (intel_phy_is_tc(display, phy))
+	if (icl_aux_pw_is_tc_phy(display, power_well))
 		return icl_tc_phy_aux_power_well_enable(display, power_well);
 	else if (display->platform.icelake)
 		return icl_combo_phy_aux_power_well_enable(display,
@@ -562,9 +599,7 @@ static void
 icl_aux_power_well_disable(struct intel_display *display,
 			   struct i915_power_well *power_well)
 {
-	enum phy phy = icl_aux_pw_to_phy(display, power_well);
-
-	if (intel_phy_is_tc(display, phy))
+	if (icl_aux_pw_is_tc_phy(display, power_well))
 		return hsw_power_well_disable(display, power_well);
 	else if (display->platform.icelake)
 		return icl_combo_phy_aux_power_well_disable(display,
@@ -605,8 +640,6 @@ static bool hsw_power_well_enabled(struct intel_display *display,
 
 static void assert_can_enable_dc9(struct intel_display *display)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
-
 	drm_WARN_ONCE(display->drm,
 		      (intel_de_read(display, DC_STATE_EN) & DC_STATE_EN_DC9),
 		      "DC9 already programmed to be enabled.\n");
@@ -618,7 +651,7 @@ static void assert_can_enable_dc9(struct intel_display *display)
 		      intel_de_read(display, HSW_PWR_WELL_CTL2) &
 		      HSW_PWR_WELL_CTL_REQ(SKL_PW_CTL_IDX_PW_2),
 		      "Power well 2 on.\n");
-	drm_WARN_ONCE(display->drm, intel_irqs_enabled(dev_priv),
+	drm_WARN_ONCE(display->drm, intel_parent_irq_enabled(display),
 		      "Interrupts not disabled yet.\n");
 
 	 /*
@@ -632,9 +665,7 @@ static void assert_can_enable_dc9(struct intel_display *display)
 
 static void assert_can_disable_dc9(struct intel_display *display)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
-
-	drm_WARN_ONCE(display->drm, intel_irqs_enabled(dev_priv),
+	drm_WARN_ONCE(display->drm, intel_parent_irq_enabled(display),
 		      "Interrupts not disabled yet.\n");
 	drm_WARN_ONCE(display->drm,
 		      intel_de_read(display, DC_STATE_EN) &
@@ -775,7 +806,7 @@ void gen9_set_dc_state(struct intel_display *display, u32 state)
 			power_domains->dc_state, val & mask);
 
 	enable_dc6 = state & DC_STATE_EN_UPTO_DC6;
-	dc6_was_enabled = val & DC_STATE_EN_UPTO_DC6;
+	dc6_was_enabled = power_domains->dc_state & DC_STATE_EN_UPTO_DC6;
 	if (!dc6_was_enabled && enable_dc6)
 		intel_dmc_update_dc6_allowed_count(display, true);
 
@@ -809,7 +840,6 @@ static void tgl_disable_dc3co(struct intel_display *display)
 
 static void assert_can_enable_dc5(struct intel_display *display)
 {
-	struct drm_i915_private __maybe_unused *dev_priv = to_i915(display->drm);
 	enum i915_power_well_id high_pg;
 
 	/* Power wells at this level and above must be disabled for DC5 entry */
@@ -829,7 +859,7 @@ static void assert_can_enable_dc5(struct intel_display *display)
 
 	assert_display_rpm_held(display);
 
-	assert_dmc_loaded(display);
+	assert_main_dmc_loaded(display);
 }
 
 void gen9_enable_dc5(struct intel_display *display)
@@ -860,7 +890,7 @@ static void assert_can_enable_dc6(struct intel_display *display)
 		       DC_STATE_EN_UPTO_DC6),
 		      "DC6 already programmed to be enabled.\n");
 
-	assert_dmc_loaded(display);
+	assert_main_dmc_loaded(display);
 }
 
 void skl_enable_dc6(struct intel_display *display)
@@ -1102,39 +1132,39 @@ static void i830_pipes_power_well_sync_hw(struct intel_display *display,
 static void vlv_set_power_well(struct intel_display *display,
 			       struct i915_power_well *power_well, bool enable)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
 	int pw_idx = i915_power_well_instance(power_well)->vlv.idx;
 	u32 mask;
 	u32 state;
 	u32 ctrl;
+	u32 val;
+	int ret;
 
 	mask = PUNIT_PWRGT_MASK(pw_idx);
 	state = enable ? PUNIT_PWRGT_PWR_ON(pw_idx) :
 			 PUNIT_PWRGT_PWR_GATE(pw_idx);
 
-	vlv_punit_get(dev_priv);
+	vlv_punit_get(display->drm);
 
-#define COND \
-	((vlv_punit_read(dev_priv, PUNIT_REG_PWRGT_STATUS) & mask) == state)
-
-	if (COND)
+	val = vlv_punit_read(display->drm, PUNIT_REG_PWRGT_STATUS);
+	if ((val & mask) == state)
 		goto out;
 
-	ctrl = vlv_punit_read(dev_priv, PUNIT_REG_PWRGT_CTRL);
+	ctrl = vlv_punit_read(display->drm, PUNIT_REG_PWRGT_CTRL);
 	ctrl &= ~mask;
 	ctrl |= state;
-	vlv_punit_write(dev_priv, PUNIT_REG_PWRGT_CTRL, ctrl);
+	vlv_punit_write(display->drm, PUNIT_REG_PWRGT_CTRL, ctrl);
 
-	if (wait_for(COND, 100))
+	ret = poll_timeout_us(val = vlv_punit_read(display->drm, PUNIT_REG_PWRGT_STATUS),
+			      (val & mask) == state,
+			      500, 100 * 1000, false);
+	if (ret)
 		drm_err(display->drm,
 			"timeout setting power well state %08x (%08x)\n",
 			state,
-			vlv_punit_read(dev_priv, PUNIT_REG_PWRGT_CTRL));
-
-#undef COND
+			vlv_punit_read(display->drm, PUNIT_REG_PWRGT_CTRL));
 
 out:
-	vlv_punit_put(dev_priv);
+	vlv_punit_put(display->drm);
 }
 
 static void vlv_power_well_enable(struct intel_display *display,
@@ -1152,7 +1182,6 @@ static void vlv_power_well_disable(struct intel_display *display,
 static bool vlv_power_well_enabled(struct intel_display *display,
 				   struct i915_power_well *power_well)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
 	int pw_idx = i915_power_well_instance(power_well)->vlv.idx;
 	bool enabled = false;
 	u32 mask;
@@ -1162,9 +1191,9 @@ static bool vlv_power_well_enabled(struct intel_display *display,
 	mask = PUNIT_PWRGT_MASK(pw_idx);
 	ctrl = PUNIT_PWRGT_PWR_ON(pw_idx);
 
-	vlv_punit_get(dev_priv);
+	vlv_punit_get(display->drm);
 
-	state = vlv_punit_read(dev_priv, PUNIT_REG_PWRGT_STATUS) & mask;
+	state = vlv_punit_read(display->drm, PUNIT_REG_PWRGT_STATUS) & mask;
 	/*
 	 * We only ever set the power-on and power-gate states, anything
 	 * else is unexpected.
@@ -1178,10 +1207,10 @@ static bool vlv_power_well_enabled(struct intel_display *display,
 	 * A transient state at this point would mean some unexpected party
 	 * is poking at the power controls too.
 	 */
-	ctrl = vlv_punit_read(dev_priv, PUNIT_REG_PWRGT_CTRL) & mask;
+	ctrl = vlv_punit_read(display->drm, PUNIT_REG_PWRGT_CTRL) & mask;
 	drm_WARN_ON(display->drm, ctrl != state);
 
-	vlv_punit_put(dev_priv);
+	vlv_punit_put(display->drm);
 
 	return enabled;
 }
@@ -1194,7 +1223,7 @@ static void vlv_init_display_clock_gating(struct intel_display *display)
 	 * (and never recovering) in this case. intel_dsi_post_disable() will
 	 * clear it when we turn off the display.
 	 */
-	intel_de_rmw(display, DSPCLK_GATE_D(display),
+	intel_de_rmw(display, VLV_DSPCLK_GATE_D,
 		     ~DPOUNIT_CLOCK_GATE_DISABLE, VRHUNIT_CLOCK_GATE_DISABLE);
 
 	/*
@@ -1260,12 +1289,10 @@ static void vlv_display_power_well_init(struct intel_display *display)
 
 static void vlv_display_power_well_deinit(struct intel_display *display)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
-
 	valleyview_disable_display_irqs(display);
 
 	/* make sure we're done processing display irqs */
-	intel_synchronize_irq(dev_priv);
+	intel_parent_irq_synchronize(display);
 
 	vlv_pps_reset_all(display);
 
@@ -1337,6 +1364,7 @@ static void assert_chv_phy_status(struct intel_display *display)
 	u32 phy_control = display->power.chv_phy_control;
 	u32 phy_status = 0;
 	u32 phy_status_mask = 0xffffffff;
+	u32 val;
 
 	/*
 	 * The BIOS can leave the PHY is some weird state
@@ -1424,12 +1452,11 @@ static void assert_chv_phy_status(struct intel_display *display)
 	 * The PHY may be busy with some initial calibration and whatnot,
 	 * so the power state can take a while to actually change.
 	 */
-	if (intel_de_wait(display, DISPLAY_PHY_STATUS,
-			  phy_status_mask, phy_status, 10))
+	if (intel_de_wait_ms(display, DISPLAY_PHY_STATUS,
+			     phy_status_mask, phy_status, 10, &val))
 		drm_err(display->drm,
 			"Unexpected PHY_STATUS 0x%08x, expected 0x%08x (PHY_CONTROL=0x%08x)\n",
-			intel_de_read(display, DISPLAY_PHY_STATUS) & phy_status_mask,
-			phy_status, display->power.chv_phy_control);
+			val & phy_status_mask, phy_status, display->power.chv_phy_control);
 }
 
 #undef BITS_SET
@@ -1437,7 +1464,6 @@ static void assert_chv_phy_status(struct intel_display *display)
 static void chv_dpio_cmn_power_well_enable(struct intel_display *display,
 					   struct i915_power_well *power_well)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
 	enum i915_power_well_id id = i915_power_well_instance(power_well)->id;
 	enum dpio_phy phy;
 	u32 tmp;
@@ -1456,35 +1482,35 @@ static void chv_dpio_cmn_power_well_enable(struct intel_display *display,
 	vlv_set_power_well(display, power_well, true);
 
 	/* Poll for phypwrgood signal */
-	if (intel_de_wait_for_set(display, DISPLAY_PHY_STATUS,
-				  PHY_POWERGOOD(phy), 1))
+	if (intel_de_wait_for_set_ms(display, DISPLAY_PHY_STATUS,
+				     PHY_POWERGOOD(phy), 1))
 		drm_err(display->drm, "Display PHY %d is not power up\n",
 			phy);
 
-	vlv_dpio_get(dev_priv);
+	vlv_dpio_get(display->drm);
 
 	/* Enable dynamic power down */
-	tmp = vlv_dpio_read(dev_priv, phy, CHV_CMN_DW28);
+	tmp = vlv_dpio_read(display->drm, phy, CHV_CMN_DW28);
 	tmp |= DPIO_DYNPWRDOWNEN_CH0 | DPIO_CL1POWERDOWNEN |
 		DPIO_SUS_CLK_CONFIG_GATE_CLKREQ;
-	vlv_dpio_write(dev_priv, phy, CHV_CMN_DW28, tmp);
+	vlv_dpio_write(display->drm, phy, CHV_CMN_DW28, tmp);
 
 	if (id == VLV_DISP_PW_DPIO_CMN_BC) {
-		tmp = vlv_dpio_read(dev_priv, phy, CHV_CMN_DW6_CH1);
+		tmp = vlv_dpio_read(display->drm, phy, CHV_CMN_DW6_CH1);
 		tmp |= DPIO_DYNPWRDOWNEN_CH1;
-		vlv_dpio_write(dev_priv, phy, CHV_CMN_DW6_CH1, tmp);
+		vlv_dpio_write(display->drm, phy, CHV_CMN_DW6_CH1, tmp);
 	} else {
 		/*
 		 * Force the non-existing CL2 off. BXT does this
 		 * too, so maybe it saves some power even though
 		 * CL2 doesn't exist?
 		 */
-		tmp = vlv_dpio_read(dev_priv, phy, CHV_CMN_DW30);
+		tmp = vlv_dpio_read(display->drm, phy, CHV_CMN_DW30);
 		tmp |= DPIO_CL2_LDOFUSE_PWRENB;
-		vlv_dpio_write(dev_priv, phy, CHV_CMN_DW30, tmp);
+		vlv_dpio_write(display->drm, phy, CHV_CMN_DW30, tmp);
 	}
 
-	vlv_dpio_put(dev_priv);
+	vlv_dpio_put(display->drm);
 
 	display->power.chv_phy_control |= PHY_COM_LANE_RESET_DEASSERT(phy);
 	intel_de_write(display, DISPLAY_PHY_CONTROL,
@@ -1535,7 +1561,6 @@ static void chv_dpio_cmn_power_well_disable(struct intel_display *display,
 static void assert_chv_phy_powergate(struct intel_display *display, enum dpio_phy phy,
 				     enum dpio_channel ch, bool override, unsigned int mask)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
 	u32 reg, val, expected, actual;
 
 	/*
@@ -1553,9 +1578,9 @@ static void assert_chv_phy_powergate(struct intel_display *display, enum dpio_ph
 	else
 		reg = CHV_CMN_DW6_CH1;
 
-	vlv_dpio_get(dev_priv);
-	val = vlv_dpio_read(dev_priv, phy, reg);
-	vlv_dpio_put(dev_priv);
+	vlv_dpio_get(display->drm);
+	val = vlv_dpio_read(display->drm, phy, reg);
+	vlv_dpio_put(display->drm);
 
 	/*
 	 * This assumes !override is only used when the port is disabled.
@@ -1665,14 +1690,13 @@ void chv_phy_powergate_lanes(struct intel_encoder *encoder,
 static bool chv_pipe_power_well_enabled(struct intel_display *display,
 					struct i915_power_well *power_well)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
 	enum pipe pipe = PIPE_A;
 	bool enabled;
 	u32 state, ctrl;
 
-	vlv_punit_get(dev_priv);
+	vlv_punit_get(display->drm);
 
-	state = vlv_punit_read(dev_priv, PUNIT_REG_DSPSSPM) & DP_SSS_MASK(pipe);
+	state = vlv_punit_read(display->drm, PUNIT_REG_DSPSSPM) & DP_SSS_MASK(pipe);
 	/*
 	 * We only ever set the power-on and power-gate states, anything
 	 * else is unexpected.
@@ -1685,10 +1709,10 @@ static bool chv_pipe_power_well_enabled(struct intel_display *display,
 	 * A transient state at this point would mean some unexpected party
 	 * is poking at the power controls too.
 	 */
-	ctrl = vlv_punit_read(dev_priv, PUNIT_REG_DSPSSPM) & DP_SSC_MASK(pipe);
+	ctrl = vlv_punit_read(display->drm, PUNIT_REG_DSPSSPM) & DP_SSC_MASK(pipe);
 	drm_WARN_ON(display->drm, ctrl << 16 != state);
 
-	vlv_punit_put(dev_priv);
+	vlv_punit_put(display->drm);
 
 	return enabled;
 }
@@ -1697,36 +1721,36 @@ static void chv_set_pipe_power_well(struct intel_display *display,
 				    struct i915_power_well *power_well,
 				    bool enable)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
 	enum pipe pipe = PIPE_A;
 	u32 state;
 	u32 ctrl;
+	int ret;
 
 	state = enable ? DP_SSS_PWR_ON(pipe) : DP_SSS_PWR_GATE(pipe);
 
-	vlv_punit_get(dev_priv);
+	vlv_punit_get(display->drm);
 
-#define COND \
-	((vlv_punit_read(dev_priv, PUNIT_REG_DSPSSPM) & DP_SSS_MASK(pipe)) == state)
-
-	if (COND)
+	ctrl = vlv_punit_read(display->drm, PUNIT_REG_DSPSSPM);
+	if ((ctrl & DP_SSS_MASK(pipe)) == state)
 		goto out;
 
-	ctrl = vlv_punit_read(dev_priv, PUNIT_REG_DSPSSPM);
 	ctrl &= ~DP_SSC_MASK(pipe);
 	ctrl |= enable ? DP_SSC_PWR_ON(pipe) : DP_SSC_PWR_GATE(pipe);
-	vlv_punit_write(dev_priv, PUNIT_REG_DSPSSPM, ctrl);
+	vlv_punit_write(display->drm, PUNIT_REG_DSPSSPM, ctrl);
 
-	if (wait_for(COND, 100))
+	ret = poll_timeout_us(ctrl = vlv_punit_read(display->drm, PUNIT_REG_DSPSSPM),
+			      (ctrl & DP_SSS_MASK(pipe)) == state,
+			      500, 100 * 1000, false);
+	if (ret)
 		drm_err(display->drm,
 			"timeout setting power well state %08x (%08x)\n",
 			state,
-			vlv_punit_read(dev_priv, PUNIT_REG_DSPSSPM));
+			vlv_punit_read(display->drm, PUNIT_REG_DSPSSPM));
 
 #undef COND
 
 out:
-	vlv_punit_put(dev_priv);
+	vlv_punit_put(display->drm);
 }
 
 static void chv_pipe_power_well_sync_hw(struct intel_display *display,
@@ -1755,7 +1779,6 @@ static void chv_pipe_power_well_disable(struct intel_display *display,
 static void
 tgl_tc_cold_request(struct intel_display *display, bool block)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
 	u8 tries = 0;
 	int ret;
 
@@ -1772,7 +1795,7 @@ tgl_tc_cold_request(struct intel_display *display, bool block)
 		 * Spec states that we should timeout the request after 200us
 		 * but the function below will timeout after 500us
 		 */
-		ret = snb_pcode_read(&i915->uncore, TGL_PCODE_TCCOLD, &low_val, &high_val);
+		ret = intel_pcode_read(display->drm, TGL_PCODE_TCCOLD, &low_val, &high_val);
 		if (ret == 0) {
 			if (block &&
 			    (low_val & TGL_PCODE_EXIT_TCCOLD_DATA_L_EXIT_FAILED))
@@ -1788,10 +1811,9 @@ tgl_tc_cold_request(struct intel_display *display, bool block)
 	}
 
 	if (ret)
-		drm_err(&i915->drm, "TC cold %sblock failed\n",
-			block ? "" : "un");
+		drm_err(display->drm, "TC cold %sblock failed\n", block ? "" : "un");
 	else
-		drm_dbg_kms(&i915->drm, "TC cold %sblock succeeded\n",
+		drm_dbg_kms(display->drm, "TC cold %sblock succeeded\n",
 			    block ? "" : "un");
 }
 
@@ -1836,7 +1858,7 @@ static void xelpdp_aux_power_well_enable(struct intel_display *display,
 	enum aux_ch aux_ch = i915_power_well_instance(power_well)->xelpdp.aux_ch;
 	enum phy phy = icl_aux_pw_to_phy(display, power_well);
 
-	if (intel_phy_is_tc(display, phy))
+	if (icl_aux_pw_is_tc_phy(display, power_well))
 		icl_tc_port_assert_ref_held(display, power_well,
 					    aux_ch_to_digital_port(display, aux_ch));
 
@@ -1844,24 +1866,42 @@ static void xelpdp_aux_power_well_enable(struct intel_display *display,
 		     XELPDP_DP_AUX_CH_CTL_POWER_REQUEST,
 		     XELPDP_DP_AUX_CH_CTL_POWER_REQUEST);
 
-	/*
-	 * The power status flag cannot be used to determine whether aux
-	 * power wells have finished powering up.  Instead we're
-	 * expected to just wait a fixed 600us after raising the request
-	 * bit.
-	 */
-	usleep_range(600, 1200);
+	if (HAS_LT_PHY(display)) {
+		if (intel_de_wait_for_set_ms(display, XELPDP_DP_AUX_CH_CTL(display, aux_ch),
+					     XELPDP_DP_AUX_CH_CTL_POWER_STATUS, 2))
+			drm_warn(display->drm,
+				 "Timeout waiting for PHY %c AUX channel power to be up\n",
+				 phy_name(phy));
+	} else {
+		/*
+		 * The power status flag cannot be used to determine whether aux
+		 * power wells have finished powering up.  Instead we're
+		 * expected to just wait a fixed 600us after raising the request
+		 * bit.
+		 */
+		usleep_range(600, 1200);
+	}
 }
 
 static void xelpdp_aux_power_well_disable(struct intel_display *display,
 					  struct i915_power_well *power_well)
 {
 	enum aux_ch aux_ch = i915_power_well_instance(power_well)->xelpdp.aux_ch;
+	enum phy phy = icl_aux_pw_to_phy(display, power_well);
 
 	intel_de_rmw(display, XELPDP_DP_AUX_CH_CTL(display, aux_ch),
 		     XELPDP_DP_AUX_CH_CTL_POWER_REQUEST,
 		     0);
-	usleep_range(10, 30);
+
+	if (HAS_LT_PHY(display)) {
+		if (intel_de_wait_for_clear_ms(display, XELPDP_DP_AUX_CH_CTL(display, aux_ch),
+					       XELPDP_DP_AUX_CH_CTL_POWER_STATUS, 1))
+			drm_warn(display->drm,
+				 "Timeout waiting for PHY %c AUX channel to powerdown\n",
+				 phy_name(phy));
+	} else {
+		usleep_range(10, 30);
+	}
 }
 
 static bool xelpdp_aux_power_well_enabled(struct intel_display *display,
@@ -1879,8 +1919,8 @@ static void xe2lpd_pica_power_well_enable(struct intel_display *display,
 	intel_de_write(display, XE2LPD_PICA_PW_CTL,
 		       XE2LPD_PICA_CTL_POWER_REQUEST);
 
-	if (intel_de_wait_for_set(display, XE2LPD_PICA_PW_CTL,
-				  XE2LPD_PICA_CTL_POWER_STATUS, 1)) {
+	if (intel_de_wait_for_set_ms(display, XE2LPD_PICA_PW_CTL,
+				     XE2LPD_PICA_CTL_POWER_STATUS, 1)) {
 		drm_dbg_kms(display->drm, "pica power well enable timeout\n");
 
 		drm_WARN(display->drm, 1, "Power well PICA timeout when enabled");
@@ -1892,8 +1932,8 @@ static void xe2lpd_pica_power_well_disable(struct intel_display *display,
 {
 	intel_de_write(display, XE2LPD_PICA_PW_CTL, 0);
 
-	if (intel_de_wait_for_clear(display, XE2LPD_PICA_PW_CTL,
-				    XE2LPD_PICA_CTL_POWER_STATUS, 1)) {
+	if (intel_de_wait_for_clear_ms(display, XE2LPD_PICA_PW_CTL,
+				       XE2LPD_PICA_CTL_POWER_STATUS, 1)) {
 		drm_dbg_kms(display->drm, "pica power well disable timeout\n");
 
 		drm_WARN(display->drm, 1, "Power well PICA timeout when disabled");

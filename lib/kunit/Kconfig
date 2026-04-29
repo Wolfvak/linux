@@ -28,7 +28,7 @@ config KUNIT_FAULT_TEST
 	bool "Enable KUnit tests which print BUG stacktraces"
 	depends on KUNIT_TEST
 	depends on !UML
-	default y
+	default !PANIC_ON_OOPS
 	help
 	  Enables fault handling tests for the KUnit framework. These tests may
 	  trigger a kernel BUG(), and the associated stack trace, even when they
@@ -92,5 +92,53 @@ config KUNIT_AUTORUN_ENABLED
 
 	  In most cases this should be left as Y. Only if additional opt-in
 	  behavior is needed should this be set to N.
+
+config KUNIT_DEFAULT_FILTER_GLOB
+	string "Default value of the filter_glob module parameter"
+	help
+	  Sets the default value of kunit.filter_glob. If set to a non-empty
+	  string only matching tests are executed.
+
+	  If unsure, leave empty so all tests are executed.
+
+config KUNIT_DEFAULT_FILTER
+	string "Default value of the filter module parameter"
+	help
+	  Sets the default value of kunit.filter. If set to a non-empty
+	  string only matching tests are executed.
+
+	  If unsure, leave empty so all tests are executed.
+
+config KUNIT_DEFAULT_FILTER_ACTION
+	string "Default value of the filter_action module parameter"
+	help
+	  Sets the default value of kunit.filter_action. If set to a non-empty
+	  string only matching tests are executed.
+
+	  If unsure, leave empty so all tests are executed.
+
+config KUNIT_DEFAULT_TIMEOUT
+	int "Default value of the timeout module parameter"
+	default 300
+	help
+	  Sets the default timeout, in seconds, for Kunit test cases. This value
+	  is further multiplied by a factor determined by the assigned speed
+	  setting: 1x for `DEFAULT`, 3x for `KUNIT_SPEED_SLOW`, and 12x for
+	  `KUNIT_SPEED_VERY_SLOW`. This allows slower tests on slower machines
+	  sufficient time to complete.
+
+	  If unsure, the default timeout of 300 seconds is suitable for most
+	  cases.
+
+config KUNIT_UML_PCI
+	bool "KUnit UML PCI Support"
+	depends on UML
+	select UML_PCI
+	help
+	  Enables the PCI subsystem on UML for use by KUnit tests.
+	  Some KUnit tests require the PCI core which is not enabled by
+	  default on UML.
+
+	  If unsure, say N.
 
 endif # KUNIT

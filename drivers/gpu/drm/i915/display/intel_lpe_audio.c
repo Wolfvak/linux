@@ -68,10 +68,9 @@
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 
+#include <drm/drm_print.h>
 #include <drm/intel/intel_lpe_audio.h>
 
-#include "i915_drv.h"
-#include "i915_irq.h"
 #include "intel_audio_regs.h"
 #include "intel_de.h"
 #include "intel_lpe_audio.h"
@@ -88,11 +87,11 @@ lpe_audio_platdev_create(struct intel_display *display)
 	struct platform_device *platdev;
 	struct intel_hdmi_lpe_audio_pdata *pdata;
 
-	pdata = kzalloc(sizeof(*pdata), GFP_KERNEL);
+	pdata = kzalloc_obj(*pdata);
 	if (!pdata)
 		return ERR_PTR(-ENOMEM);
 
-	rsc = kcalloc(2, sizeof(*rsc), GFP_KERNEL);
+	rsc = kzalloc_objs(*rsc, 2);
 	if (!rsc) {
 		kfree(pdata);
 		return ERR_PTR(-ENOMEM);
@@ -170,14 +169,11 @@ static struct irq_chip lpe_audio_irqchip = {
 
 static int lpe_audio_irq_init(struct intel_display *display)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
 	int irq = display->audio.lpe.irq;
 
-	drm_WARN_ON(display->drm, !intel_irqs_enabled(dev_priv));
-	irq_set_chip_and_handler_name(irq,
-				&lpe_audio_irqchip,
-				handle_simple_irq,
-				"hdmi_lpe_audio_irq_handler");
+	irq_set_chip_and_handler_name(irq, &lpe_audio_irqchip,
+				      handle_simple_irq,
+				      "hdmi_lpe_audio_irq_handler");
 
 	return 0;
 }

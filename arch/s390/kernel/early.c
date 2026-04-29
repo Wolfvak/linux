@@ -4,8 +4,7 @@
  *    Author(s): Hongjie Yang <hongjie@us.ibm.com>,
  */
 
-#define KMSG_COMPONENT "setup"
-#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
+#define pr_fmt(fmt) "setup: " fmt
 
 #include <linux/sched/debug.h>
 #include <linux/cpufeature.h>
@@ -21,6 +20,7 @@
 #include <linux/kernel.h>
 #include <asm/asm-extable.h>
 #include <linux/memblock.h>
+#include <linux/kasan.h>
 #include <asm/access-regs.h>
 #include <asm/asm-offsets.h>
 #include <asm/machine.h>
@@ -65,7 +65,7 @@ static void __init kasan_early_init(void)
 {
 #ifdef CONFIG_KASAN
 	init_task.kasan_depth = 0;
-	pr_info("KernelAddressSanitizer initialized\n");
+	kasan_init_generic();
 #endif
 }
 
@@ -105,6 +105,8 @@ static inline void strim_all(char *str)
 	}
 }
 
+char arch_hw_string[128];
+
 static noinline __init void setup_arch_string(void)
 {
 	struct sysinfo_1_1_1 *mach = (struct sysinfo_1_1_1 *)&sysinfo_page;
@@ -117,20 +119,21 @@ static noinline __init void setup_arch_string(void)
 	EBCASC(mach->type, sizeof(mach->type));
 	EBCASC(mach->model, sizeof(mach->model));
 	EBCASC(mach->model_capacity, sizeof(mach->model_capacity));
-	sprintf(mstr, "%-16.16s %-4.4s %-16.16s %-16.16s",
-		mach->manufacturer, mach->type,
-		mach->model, mach->model_capacity);
+	scnprintf(mstr, sizeof(mstr), "%-16.16s %-4.4s %-16.16s %-16.16s",
+		  mach->manufacturer, mach->type,
+		  mach->model, mach->model_capacity);
 	strim_all(mstr);
 	if (stsi(vm, 3, 2, 2) == 0 && vm->count) {
 		EBCASC(vm->vm[0].cpi, sizeof(vm->vm[0].cpi));
-		sprintf(hvstr, "%-16.16s", vm->vm[0].cpi);
+		scnprintf(hvstr, sizeof(hvstr), "%-16.16s", vm->vm[0].cpi);
 		strim_all(hvstr);
 	} else {
-		sprintf(hvstr, "%s",
-			machine_is_lpar() ? "LPAR" :
-			machine_is_vm() ? "z/VM" :
-			machine_is_kvm() ? "KVM" : "unknown");
+		scnprintf(hvstr, sizeof(hvstr), "%s",
+			  machine_is_lpar() ? "LPAR" :
+			  machine_is_vm() ? "z/VM" :
+			  machine_is_kvm() ? "KVM" : "unknown");
 	}
+	scnprintf(arch_hw_string, sizeof(arch_hw_string), "HW: %s (%s)", mstr, hvstr);
 	dump_stack_set_arch_desc("%s (%s)", mstr, hvstr);
 }
 
@@ -154,6 +157,7 @@ void __init __do_early_pgm_check(struct pt_regs *regs)
 
 	regs->int_code = lc->pgm_int_code;
 	regs->int_parm_long = lc->trans_exc_code;
+	regs->last_break = lc->pgm_last_break;
 	ip = __rewind_psw(regs->psw, regs->int_code >> 16);
 
 	/* Monitor Event? Might be a warning */

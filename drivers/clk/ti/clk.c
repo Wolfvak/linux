@@ -118,13 +118,10 @@ int ti_clk_setup_ll_ops(struct ti_clk_ll_ops *ops)
  * Eventually we could standardize to using '_' for clk-*.c files to follow the
  * TRM naming.
  */
-static struct device_node *ti_find_clock_provider(struct device_node *from,
-						  const char *name)
+static struct device_node *ti_find_clock_provider(const char *name)
 {
 	char *tmp __free(kfree) = NULL;
 	struct device_node *np;
-	bool found = false;
-	const char *n;
 	char *p;
 
 	tmp = kstrdup_and_replace(name, '-', '_', GFP_KERNEL);
@@ -137,25 +134,13 @@ static struct device_node *ti_find_clock_provider(struct device_node *from,
 		*p = '\0';
 
 	/* Node named "clock" with "clock-output-names" */
-	for_each_of_allnodes_from(from, np) {
-		if (of_property_read_string_index(np, "clock-output-names",
-						  0, &n))
-			continue;
-
-		if (!strncmp(n, tmp, strlen(tmp))) {
-			of_node_get(np);
-			found = true;
-			break;
-		}
-	}
-
-	if (found) {
-		of_node_put(from);
-		return np;
+	for_each_node_with_property(np, "clock-output-names") {
+		if (of_property_match_string(np, "clock-output-names", tmp) == 0)
+			return np;
 	}
 
 	/* Fall back to using old node name base provider name */
-	return of_find_node_by_name(from, tmp);
+	return of_find_node_by_name(NULL, tmp);
 }
 
 /**
@@ -208,7 +193,7 @@ void __init ti_dt_clocks_register(struct ti_dt_clk oclks[])
 		if (num_args && clkctrl_nodes_missing)
 			continue;
 
-		node = ti_find_clock_provider(NULL, buf);
+		node = ti_find_clock_provider(buf);
 		if (num_args && compat_mode) {
 			parent = node;
 			child = of_get_child_by_name(parent, "clock");
@@ -283,7 +268,7 @@ int __init ti_clk_retry_init(struct device_node *node, void *user,
 	struct clk_init_item *retry;
 
 	pr_debug("%pOFn: adding to retry list...\n", node);
-	retry = kzalloc(sizeof(*retry), GFP_KERNEL);
+	retry = kzalloc_obj(*retry);
 	if (!retry)
 		return -ENOMEM;
 
@@ -426,7 +411,7 @@ int __init omap2_clk_provider_init(struct device_node *parent, int index,
 	/* add clocks node info */
 	clocks_node_ptr[index] = clocks;
 
-	io = kzalloc(sizeof(*io), GFP_KERNEL);
+	io = kzalloc_obj(*io);
 	if (!io)
 		return -ENOMEM;
 
@@ -591,7 +576,7 @@ int ti_clk_add_alias(struct clk *clk, const char *con)
 	if (IS_ERR(clk))
 		return PTR_ERR(clk);
 
-	cl = kzalloc(sizeof(*cl), GFP_KERNEL);
+	cl = kzalloc_obj(*cl);
 	if (!cl)
 		return -ENOMEM;
 

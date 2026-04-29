@@ -4,6 +4,8 @@
  */
 #include <linux/sizes.h>
 #include <linux/uaccess.h>
+#include <linux/set_memory.h>
+#include <linux/stop_machine.h>
 
 #include <asm/cacheflush.h>
 #include <asm/inst.h>
@@ -139,6 +141,9 @@ bool insns_not_supported(union loongarch_instruction insn)
 	case amswapw_op ... ammindbdu_op:
 		pr_notice("atomic memory access instructions are not supported\n");
 		return true;
+	case scq_op:
+		pr_notice("sc.q instruction is not supported\n");
+		return true;
 	}
 
 	switch (insn.reg2i14_format.opcode) {
@@ -147,6 +152,15 @@ bool insns_not_supported(union loongarch_instruction insn)
 	case scw_op:
 	case scd_op:
 		pr_notice("ll and sc instructions are not supported\n");
+		return true;
+	}
+
+	switch (insn.reg2_format.opcode) {
+	case llacqw_op:
+	case llacqd_op:
+	case screlw_op:
+	case screld_op:
+		pr_notice("llacq and screl instructions are not supported\n");
 		return true;
 	}
 
@@ -214,6 +228,69 @@ int larch_insn_patch_text(void *addr, u32 insn)
 	if (!ret)
 		flush_icache_range((unsigned long)tp,
 				   (unsigned long)tp + LOONGARCH_INSN_SIZE);
+
+	return ret;
+}
+
+struct insn_copy {
+	void *dst;
+	void *src;
+	size_t len;
+	unsigned int cpu;
+};
+
+static int text_copy_cb(void *data)
+{
+	int ret = 0;
+	struct insn_copy *copy = data;
+
+	if (smp_processor_id() == copy->cpu) {
+		ret = copy_to_kernel_nofault(copy->dst, copy->src, copy->len);
+		if (ret) {
+			pr_err("%s: operation failed\n", __func__);
+			return ret;
+		}
+	}
+
+	flush_icache_range((unsigned long)copy->dst, (unsigned long)copy->dst + copy->len);
+
+	return 0;
+}
+
+int larch_insn_text_copy(void *dst, void *src, size_t len)
+{
+	int ret = 0;
+	int err = 0;
+	size_t start, end;
+	struct insn_copy copy = {
+		.dst = dst,
+		.src = src,
+		.len = len,
+		.cpu = raw_smp_processor_id(),
+	};
+
+	/*
+	 * Ensure copy.cpu won't be hot removed before stop_machine.
+	 * If it is removed nobody will really update the text.
+	 */
+	lockdep_assert_cpus_held();
+
+	start = round_down((size_t)dst, PAGE_SIZE);
+	end   = round_up((size_t)dst + len, PAGE_SIZE);
+
+	err = set_memory_rw(start, (end - start) / PAGE_SIZE);
+	if (err) {
+		pr_info("%s: set_memory_rw() failed\n", __func__);
+		return err;
+	}
+
+	ret = stop_machine_cpuslocked(text_copy_cb, &copy, cpu_online_mask);
+
+	err = set_memory_rox(start, (end - start) / PAGE_SIZE);
+	if (err) {
+		pr_info("%s: set_memory_rox() failed\n", __func__);
+		return err;
+	}
 
 	return ret;
 }
@@ -319,6 +396,34 @@ u32 larch_insn_gen_lu52id(enum loongarch_gpr rd, enum loongarch_gpr rj, int imm)
 	}
 
 	emit_lu52id(&insn, rd, rj, imm);
+
+	return insn.word;
+}
+
+u32 larch_insn_gen_beq(enum loongarch_gpr rd, enum loongarch_gpr rj, int imm)
+{
+	union loongarch_instruction insn;
+
+	if ((imm & 3) || imm < -SZ_128K || imm >= SZ_128K) {
+		pr_warn("The generated beq instruction is out of range.\n");
+		return INSN_BREAK;
+	}
+
+	emit_beq(&insn, rj, rd, imm >> 2);
+
+	return insn.word;
+}
+
+u32 larch_insn_gen_bne(enum loongarch_gpr rd, enum loongarch_gpr rj, int imm)
+{
+	union loongarch_instruction insn;
+
+	if ((imm & 3) || imm < -SZ_128K || imm >= SZ_128K) {
+		pr_warn("The generated bne instruction is out of range.\n");
+		return INSN_BREAK;
+	}
+
+	emit_bne(&insn, rj, rd, imm >> 2);
 
 	return insn.word;
 }

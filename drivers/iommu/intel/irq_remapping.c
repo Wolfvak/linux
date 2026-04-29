@@ -10,6 +10,7 @@
 #include <linux/hpet.h>
 #include <linux/pci.h>
 #include <linux/irq.h>
+#include <linux/irqchip/irq-msi-lib.h>
 #include <linux/acpi.h>
 #include <linux/irqdomain.h>
 #include <linux/crash_dump.h>
@@ -518,15 +519,21 @@ static void iommu_enable_irq_remapping(struct intel_iommu *iommu)
 
 static int intel_setup_irq_remapping(struct intel_iommu *iommu)
 {
+	struct irq_domain_info info = {
+		.ops		= &intel_ir_domain_ops,
+		.parent		= arch_get_ir_parent_domain(),
+		.domain_flags	= IRQ_DOMAIN_FLAG_ISOLATED_MSI,
+		.size		= INTR_REMAP_TABLE_ENTRIES,
+		.host_data	= iommu,
+	};
 	struct ir_table *ir_table;
-	struct fwnode_handle *fn;
 	unsigned long *bitmap;
 	void *ir_table_base;
 
 	if (iommu->ir_table)
 		return 0;
 
-	ir_table = kzalloc(sizeof(struct ir_table), GFP_KERNEL);
+	ir_table = kzalloc_obj(struct ir_table);
 	if (!ir_table)
 		return -ENOMEM;
 
@@ -544,24 +551,15 @@ static int intel_setup_irq_remapping(struct intel_iommu *iommu)
 		goto out_free_pages;
 	}
 
-	fn = irq_domain_alloc_named_id_fwnode("INTEL-IR", iommu->seq_id);
-	if (!fn)
+	info.fwnode = irq_domain_alloc_named_id_fwnode("INTEL-IR", iommu->seq_id);
+	if (!info.fwnode)
 		goto out_free_bitmap;
 
-	iommu->ir_domain =
-		irq_domain_create_hierarchy(arch_get_ir_parent_domain(),
-					    0, INTR_REMAP_TABLE_ENTRIES,
-					    fn, &intel_ir_domain_ops,
-					    iommu);
+	iommu->ir_domain = msi_create_parent_irq_domain(&info, &dmar_msi_parent_ops);
 	if (!iommu->ir_domain) {
 		pr_err("IR%d: failed to allocate irqdomain\n", iommu->seq_id);
 		goto out_free_fwnode;
 	}
-
-	irq_domain_update_bus_token(iommu->ir_domain,  DOMAIN_BUS_DMAR);
-	iommu->ir_domain->flags |= IRQ_DOMAIN_FLAG_MSI_PARENT |
-				   IRQ_DOMAIN_FLAG_ISOLATED_MSI;
-	iommu->ir_domain->msi_parent_ops = &dmar_msi_parent_ops;
 
 	ir_table->base = ir_table_base;
 	ir_table->bitmap = bitmap;
@@ -608,7 +606,7 @@ out_free_ir_domain:
 	irq_domain_remove(iommu->ir_domain);
 	iommu->ir_domain = NULL;
 out_free_fwnode:
-	irq_domain_free_fwnode(fn);
+	irq_domain_free_fwnode(info.fwnode);
 out_free_bitmap:
 	bitmap_free(bitmap);
 out_free_pages:
@@ -1244,10 +1242,10 @@ static void intel_ir_compose_msi_msg(struct irq_data *irq_data,
 static int intel_ir_set_vcpu_affinity(struct irq_data *data, void *info)
 {
 	struct intel_ir_data *ir_data = data->chip_data;
-	struct vcpu_data *vcpu_pi_info = info;
+	struct intel_iommu_pi_data *pi_data = info;
 
 	/* stop posting interrupts, back to the default mode */
-	if (!vcpu_pi_info) {
+	if (!pi_data) {
 		__intel_ir_reconfigure_irte(data, true);
 	} else {
 		struct irte irte_pi;
@@ -1265,10 +1263,10 @@ static int intel_ir_set_vcpu_affinity(struct irq_data *data, void *info)
 		/* Update the posted mode fields */
 		irte_pi.p_pst = 1;
 		irte_pi.p_urgent = 0;
-		irte_pi.p_vector = vcpu_pi_info->vector;
-		irte_pi.pda_l = (vcpu_pi_info->pi_desc_addr >>
+		irte_pi.p_vector = pi_data->vector;
+		irte_pi.pda_l = (pi_data->pi_desc_addr >>
 				(32 - PDA_LOW_BIT)) & ~(-1UL << PDA_LOW_BIT);
-		irte_pi.pda_h = (vcpu_pi_info->pi_desc_addr >> 32) &
+		irte_pi.pda_h = (pi_data->pi_desc_addr >> 32) &
 				~(-1UL << PDA_HIGH_BIT);
 
 		ir_data->irq_2_iommu.posted_vcpu = true;
@@ -1305,17 +1303,17 @@ static struct irq_chip intel_ir_chip = {
  *	irq_enter();
  *		handle_edge_irq()
  *			irq_chip_ack_parent()
- *				irq_move_irq(); // No EOI
+ *				intel_ack_posted_msi_irq(); // No EOI
  *			handle_irq_event()
  *				driver_handler()
  *		handle_edge_irq()
  *			irq_chip_ack_parent()
- *				irq_move_irq(); // No EOI
+ *				intel_ack_posted_msi_irq(); // No EOI
  *			handle_irq_event()
  *				driver_handler()
  *		handle_edge_irq()
  *			irq_chip_ack_parent()
- *				irq_move_irq(); // No EOI
+ *				intel_ack_posted_msi_irq(); // No EOI
  *			handle_irq_event()
  *				driver_handler()
  *	apic_eoi()
@@ -1324,7 +1322,7 @@ static struct irq_chip intel_ir_chip = {
  */
 static struct irq_chip intel_ir_chip_post_msi = {
 	.name			= "INTEL-IR-POST",
-	.irq_ack		= irq_move_irq,
+	.irq_ack		= intel_ack_posted_msi_irq,
 	.irq_set_affinity	= intel_ir_set_affinity,
 	.irq_compose_msi_msg	= intel_ir_compose_msi_msg,
 	.irq_set_vcpu_affinity	= intel_ir_set_vcpu_affinity,
@@ -1370,7 +1368,7 @@ static void intel_irq_remapping_prepare_irte(struct intel_ir_data *data,
 		break;
 	case X86_IRQ_ALLOC_TYPE_PCI_MSI:
 	case X86_IRQ_ALLOC_TYPE_PCI_MSIX:
-		if (posted_msi_supported()) {
+		if (posted_msi_enabled()) {
 			prepare_irte_posted(irte);
 			data->irq_2_iommu.posted_msi = 1;
 		}
@@ -1428,7 +1426,7 @@ static int intel_irq_remapping_alloc(struct irq_domain *domain,
 		return ret;
 
 	ret = -ENOMEM;
-	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	data = kzalloc_obj(*data);
 	if (!data)
 		goto out_free_parent;
 
@@ -1450,7 +1448,7 @@ static int intel_irq_remapping_alloc(struct irq_domain *domain,
 		}
 
 		if (i > 0) {
-			ird = kzalloc(sizeof(*ird), GFP_KERNEL);
+			ird = kzalloc_obj(*ird);
 			if (!ird)
 				goto out_free_data;
 			/* Initialize the common data */
@@ -1462,7 +1460,7 @@ static int intel_irq_remapping_alloc(struct irq_domain *domain,
 
 		irq_data->hwirq = (index << 16) + i;
 		irq_data->chip_data = ird;
-		if (posted_msi_supported() &&
+		if (posted_msi_enabled() &&
 		    ((info->type == X86_IRQ_ALLOC_TYPE_PCI_MSI) ||
 		     (info->type == X86_IRQ_ALLOC_TYPE_PCI_MSIX)))
 			irq_data->chip = &intel_ir_chip_post_msi;
@@ -1530,6 +1528,8 @@ static const struct irq_domain_ops intel_ir_domain_ops = {
 
 static const struct msi_parent_ops dmar_msi_parent_ops = {
 	.supported_flags	= X86_VECTOR_MSI_FLAGS_SUPPORTED | MSI_FLAG_MULTI_PCI_MSI,
+	.bus_select_token	= DOMAIN_BUS_DMAR,
+	.bus_select_mask	= MATCH_PCI_MSI,
 	.prefix			= "IR-",
 	.init_dev_msi_info	= msi_parent_init_dev_msi_info,
 };

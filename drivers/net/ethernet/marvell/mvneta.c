@@ -2416,10 +2416,9 @@ mvneta_swbm_build_skb(struct mvneta_port *pp, struct page_pool *pool,
 	skb->ip_summed = mvneta_rx_csum(pp, desc_status);
 
 	if (unlikely(xdp_buff_has_frags(xdp)))
-		xdp_update_skb_shared_info(skb, num_frags,
-					   sinfo->xdp_frags_size,
-					   num_frags * xdp->frame_sz,
-					   xdp_buff_is_frag_pfmemalloc(xdp));
+		xdp_update_skb_frags_info(skb, num_frags, sinfo->xdp_frags_size,
+					  num_frags * xdp->frame_sz,
+					  xdp_buff_get_skb_flags(xdp));
 
 	return skb;
 }
@@ -2985,6 +2984,13 @@ out:
 		if (txq->count >= txq->tx_stop_threshold)
 			netif_tx_stop_queue(nq);
 
+		/* This is not really the true transmit point, since we batch
+		 * up several before hitting the hardware, but is the best we
+		 * can do without more complexity to walk the packets in the
+		 * pending section of the transmit queue.
+		 */
+		skb_tx_timestamp(skb);
+
 		if (!netdev_xmit_more() || netif_xmit_stopped(nq) ||
 		    txq->pending + frags > MVNETA_TXQ_DEC_SENT_MASK)
 			mvneta_txq_pend_desc_add(pp, txq, frags);
@@ -3548,7 +3554,7 @@ static int mvneta_txq_sw_init(struct mvneta_port *pp,
 
 	txq->last_desc = txq->size - 1;
 
-	txq->buf = kmalloc_array(txq->size, sizeof(*txq->buf), GFP_KERNEL);
+	txq->buf = kmalloc_objs(*txq->buf, txq->size);
 	if (!txq->buf)
 		return -ENOMEM;
 
@@ -4610,7 +4616,7 @@ static int mvneta_stop(struct net_device *dev)
 		/* Inform that we are stopping so we don't want to setup the
 		 * driver for new CPUs in the notifiers. The code of the
 		 * notifier for CPU online is protected by the same spinlock,
-		 * so when we get the lock, the notifer work is done.
+		 * so when we get the lock, the notifier work is done.
 		 */
 		spin_lock(&pp->lock);
 		pp->is_stopped = true;
@@ -5006,19 +5012,9 @@ static u32 mvneta_ethtool_get_rxfh_indir_size(struct net_device *dev)
 	return MVNETA_RSS_LU_TABLE_SIZE;
 }
 
-static int mvneta_ethtool_get_rxnfc(struct net_device *dev,
-				    struct ethtool_rxnfc *info,
-				    u32 *rules __always_unused)
+static u32 mvneta_ethtool_get_rx_ring_count(struct net_device *dev)
 {
-	switch (info->cmd) {
-	case ETHTOOL_GRXRINGS:
-		info->data =  rxq_number;
-		return 0;
-	case ETHTOOL_GRXFH:
-		return -EOPNOTSUPP;
-	default:
-		return -EOPNOTSUPP;
-	}
+	return rxq_number;
 }
 
 static int  mvneta_config_rss(struct mvneta_port *pp)
@@ -5352,13 +5348,14 @@ static const struct ethtool_ops mvneta_eth_tool_ops = {
 	.get_ethtool_stats = mvneta_ethtool_get_stats,
 	.get_sset_count	= mvneta_ethtool_get_sset_count,
 	.get_rxfh_indir_size = mvneta_ethtool_get_rxfh_indir_size,
-	.get_rxnfc	= mvneta_ethtool_get_rxnfc,
+	.get_rx_ring_count = mvneta_ethtool_get_rx_ring_count,
 	.get_rxfh	= mvneta_ethtool_get_rxfh,
 	.set_rxfh	= mvneta_ethtool_set_rxfh,
 	.get_link_ksettings = mvneta_ethtool_get_link_ksettings,
 	.set_link_ksettings = mvneta_ethtool_set_link_ksettings,
 	.get_wol        = mvneta_ethtool_get_wol,
 	.set_wol        = mvneta_ethtool_set_wol,
+	.get_ts_info	= ethtool_op_get_ts_info,
 	.get_eee	= mvneta_ethtool_get_eee,
 	.set_eee	= mvneta_ethtool_set_eee,
 };

@@ -62,7 +62,7 @@ static inline int o2info_coherent(struct ocfs2_info_request *req)
 	return (!(req->ir_flags & OCFS2_INFO_FL_NON_COHERENT));
 }
 
-int ocfs2_fileattr_get(struct dentry *dentry, struct fileattr *fa)
+int ocfs2_fileattr_get(struct dentry *dentry, struct file_kattr *fa)
 {
 	struct inode *inode = d_inode(dentry);
 	unsigned int flags;
@@ -83,7 +83,7 @@ int ocfs2_fileattr_get(struct dentry *dentry, struct fileattr *fa)
 }
 
 int ocfs2_fileattr_set(struct mnt_idmap *idmap,
-		       struct dentry *dentry, struct fileattr *fa)
+		       struct dentry *dentry, struct file_kattr *fa)
 {
 	struct inode *inode = d_inode(dentry);
 	unsigned int flags = fa->flags;
@@ -334,7 +334,7 @@ static int ocfs2_info_handle_freeinode(struct inode *inode,
 	struct ocfs2_super *osb = OCFS2_SB(inode->i_sb);
 	struct inode *inode_alloc = NULL;
 
-	oifi = kzalloc(sizeof(struct ocfs2_info_freeinode), GFP_KERNEL);
+	oifi = kzalloc_obj(struct ocfs2_info_freeinode);
 	if (!oifi) {
 		status = -ENOMEM;
 		mlog_errno(status);
@@ -358,13 +358,11 @@ static int ocfs2_info_handle_freeinode(struct inode *inode,
 				goto bail;
 			}
 		} else {
-			ocfs2_sprintf_system_inode_name(namebuf,
-							sizeof(namebuf),
-							type, i);
+			int len = ocfs2_sprintf_system_inode_name(namebuf,
+								  sizeof(namebuf),
+								  type, i);
 			status = ocfs2_lookup_ino_from_name(osb->sys_root_inode,
-							    namebuf,
-							    strlen(namebuf),
-							    &blkno);
+							    namebuf, len, &blkno);
 			if (status < 0) {
 				status = -ENOENT;
 				goto bail;
@@ -622,7 +620,7 @@ static int ocfs2_info_handle_freefrag(struct inode *inode,
 	struct ocfs2_super *osb = OCFS2_SB(inode->i_sb);
 	struct inode *gb_inode = NULL;
 
-	oiff = kzalloc(sizeof(struct ocfs2_info_freefrag), GFP_KERNEL);
+	oiff = kzalloc_obj(struct ocfs2_info_freefrag);
 	if (!oiff) {
 		status = -ENOMEM;
 		mlog_errno(status);
@@ -651,12 +649,10 @@ static int ocfs2_info_handle_freefrag(struct inode *inode,
 			goto bail;
 		}
 	} else {
-		ocfs2_sprintf_system_inode_name(namebuf, sizeof(namebuf), type,
-						OCFS2_INVALID_SLOT);
+		int len = ocfs2_sprintf_system_inode_name(namebuf, sizeof(namebuf),
+							  type, OCFS2_INVALID_SLOT);
 		status = ocfs2_lookup_ino_from_name(osb->sys_root_inode,
-						    namebuf,
-						    strlen(namebuf),
-						    &blkno);
+						    namebuf, len, &blkno);
 		if (status < 0) {
 			status = -ENOENT;
 			goto bail;

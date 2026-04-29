@@ -15,6 +15,7 @@
 #include <linux/kexec.h>
 #include <linux/mutex.h>
 #include <linux/list.h>
+#include <linux/liveupdate.h>
 #include <linux/highmem.h>
 #include <linux/syscalls.h>
 #include <linux/reboot.h>
@@ -40,6 +41,8 @@
 #include <linux/hugetlb.h>
 #include <linux/objtool.h>
 #include <linux/kmsg_dump.h>
+#include <linux/dma-map-ops.h>
+#include <linux/sysfs.h>
 
 #include <asm/page.h>
 #include <asm/sections.h>
@@ -228,11 +231,10 @@ struct kimage *do_kimage_alloc_init(void)
 	struct kimage *image;
 
 	/* Allocate a controlling structure */
-	image = kzalloc(sizeof(*image), GFP_KERNEL);
+	image = kzalloc_obj(*image);
 	if (!image)
 		return NULL;
 
-	image->head = 0;
 	image->entry = &image->head;
 	image->last_entry = &image->head;
 	image->control_page = ~0; /* By default this does not apply */
@@ -553,6 +555,24 @@ static void kimage_free_entry(kimage_entry_t entry)
 	kimage_free_pages(page);
 }
 
+static void kimage_free_cma(struct kimage *image)
+{
+	unsigned long i;
+
+	for (i = 0; i < image->nr_segments; i++) {
+		struct page *cma = image->segment_cma[i];
+		u32 nr_pages = image->segment[i].memsz >> PAGE_SHIFT;
+
+		if (!cma)
+			continue;
+
+		arch_kexec_pre_free_pages(page_address(cma), nr_pages);
+		dma_release_from_contiguous(NULL, cma, nr_pages);
+		image->segment_cma[i] = NULL;
+	}
+
+}
+
 void kimage_free(struct kimage *image)
 {
 	kimage_entry_t *ptr, entry;
@@ -590,6 +610,9 @@ void kimage_free(struct kimage *image)
 
 	/* Free the kexec control pages... */
 	kimage_free_page_list(&image->control_pages);
+
+	/* Free CMA allocations */
+	kimage_free_cma(image);
 
 	/*
 	 * Free up any temporary buffers allocated. This might hit if
@@ -716,9 +739,64 @@ static struct page *kimage_alloc_page(struct kimage *image,
 	return page;
 }
 
-static int kimage_load_normal_segment(struct kimage *image,
-					 struct kexec_segment *segment)
+static int kimage_load_cma_segment(struct kimage *image, int idx)
 {
+	struct kexec_segment *segment = &image->segment[idx];
+	struct page *cma = image->segment_cma[idx];
+	char *ptr = page_address(cma);
+	size_t ubytes, mbytes;
+	int result = 0;
+	unsigned char __user *buf = NULL;
+	unsigned char *kbuf = NULL;
+
+	if (image->file_mode)
+		kbuf = segment->kbuf;
+	else
+		buf = segment->buf;
+	ubytes = segment->bufsz;
+	mbytes = segment->memsz;
+
+	/* Then copy from source buffer to the CMA one */
+	while (mbytes) {
+		size_t uchunk, mchunk;
+
+		mchunk = min_t(size_t, mbytes, PAGE_SIZE);
+		uchunk = min(ubytes, mchunk);
+
+		if (uchunk) {
+			/* For file based kexec, source pages are in kernel memory */
+			if (image->file_mode)
+				memcpy(ptr, kbuf, uchunk);
+			else
+				result = copy_from_user(ptr, buf, uchunk);
+			ubytes -= uchunk;
+			if (image->file_mode)
+				kbuf += uchunk;
+			else
+				buf += uchunk;
+		}
+
+		if (result) {
+			result = -EFAULT;
+			goto out;
+		}
+
+		ptr    += mchunk;
+		mbytes -= mchunk;
+
+		cond_resched();
+	}
+
+	/* Clear any remainder */
+	memset(ptr, 0, mbytes);
+
+out:
+	return result;
+}
+
+static int kimage_load_normal_segment(struct kimage *image, int idx)
+{
+	struct kexec_segment *segment = &image->segment[idx];
 	unsigned long maddr;
 	size_t ubytes, mbytes;
 	int result;
@@ -732,6 +810,9 @@ static int kimage_load_normal_segment(struct kimage *image,
 	ubytes = segment->bufsz;
 	mbytes = segment->memsz;
 	maddr = segment->mem;
+
+	if (image->segment_cma[idx])
+		return kimage_load_cma_segment(image, idx);
 
 	result = kimage_set_destination(image, maddr);
 	if (result < 0)
@@ -755,9 +836,7 @@ static int kimage_load_normal_segment(struct kimage *image,
 		ptr = kmap_local_page(page);
 		/* Start with a clear page */
 		clear_page(ptr);
-		ptr += maddr & ~PAGE_MASK;
-		mchunk = min_t(size_t, mbytes,
-				PAGE_SIZE - (maddr & ~PAGE_MASK));
+		mchunk = min_t(size_t, mbytes, PAGE_SIZE);
 		uchunk = min(ubytes, mchunk);
 
 		if (uchunk) {
@@ -787,13 +866,13 @@ out:
 }
 
 #ifdef CONFIG_CRASH_DUMP
-static int kimage_load_crash_segment(struct kimage *image,
-					struct kexec_segment *segment)
+static int kimage_load_crash_segment(struct kimage *image, int idx)
 {
 	/* For crash dumps kernels we simply copy the data from
 	 * user space to it's destination.
 	 * We do things a page at a time for the sake of kmap.
 	 */
+	struct kexec_segment *segment = &image->segment[idx];
 	unsigned long maddr;
 	size_t ubytes, mbytes;
 	int result;
@@ -820,9 +899,7 @@ static int kimage_load_crash_segment(struct kimage *image,
 		}
 		arch_kexec_post_alloc_pages(page_address(page), 1, 0);
 		ptr = kmap_local_page(page);
-		ptr += maddr & ~PAGE_MASK;
-		mchunk = min_t(size_t, mbytes,
-				PAGE_SIZE - (maddr & ~PAGE_MASK));
+		mchunk = min_t(size_t, mbytes, PAGE_SIZE);
 		uchunk = min(ubytes, mchunk);
 		if (mchunk > uchunk) {
 			/* Zero the trailing part of the page */
@@ -858,18 +935,17 @@ out:
 }
 #endif
 
-int kimage_load_segment(struct kimage *image,
-				struct kexec_segment *segment)
+int kimage_load_segment(struct kimage *image, int idx)
 {
 	int result = -ENOMEM;
 
 	switch (image->type) {
 	case KEXEC_TYPE_DEFAULT:
-		result = kimage_load_normal_segment(image, segment);
+		result = kimage_load_normal_segment(image, idx);
 		break;
 #ifdef CONFIG_CRASH_DUMP
 	case KEXEC_TYPE_CRASH:
-		result = kimage_load_crash_segment(image, segment);
+		result = kimage_load_crash_segment(image, idx);
 		break;
 #endif
 	}
@@ -877,22 +953,29 @@ int kimage_load_segment(struct kimage *image,
 	return result;
 }
 
-void *kimage_map_segment(struct kimage *image,
-			 unsigned long addr, unsigned long size)
+void *kimage_map_segment(struct kimage *image, int idx)
 {
+	unsigned long addr, size, eaddr;
 	unsigned long src_page_addr, dest_page_addr = 0;
-	unsigned long eaddr = addr + size;
 	kimage_entry_t *ptr, entry;
 	struct page **src_pages;
 	unsigned int npages;
+	struct page *cma;
 	void *vaddr = NULL;
 	int i;
 
+	cma = image->segment_cma[idx];
+	if (cma)
+		return page_address(cma);
+
+	addr = image->segment[idx].mem;
+	size = image->segment[idx].memsz;
+	eaddr = addr + size;
 	/*
 	 * Collect the source pages and map them in a contiguous VA range.
 	 */
 	npages = PFN_UP(eaddr) - PFN_DOWN(addr);
-	src_pages = kmalloc_array(npages, sizeof(*src_pages), GFP_KERNEL);
+	src_pages = kmalloc_objs(*src_pages, npages);
 	if (!src_pages) {
 		pr_err("Could not allocate ima pages array.\n");
 		return NULL;
@@ -928,7 +1011,8 @@ void *kimage_map_segment(struct kimage *image,
 
 void kimage_unmap_segment(void *segment_buffer)
 {
-	vunmap(segment_buffer);
+	if (is_vmalloc_addr(segment_buffer))
+		vunmap(segment_buffer);
 }
 
 struct kexec_load_limit {
@@ -1063,6 +1147,10 @@ int kernel_kexec(void)
 		goto Unlock;
 	}
 
+	error = liveupdate_reboot();
+	if (error)
+		goto Unlock;
+
 #ifdef CONFIG_KEXEC_JUMP
 	if (kexec_image->preserve_context) {
 		/*
@@ -1080,7 +1168,7 @@ int kernel_kexec(void)
 		console_suspend_all();
 		error = dpm_suspend_start(PMSG_FREEZE);
 		if (error)
-			goto Resume_console;
+			goto Resume_devices;
 		/*
 		 * dpm_suspend_end() must be called after dpm_suspend_start()
 		 * to complete the transition, like in the hibernation flows
@@ -1135,8 +1223,6 @@ int kernel_kexec(void)
 		dpm_resume_start(PMSG_RESTORE);
  Resume_devices:
 		dpm_resume_end(PMSG_RESTORE);
- Resume_console:
-		pm_restore_gfp_mask();
 		console_resume_all();
 		thaw_processes();
  Restore_console:
@@ -1148,3 +1234,143 @@ int kernel_kexec(void)
 	kexec_unlock();
 	return error;
 }
+
+static ssize_t loaded_show(struct kobject *kobj,
+				 struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%d\n", !!kexec_image);
+}
+static struct kobj_attribute loaded_attr = __ATTR_RO(loaded);
+
+#ifdef CONFIG_CRASH_DUMP
+static ssize_t crash_loaded_show(struct kobject *kobj,
+				       struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%d\n", kexec_crash_loaded());
+}
+static struct kobj_attribute crash_loaded_attr = __ATTR_RO(crash_loaded);
+
+#ifdef CONFIG_CRASH_RESERVE
+static ssize_t crash_cma_ranges_show(struct kobject *kobj,
+				     struct kobj_attribute *attr, char *buf)
+{
+
+	ssize_t len = 0;
+	int i;
+
+	for (i = 0; i < crashk_cma_cnt; ++i) {
+		len += sysfs_emit_at(buf, len, "%08llx-%08llx\n",
+				     crashk_cma_ranges[i].start,
+				     crashk_cma_ranges[i].end);
+	}
+	return len;
+}
+static struct kobj_attribute crash_cma_ranges_attr = __ATTR_RO(crash_cma_ranges);
+#endif
+
+static ssize_t crash_size_show(struct kobject *kobj,
+				       struct kobj_attribute *attr, char *buf)
+{
+	ssize_t size = crash_get_memory_size();
+
+	if (size < 0)
+		return size;
+
+	return sysfs_emit(buf, "%zd\n", size);
+}
+static ssize_t crash_size_store(struct kobject *kobj,
+				struct kobj_attribute *attr,
+				const char *buf, size_t count)
+{
+	unsigned long cnt;
+	int ret;
+
+	if (kstrtoul(buf, 0, &cnt))
+		return -EINVAL;
+
+	ret = crash_shrink_memory(cnt);
+	return ret < 0 ? ret : count;
+}
+static struct kobj_attribute crash_size_attr = __ATTR_RW(crash_size);
+
+#ifdef CONFIG_CRASH_HOTPLUG
+static ssize_t crash_elfcorehdr_size_show(struct kobject *kobj,
+			       struct kobj_attribute *attr, char *buf)
+{
+	unsigned int sz = crash_get_elfcorehdr_size();
+
+	return sysfs_emit(buf, "%u\n", sz);
+}
+static struct kobj_attribute crash_elfcorehdr_size_attr = __ATTR_RO(crash_elfcorehdr_size);
+
+#endif /* CONFIG_CRASH_HOTPLUG */
+#endif /* CONFIG_CRASH_DUMP */
+
+static struct attribute *kexec_attrs[] = {
+	&loaded_attr.attr,
+#ifdef CONFIG_CRASH_DUMP
+	&crash_loaded_attr.attr,
+	&crash_size_attr.attr,
+#ifdef CONFIG_CRASH_RESERVE
+	&crash_cma_ranges_attr.attr,
+#endif
+#ifdef CONFIG_CRASH_HOTPLUG
+	&crash_elfcorehdr_size_attr.attr,
+#endif
+#endif
+	NULL
+};
+
+struct kexec_link_entry {
+	const char *target;
+	const char *name;
+};
+
+static struct kexec_link_entry kexec_links[] = {
+	{ "loaded", "kexec_loaded" },
+#ifdef CONFIG_CRASH_DUMP
+	{ "crash_loaded", "kexec_crash_loaded" },
+	{ "crash_size", "kexec_crash_size" },
+#ifdef CONFIG_CRASH_RESERVE
+	{"crash_cma_ranges", "kexec_crash_cma_ranges"},
+#endif
+#ifdef CONFIG_CRASH_HOTPLUG
+	{ "crash_elfcorehdr_size", "crash_elfcorehdr_size" },
+#endif
+#endif
+};
+
+static struct kobject *kexec_kobj;
+ATTRIBUTE_GROUPS(kexec);
+
+static int __init init_kexec_sysctl(void)
+{
+	int error;
+	int i;
+
+	kexec_kobj = kobject_create_and_add("kexec", kernel_kobj);
+	if (!kexec_kobj) {
+		pr_err("failed to create kexec kobject\n");
+		return -ENOMEM;
+	}
+
+	error = sysfs_create_groups(kexec_kobj, kexec_groups);
+	if (error)
+		goto kset_exit;
+
+	for (i = 0; i < ARRAY_SIZE(kexec_links); i++) {
+		error = compat_only_sysfs_link_entry_to_kobj(kernel_kobj, kexec_kobj,
+							     kexec_links[i].target,
+							     kexec_links[i].name);
+		if (error)
+			pr_err("Unable to create %s symlink (%d)", kexec_links[i].name, error);
+	}
+
+	return 0;
+
+kset_exit:
+	kobject_put(kexec_kobj);
+	return error;
+}
+
+subsys_initcall(init_kexec_sysctl);

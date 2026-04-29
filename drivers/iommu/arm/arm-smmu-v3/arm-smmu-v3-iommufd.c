@@ -7,14 +7,23 @@
 
 #include "arm-smmu-v3.h"
 
-void *arm_smmu_hw_info(struct device *dev, u32 *length, u32 *type)
+void *arm_smmu_hw_info(struct device *dev, u32 *length,
+		       enum iommu_hw_info_type *type)
 {
 	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	const struct arm_smmu_impl_ops *impl_ops = master->smmu->impl_ops;
 	struct iommu_hw_info_arm_smmuv3 *info;
 	u32 __iomem *base_idr;
 	unsigned int i;
 
-	info = kzalloc(sizeof(*info), GFP_KERNEL);
+	if (*type != IOMMU_HW_INFO_TYPE_DEFAULT &&
+	    *type != IOMMU_HW_INFO_TYPE_ARM_SMMUV3) {
+		if (!impl_ops || !impl_ops->hw_info)
+			return ERR_PTR(-EOPNOTSUPP);
+		return impl_ops->hw_info(master->smmu, length, type);
+	}
+
+	info = kzalloc_obj(*info);
 	if (!info)
 		return ERR_PTR(-ENOMEM);
 
@@ -90,6 +99,8 @@ static void arm_smmu_make_nested_domain_ste(
 int arm_smmu_attach_prepare_vmaster(struct arm_smmu_attach_state *state,
 				    struct arm_smmu_nested_domain *nested_domain)
 {
+	unsigned int cfg =
+		FIELD_GET(STRTAB_STE_0_CFG, le64_to_cpu(nested_domain->ste[0]));
 	struct arm_smmu_vmaster *vmaster;
 	unsigned long vsid;
 	int ret;
@@ -98,10 +109,19 @@ int arm_smmu_attach_prepare_vmaster(struct arm_smmu_attach_state *state,
 
 	ret = iommufd_viommu_get_vdev_id(&nested_domain->vsmmu->core,
 					 state->master->dev, &vsid);
-	if (ret)
+	/*
+	 * Attaching to a translate nested domain must allocate a vDEVICE prior,
+	 * as CD/ATS invalidations and vevents require a vSID to work properly.
+	 * A abort/bypass domain is allowed to attach w/o vmaster for GBPA case.
+	 */
+	if (ret) {
+		if (cfg == STRTAB_STE_0_CFG_ABORT ||
+		    cfg == STRTAB_STE_0_CFG_BYPASS)
+			return 0;
 		return ret;
+	}
 
-	vmaster = kzalloc(sizeof(*vmaster), GFP_KERNEL);
+	vmaster = kzalloc_obj(*vmaster);
 	if (!vmaster)
 		return -ENOMEM;
 	vmaster->vsmmu = nested_domain->vsmmu;
@@ -129,14 +149,15 @@ void arm_smmu_master_clear_vmaster(struct arm_smmu_master *master)
 }
 
 static int arm_smmu_attach_dev_nested(struct iommu_domain *domain,
-				      struct device *dev)
+				      struct device *dev,
+				      struct iommu_domain *old_domain)
 {
 	struct arm_smmu_nested_domain *nested_domain =
 		to_smmu_nested_domain(domain);
 	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
 	struct arm_smmu_attach_state state = {
 		.master = master,
-		.old_domain = iommu_get_domain_for_dev(dev),
+		.old_domain = old_domain,
 		.ssid = IOMMU_NO_PASID,
 	};
 	struct arm_smmu_ste ste;
@@ -156,7 +177,9 @@ static int arm_smmu_attach_dev_nested(struct iommu_domain *domain,
 	 * config bit here base this off the EATS value in the STE. If the EATS
 	 * is set then the VM must generate ATC flushes.
 	 */
-	state.disable_ats = !nested_domain->enable_ats;
+	if (FIELD_GET(STRTAB_STE_0_CFG, le64_to_cpu(nested_domain->ste[0])) ==
+	    STRTAB_STE_0_CFG_S1_TRANS)
+		state.disable_ats = !nested_domain->enable_ats;
 	ret = arm_smmu_attach_prepare(&state, domain);
 	if (ret) {
 		mutex_unlock(&arm_smmu_asid_lock);
@@ -216,7 +239,7 @@ static int arm_smmu_validate_vste(struct iommu_hwpt_arm_smmuv3 *arg,
 	return 0;
 }
 
-static struct iommu_domain *
+struct iommu_domain *
 arm_vsmmu_alloc_domain_nested(struct iommufd_viommu *viommu, u32 flags,
 			      const struct iommu_user_data *user_data)
 {
@@ -238,7 +261,7 @@ arm_vsmmu_alloc_domain_nested(struct iommufd_viommu *viommu, u32 flags,
 	if (ret)
 		return ERR_PTR(ret);
 
-	nested_domain = kzalloc(sizeof(*nested_domain), GFP_KERNEL_ACCOUNT);
+	nested_domain = kzalloc_obj(*nested_domain, GFP_KERNEL_ACCOUNT);
 	if (!nested_domain)
 		return ERR_PTR(-ENOMEM);
 
@@ -327,8 +350,8 @@ static int arm_vsmmu_convert_user_cmd(struct arm_vsmmu *vsmmu,
 	return 0;
 }
 
-static int arm_vsmmu_cache_invalidate(struct iommufd_viommu *viommu,
-				      struct iommu_user_data_array *array)
+int arm_vsmmu_cache_invalidate(struct iommufd_viommu *viommu,
+			       struct iommu_user_data_array *array)
 {
 	struct arm_vsmmu *vsmmu = container_of(viommu, struct arm_vsmmu, core);
 	struct arm_smmu_device *smmu = vsmmu->smmu;
@@ -338,7 +361,7 @@ static int arm_vsmmu_cache_invalidate(struct iommufd_viommu *viommu,
 	struct arm_vsmmu_invalidation_cmd *end;
 	int ret;
 
-	cmds = kcalloc(array->entry_num, sizeof(*cmds), GFP_KERNEL);
+	cmds = kzalloc_objs(*cmds, array->entry_num);
 	if (!cmds)
 		return -ENOMEM;
 	cur = cmds;
@@ -382,25 +405,14 @@ static const struct iommufd_viommu_ops arm_vsmmu_ops = {
 	.cache_invalidate = arm_vsmmu_cache_invalidate,
 };
 
-struct iommufd_viommu *arm_vsmmu_alloc(struct device *dev,
-				       struct iommu_domain *parent,
-				       struct iommufd_ctx *ictx,
-				       unsigned int viommu_type)
+size_t arm_smmu_get_viommu_size(struct device *dev,
+				enum iommu_viommu_type viommu_type)
 {
-	struct arm_smmu_device *smmu =
-		iommu_get_iommu_dev(dev, struct arm_smmu_device, iommu);
 	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
-	struct arm_smmu_domain *s2_parent = to_smmu_domain(parent);
-	struct arm_vsmmu *vsmmu;
-
-	if (viommu_type != IOMMU_VIOMMU_TYPE_ARM_SMMUV3)
-		return ERR_PTR(-EOPNOTSUPP);
+	struct arm_smmu_device *smmu = master->smmu;
 
 	if (!(smmu->features & ARM_SMMU_FEAT_NESTING))
-		return ERR_PTR(-EOPNOTSUPP);
-
-	if (s2_parent->smmu != master->smmu)
-		return ERR_PTR(-EINVAL);
+		return 0;
 
 	/*
 	 * FORCE_SYNC is not set with FEAT_NESTING. Some study of the exact HW
@@ -408,7 +420,7 @@ struct iommufd_viommu *arm_vsmmu_alloc(struct device *dev,
 	 * any change to remove this.
 	 */
 	if (WARN_ON(smmu->options & ARM_SMMU_OPT_CMDQ_FORCE_SYNC))
-		return ERR_PTR(-EOPNOTSUPP);
+		return 0;
 
 	/*
 	 * Must support some way to prevent the VM from bypassing the cache
@@ -420,19 +432,39 @@ struct iommufd_viommu *arm_vsmmu_alloc(struct device *dev,
 	 */
 	if (!arm_smmu_master_canwbs(master) &&
 	    !(smmu->features & ARM_SMMU_FEAT_S2FWB))
-		return ERR_PTR(-EOPNOTSUPP);
+		return 0;
 
-	vsmmu = iommufd_viommu_alloc(ictx, struct arm_vsmmu, core,
-				     &arm_vsmmu_ops);
-	if (IS_ERR(vsmmu))
-		return ERR_CAST(vsmmu);
+	if (viommu_type == IOMMU_VIOMMU_TYPE_ARM_SMMUV3)
+		return VIOMMU_STRUCT_SIZE(struct arm_vsmmu, core);
+
+	if (!smmu->impl_ops || !smmu->impl_ops->get_viommu_size)
+		return 0;
+	return smmu->impl_ops->get_viommu_size(viommu_type);
+}
+
+int arm_vsmmu_init(struct iommufd_viommu *viommu,
+		   struct iommu_domain *parent_domain,
+		   const struct iommu_user_data *user_data)
+{
+	struct arm_vsmmu *vsmmu = container_of(viommu, struct arm_vsmmu, core);
+	struct arm_smmu_device *smmu =
+		container_of(viommu->iommu_dev, struct arm_smmu_device, iommu);
+	struct arm_smmu_domain *s2_parent = to_smmu_domain(parent_domain);
+
+	if (s2_parent->smmu != smmu)
+		return -EINVAL;
 
 	vsmmu->smmu = smmu;
 	vsmmu->s2_parent = s2_parent;
 	/* FIXME Move VMID allocation from the S2 domain allocation to here */
 	vsmmu->vmid = s2_parent->s2_cfg.vmid;
 
-	return &vsmmu->core;
+	if (viommu->type == IOMMU_VIOMMU_TYPE_ARM_SMMUV3) {
+		viommu->ops = &arm_vsmmu_ops;
+		return 0;
+	}
+
+	return smmu->impl_ops->vsmmu_init(vsmmu, user_data);
 }
 
 int arm_vmaster_report_event(struct arm_smmu_vmaster *vmaster, u64 *evt)

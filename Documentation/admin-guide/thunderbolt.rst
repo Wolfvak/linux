@@ -203,10 +203,10 @@ host controller or a device, it is important that the firmware can be
 upgraded to the latest where possible bugs in it have been fixed.
 Typically OEMs provide this firmware from their support site.
 
-There is also a central site which has links where to download firmware
-for some machines:
-
-  `Thunderbolt Updates <https://thunderbolttechnology.net/updates>`_
+Currently, recommended method of updating firmware is through "fwupd" tool.
+It uses LVFS (Linux Vendor Firmware Service) portal by default to get the
+latest firmware from hardware vendors and updates connected devices if found
+compatible. For details refer to: https://github.com/fwupd/fwupd.
 
 Before you upgrade firmware on a device, host or retimer, please make
 sure it is a suitable upgrade. Failing to do that may render the device
@@ -215,18 +215,40 @@ tools!
 
 Host NVM upgrade on Apple Macs is not supported.
 
-Once the NVM image has been downloaded, you need to plug in a
-Thunderbolt device so that the host controller appears. It does not
-matter which device is connected (unless you are upgrading NVM on a
-device - then you need to connect that particular device).
+Fwupd is installed by default. If you don't have it on your system, simply
+use your distro package manager to get it.
+
+To see possible updates through fwupd, you need to plug in a Thunderbolt
+device so that the host controller appears. It does not matter which
+device is connected (unless you are upgrading NVM on a device - then you
+need to connect that particular device).
 
 Note an OEM-specific method to power the controller up ("force power") may
 be available for your system in which case there is no need to plug in a
 Thunderbolt device.
 
-After that we can write the firmware to the non-active parts of the NVM
-of the host or device. As an example here is how Intel NUC6i7KYK (Skull
-Canyon) Thunderbolt controller NVM is upgraded::
+Updating firmware using fwupd is straightforward - refer to official
+readme on fwupd github.
+
+If firmware image is written successfully, the device shortly disappears.
+Once it comes back, the driver notices it and initiates a full power
+cycle. After a while device appears again and this time it should be
+fully functional.
+
+Device of interest should display new version under "Current version"
+and "Update State: Success" in fwupd's interface.
+
+Upgrading firmware manually
+---------------------------------------------------------------
+If possible, use fwupd to updated the firmware. However, if your device OEM
+has not uploaded the firmware to LVFS, but it is available for download
+from their side, you can use method below to directly upgrade the
+firmware.
+
+Manual firmware update can be done with 'dd' tool. To update firmware
+using this method, you need to write it to the non-active parts of NVM
+of the host or device. Example on how to update Intel NUC6i7KYK
+(Skull Canyon) Thunderbolt controller NVM::
 
   # dd if=KYK_TBT_FW_0018.bin of=/sys/bus/thunderbolt/devices/0-0/nvm_non_active0/nvmem
 
@@ -235,10 +257,8 @@ upgrade process as follows::
 
   # echo 1 > /sys/bus/thunderbolt/devices/0-0/nvm_authenticate
 
-If no errors are returned, the host controller shortly disappears. Once
-it comes back the driver notices it and initiates a full power cycle.
-After a while the host controller appears again and this time it should
-be fully functional.
+If no errors are returned, device should behave as described in previous
+section.
 
 We can verify that the new NVM firmware is active by running the following
 commands::
@@ -350,7 +370,7 @@ is built-in to the kernel image, there is no need to do anything.
 
 The driver will create one virtual ethernet interface per Thunderbolt
 port which are named like ``thunderbolt0`` and so on. From this point
-you can either use standard userspace tools like ``ifconfig`` to
+you can either use standard userspace tools like ``ip`` to
 configure the interface or let your GUI handle it automatically.
 
 Forcing power
@@ -358,12 +378,7 @@ Forcing power
 Many OEMs include a method that can be used to force the power of a
 Thunderbolt controller to an "On" state even if nothing is connected.
 If supported by your machine this will be exposed by the WMI bus with
-a sysfs attribute called "force_power".
-
-For example the intel-wmi-thunderbolt driver exposes this attribute in:
-  /sys/bus/wmi/devices/86CCFD48-205E-4A77-9C48-2021CBEDE341/force_power
-
-  To force the power to on, write 1 to this attribute file.
-  To disable force power, write 0 to this attribute file.
+a sysfs attribute called "force_power", see
+Documentation/ABI/testing/sysfs-platform-intel-wmi-thunderbolt for details.
 
 Note: it's currently not possible to query the force power state of a platform.

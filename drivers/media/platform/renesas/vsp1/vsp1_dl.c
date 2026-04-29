@@ -10,6 +10,7 @@
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
 #include <linux/gfp.h>
+#include <linux/lockdep.h>
 #include <linux/refcount.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
@@ -176,6 +177,7 @@ struct vsp1_dl_cmd_pool {
  * @bodies: list of extra display list bodies
  * @pre_cmd: pre command to be issued through extended dl header
  * @post_cmd: post command to be issued through extended dl header
+ * @allocated: flag to detect double list release
  * @has_chain: if true, indicates that there's a partition chain
  * @chain: entry in the display list partition chain
  * @flags: display list flags, a combination of VSP1_DL_FRAME_END_*
@@ -193,6 +195,8 @@ struct vsp1_dl_list {
 
 	struct vsp1_dl_ext_cmd *pre_cmd;
 	struct vsp1_dl_ext_cmd *post_cmd;
+
+	bool allocated;
 
 	bool has_chain;
 	struct list_head chain;
@@ -212,6 +216,7 @@ struct vsp1_dl_list {
  * @pending: list waiting to be queued to the hardware
  * @pool: body pool for the display list bodies
  * @cmdpool: commands pool for extended display list
+ * @list_count: number of allocated display lists
  */
 struct vsp1_dl_manager {
 	unsigned int index;
@@ -226,6 +231,8 @@ struct vsp1_dl_manager {
 
 	struct vsp1_dl_body_pool *pool;
 	struct vsp1_dl_cmd_pool *cmdpool;
+
+	size_t list_count;
 };
 
 /* -----------------------------------------------------------------------------
@@ -252,7 +259,7 @@ vsp1_dl_body_pool_create(struct vsp1_device *vsp1, unsigned int num_bodies,
 	size_t dlb_size;
 	unsigned int i;
 
-	pool = kzalloc(sizeof(*pool), GFP_KERNEL);
+	pool = kzalloc_obj(*pool);
 	if (!pool)
 		return NULL;
 
@@ -267,7 +274,7 @@ vsp1_dl_body_pool_create(struct vsp1_device *vsp1, unsigned int num_bodies,
 	dlb_size = num_entries * sizeof(struct vsp1_dl_entry) + extra_size;
 	pool->size = dlb_size * num_bodies;
 
-	pool->bodies = kcalloc(num_bodies, sizeof(*pool->bodies), GFP_KERNEL);
+	pool->bodies = kzalloc_objs(*pool->bodies, num_bodies);
 	if (!pool->bodies) {
 		kfree(pool);
 		return NULL;
@@ -427,7 +434,7 @@ vsp1_dl_cmd_pool_create(struct vsp1_device *vsp1, enum vsp1_extcmd_type type,
 	unsigned int i;
 	size_t cmd_size;
 
-	pool = kzalloc(sizeof(*pool), GFP_KERNEL);
+	pool = kzalloc_obj(*pool);
 	if (!pool)
 		return NULL;
 
@@ -436,7 +443,7 @@ vsp1_dl_cmd_pool_create(struct vsp1_device *vsp1, enum vsp1_extcmd_type type,
 	spin_lock_init(&pool->lock);
 	INIT_LIST_HEAD(&pool->free);
 
-	pool->cmds = kcalloc(num_cmds, sizeof(*pool->cmds), GFP_KERNEL);
+	pool->cmds = kzalloc_objs(*pool->cmds, num_cmds);
 	if (!pool->cmds) {
 		kfree(pool);
 		return NULL;
@@ -550,7 +557,7 @@ static struct vsp1_dl_list *vsp1_dl_list_alloc(struct vsp1_dl_manager *dlm)
 	struct vsp1_dl_list *dl;
 	size_t header_offset;
 
-	dl = kzalloc(sizeof(*dl), GFP_KERNEL);
+	dl = kzalloc_obj(*dl);
 	if (!dl)
 		return NULL;
 
@@ -606,6 +613,8 @@ struct vsp1_dl_list *vsp1_dl_list_get(struct vsp1_dl_manager *dlm)
 	struct vsp1_dl_list *dl = NULL;
 	unsigned long flags;
 
+	lockdep_assert_not_held(&dlm->lock);
+
 	spin_lock_irqsave(&dlm->lock, flags);
 
 	if (!list_empty(&dlm->free)) {
@@ -617,6 +626,7 @@ struct vsp1_dl_list *vsp1_dl_list_get(struct vsp1_dl_manager *dlm)
 		 * display list can assert list_empty() if it is not in a chain.
 		 */
 		INIT_LIST_HEAD(&dl->chain);
+		dl->allocated = true;
 	}
 
 	spin_unlock_irqrestore(&dlm->lock, flags);
@@ -631,6 +641,8 @@ static void __vsp1_dl_list_put(struct vsp1_dl_list *dl)
 
 	if (!dl)
 		return;
+
+	lockdep_assert_held(&dl->dlm->lock);
 
 	/*
 	 * Release any linked display-lists which were chained for a single
@@ -656,6 +668,13 @@ static void __vsp1_dl_list_put(struct vsp1_dl_list *dl)
 	 * has at least one body, thus we reinitialise the entries list.
 	 */
 	dl->body0->num_entries = 0;
+
+	/*
+	 * Return the display list to the 'free' pool. If the list had already
+	 * been returned be loud about it.
+	 */
+	WARN_ON_ONCE(!dl->allocated);
+	dl->allocated = false;
 
 	list_add_tail(&dl->list, &dl->dlm->free);
 }
@@ -1067,6 +1086,7 @@ void vsp1_dlm_setup(struct vsp1_device *vsp1)
 void vsp1_dlm_reset(struct vsp1_dl_manager *dlm)
 {
 	unsigned long flags;
+	size_t list_count;
 
 	spin_lock_irqsave(&dlm->lock, flags);
 
@@ -1074,7 +1094,10 @@ void vsp1_dlm_reset(struct vsp1_dl_manager *dlm)
 	__vsp1_dl_list_put(dlm->queued);
 	__vsp1_dl_list_put(dlm->pending);
 
+	list_count = list_count_nodes(&dlm->free);
 	spin_unlock_irqrestore(&dlm->lock, flags);
+
+	WARN_ON_ONCE(list_count != dlm->list_count);
 
 	dlm->active = NULL;
 	dlm->queued = NULL;
@@ -1144,6 +1167,8 @@ struct vsp1_dl_manager *vsp1_dlm_create(struct vsp1_device *vsp1,
 
 		list_add_tail(&dl->list, &dlm->free);
 	}
+
+	dlm->list_count = prealloc;
 
 	if (vsp1_feature(vsp1, VSP1_HAS_EXT_DL)) {
 		dlm->cmdpool = vsp1_dl_cmd_pool_create(vsp1,

@@ -7,20 +7,20 @@
 #include <linux/kernel.h>
 #include <linux/pwm.h>
 #include <linux/string_helpers.h>
-
 #include <acpi/video.h>
 
 #include <drm/drm_file.h>
 #include <drm/drm_print.h>
 
 #include "i915_reg.h"
-#include "i915_utils.h"
 #include "intel_backlight.h"
 #include "intel_backlight_regs.h"
 #include "intel_connector.h"
 #include "intel_de.h"
+#include "intel_display_regs.h"
 #include "intel_display_rpm.h"
 #include "intel_display_types.h"
+#include "intel_display_utils.h"
 #include "intel_dp_aux_backlight.h"
 #include "intel_dsi_dcs_backlight.h"
 #include "intel_panel.h"
@@ -236,7 +236,8 @@ static void i9xx_set_backlight(const struct drm_connector_state *conn_state, u32
 	struct intel_panel *panel = &connector->panel;
 	u32 tmp, mask;
 
-	drm_WARN_ON(display->drm, panel->backlight.pwm_level_max == 0);
+	if (drm_WARN_ON(display->drm, panel->backlight.pwm_level_max == 0))
+		return;
 
 	if (panel->backlight.combination_mode) {
 		struct pci_dev *pdev = to_pci_dev(display->drm->dev);

@@ -12,6 +12,7 @@
 #define SCREEN_INFO_MAX_RESOURCES	3
 
 struct pci_dev;
+struct pixel_format;
 struct resource;
 
 static inline bool __screen_info_has_lfb(unsigned int type)
@@ -136,6 +137,7 @@ static inline u32 __screen_info_vesapm_info_base(const struct screen_info *si)
 ssize_t screen_info_resources(const struct screen_info *si, struct resource *r, size_t num);
 
 u32 __screen_info_lfb_bits_per_pixel(const struct screen_info *si);
+int screen_info_pixel_format(const struct screen_info *si, struct pixel_format *f);
 
 #if defined(CONFIG_PCI)
 void screen_info_apply_fixups(void);
@@ -148,7 +150,5 @@ static inline struct pci_dev *screen_info_pci_dev(const struct screen_info *si)
 	return NULL;
 }
 #endif
-
-extern struct screen_info screen_info;
 
 #endif /* _SCREEN_INFO_H */

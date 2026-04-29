@@ -3,6 +3,7 @@
  * Copyright 2019-2020 NXP
  */
 
+#include <linux/bits.h>
 #include <linux/clk.h>
 #include <linux/device.h>
 #include <linux/errno.h>
@@ -245,26 +246,41 @@ static void mxc_isi_v4l2_cleanup(struct mxc_isi_dev *isi)
 
 /* Panic will assert when the buffers are 50% full */
 
-/* For i.MX8QXP C0 and i.MX8MN ISI IER version */
+/* For i.MX8MN ISI IER version */
 static const struct mxc_isi_ier_reg mxc_imx8_isi_ier_v1 = {
-	.oflw_y_buf_en = { .offset = 19, .mask = 0x80000  },
-	.oflw_u_buf_en = { .offset = 21, .mask = 0x200000 },
-	.oflw_v_buf_en = { .offset = 23, .mask = 0x800000 },
+	.oflw_y_buf_en = { .mask = BIT(19) },
+	.oflw_u_buf_en = { .mask = BIT(21) },
+	.oflw_v_buf_en = { .mask = BIT(23) },
 
-	.panic_y_buf_en = {.offset = 20, .mask = 0x100000  },
-	.panic_u_buf_en = {.offset = 22, .mask = 0x400000  },
-	.panic_v_buf_en = {.offset = 24, .mask = 0x1000000 },
+	.panic_y_buf_en = { .mask = BIT(20) },
+	.panic_u_buf_en = { .mask = BIT(22) },
+	.panic_v_buf_en = { .mask = BIT(24) },
 };
 
-/* For i.MX8MP ISI IER version */
+/* For i.MX8QXP C0 and i.MX8MP ISI IER version */
 static const struct mxc_isi_ier_reg mxc_imx8_isi_ier_v2 = {
-	.oflw_y_buf_en = { .offset = 18, .mask = 0x40000  },
-	.oflw_u_buf_en = { .offset = 20, .mask = 0x100000 },
-	.oflw_v_buf_en = { .offset = 22, .mask = 0x400000 },
+	.oflw_y_buf_en = { .mask = BIT(18) },
+	.oflw_u_buf_en = { .mask = BIT(20) },
+	.oflw_v_buf_en = { .mask = BIT(22) },
 
-	.panic_y_buf_en = {.offset = 19, .mask = 0x80000  },
-	.panic_u_buf_en = {.offset = 21, .mask = 0x200000 },
-	.panic_v_buf_en = {.offset = 23, .mask = 0x800000 },
+	.panic_y_buf_en = { .mask = BIT(19) },
+	.panic_u_buf_en = { .mask = BIT(21) },
+	.panic_v_buf_en = { .mask = BIT(23) },
+};
+
+/* For i.MX8QM ISI IER version */
+static const struct mxc_isi_ier_reg mxc_imx8_isi_ier_qm = {
+	.oflw_y_buf_en = { .mask = BIT(16) },
+	.oflw_u_buf_en = { .mask = BIT(19) },
+	.oflw_v_buf_en = { .mask = BIT(22) },
+
+	.excs_oflw_y_buf_en = { .mask = BIT(17) },
+	.excs_oflw_u_buf_en = { .mask = BIT(20) },
+	.excs_oflw_v_buf_en = { .mask = BIT(23) },
+
+	.panic_y_buf_en = { .mask = BIT(18) },
+	.panic_u_buf_en = { .mask = BIT(21) },
+	.panic_v_buf_en = { .mask = BIT(24) },
 };
 
 /* Panic will assert when the buffers are 50% full */
@@ -274,11 +290,6 @@ static const struct mxc_isi_set_thd mxc_imx8_isi_thd_v1 = {
 	.panic_set_thd_v = { .mask = 0xf0000, .offset = 16, .threshold = 0x7 },
 };
 
-static const struct clk_bulk_data mxc_imx8mn_clks[] = {
-	{ .id = "axi" },
-	{ .id = "apb" },
-};
-
 static const struct mxc_isi_plat_data mxc_imx8mn_data = {
 	.model			= MXC_ISI_IMX8MN,
 	.num_ports		= 1,
@@ -286,8 +297,6 @@ static const struct mxc_isi_plat_data mxc_imx8mn_data = {
 	.reg_offset		= 0,
 	.ier_reg		= &mxc_imx8_isi_ier_v1,
 	.set_thd		= &mxc_imx8_isi_thd_v1,
-	.clks			= mxc_imx8mn_clks,
-	.num_clks		= ARRAY_SIZE(mxc_imx8mn_clks),
 	.buf_active_reverse	= false,
 	.gasket_ops		= &mxc_imx8_gasket_ops,
 	.has_36bit_dma		= false,
@@ -300,11 +309,31 @@ static const struct mxc_isi_plat_data mxc_imx8mp_data = {
 	.reg_offset		= 0x2000,
 	.ier_reg		= &mxc_imx8_isi_ier_v2,
 	.set_thd		= &mxc_imx8_isi_thd_v1,
-	.clks			= mxc_imx8mn_clks,
-	.num_clks		= ARRAY_SIZE(mxc_imx8mn_clks),
 	.buf_active_reverse	= true,
 	.gasket_ops		= &mxc_imx8_gasket_ops,
 	.has_36bit_dma		= true,
+};
+
+static const struct mxc_isi_plat_data mxc_imx8qm_data = {
+	.model			= MXC_ISI_IMX8QM,
+	.num_ports		= 5,
+	.num_channels		= 8,
+	.reg_offset		= 0x10000,
+	.ier_reg		= &mxc_imx8_isi_ier_qm,
+	.set_thd		= &mxc_imx8_isi_thd_v1,
+	.buf_active_reverse	= true,
+	.has_36bit_dma		= false,
+};
+
+static const struct mxc_isi_plat_data mxc_imx8qxp_data = {
+	.model			= MXC_ISI_IMX8QXP,
+	.num_ports		= 5,
+	.num_channels		= 6,
+	.reg_offset		= 0x10000,
+	.ier_reg		= &mxc_imx8_isi_ier_v2,
+	.set_thd		= &mxc_imx8_isi_thd_v1,
+	.buf_active_reverse	= true,
+	.has_36bit_dma		= false,
 };
 
 static const struct mxc_isi_plat_data mxc_imx8ulp_data = {
@@ -314,8 +343,17 @@ static const struct mxc_isi_plat_data mxc_imx8ulp_data = {
 	.reg_offset		= 0x0,
 	.ier_reg		= &mxc_imx8_isi_ier_v2,
 	.set_thd		= &mxc_imx8_isi_thd_v1,
-	.clks			= mxc_imx8mn_clks,
-	.num_clks		= ARRAY_SIZE(mxc_imx8mn_clks),
+	.buf_active_reverse	= true,
+	.has_36bit_dma		= false,
+};
+
+static const struct mxc_isi_plat_data mxc_imx91_data = {
+	.model			= MXC_ISI_IMX91,
+	.num_ports		= 1,
+	.num_channels		= 1,
+	.reg_offset		= 0,
+	.ier_reg		= &mxc_imx8_isi_ier_v2,
+	.set_thd		= &mxc_imx8_isi_thd_v1,
 	.buf_active_reverse	= true,
 	.has_36bit_dma		= false,
 };
@@ -327,8 +365,6 @@ static const struct mxc_isi_plat_data mxc_imx93_data = {
 	.reg_offset		= 0,
 	.ier_reg		= &mxc_imx8_isi_ier_v2,
 	.set_thd		= &mxc_imx8_isi_thd_v1,
-	.clks			= mxc_imx8mn_clks,
-	.num_clks		= ARRAY_SIZE(mxc_imx8mn_clks),
 	.buf_active_reverse	= true,
 	.gasket_ops		= &mxc_imx93_gasket_ops,
 	.has_36bit_dma		= false,
@@ -348,6 +384,8 @@ static int mxc_isi_pm_suspend(struct device *dev)
 
 		mxc_isi_video_suspend(pipe);
 	}
+
+	mxc_isi_m2m_suspend(&isi->m2m);
 
 	return pm_runtime_force_suspend(dev);
 }
@@ -378,6 +416,12 @@ static int mxc_isi_pm_resume(struct device *dev)
 		}
 	}
 
+	ret = mxc_isi_m2m_resume(&isi->m2m);
+	if (ret) {
+		dev_err(dev, "Failed to resume ISI (%d) for m2m\n", ret);
+		err = ret;
+	}
+
 	return err;
 }
 
@@ -385,7 +429,7 @@ static int mxc_isi_runtime_suspend(struct device *dev)
 {
 	struct mxc_isi_dev *isi = dev_get_drvdata(dev);
 
-	clk_bulk_disable_unprepare(isi->pdata->num_clks, isi->clks);
+	clk_bulk_disable_unprepare(isi->num_clks, isi->clks);
 
 	return 0;
 }
@@ -395,7 +439,7 @@ static int mxc_isi_runtime_resume(struct device *dev)
 	struct mxc_isi_dev *isi = dev_get_drvdata(dev);
 	int ret;
 
-	ret = clk_bulk_prepare_enable(isi->pdata->num_clks, isi->clks);
+	ret = clk_bulk_prepare_enable(isi->num_clks, isi->clks);
 	if (ret) {
 		dev_err(dev, "Failed to enable clocks (%d)\n", ret);
 		return ret;
@@ -412,27 +456,6 @@ static const struct dev_pm_ops mxc_isi_pm_ops = {
 /* -----------------------------------------------------------------------------
  * Probe, remove & driver
  */
-
-static int mxc_isi_clk_get(struct mxc_isi_dev *isi)
-{
-	unsigned int size = isi->pdata->num_clks
-			  * sizeof(*isi->clks);
-	int ret;
-
-	isi->clks = devm_kmemdup(isi->dev, isi->pdata->clks, size, GFP_KERNEL);
-	if (!isi->clks)
-		return -ENOMEM;
-
-	ret = devm_clk_bulk_get(isi->dev, isi->pdata->num_clks,
-				isi->clks);
-	if (ret < 0) {
-		dev_err(isi->dev, "Failed to acquire clocks: %d\n",
-			ret);
-		return ret;
-	}
-
-	return 0;
-}
 
 static int mxc_isi_probe(struct platform_device *pdev)
 {
@@ -451,47 +474,38 @@ static int mxc_isi_probe(struct platform_device *pdev)
 
 	isi->pdata = of_device_get_match_data(dev);
 
-	isi->pipes = kcalloc(isi->pdata->num_channels, sizeof(isi->pipes[0]),
-			     GFP_KERNEL);
+	isi->pipes = kzalloc_objs(isi->pipes[0], isi->pdata->num_channels);
 	if (!isi->pipes)
 		return -ENOMEM;
 
-	ret = mxc_isi_clk_get(isi);
-	if (ret < 0) {
-		dev_err(dev, "Failed to get clocks\n");
-		return ret;
-	}
+	isi->num_clks = devm_clk_bulk_get_all(dev, &isi->clks);
+	if (isi->num_clks < 0)
+		return dev_err_probe(dev, isi->num_clks, "Failed to get clocks\n");
 
 	isi->regs = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(isi->regs)) {
-		dev_err(dev, "Failed to get ISI register map\n");
-		return PTR_ERR(isi->regs);
-	}
+	if (IS_ERR(isi->regs))
+		return dev_err_probe(dev, PTR_ERR(isi->regs),
+				     "Failed to get ISI register map\n");
 
 	if (isi->pdata->gasket_ops) {
 		isi->gasket = syscon_regmap_lookup_by_phandle(dev->of_node,
 							      "fsl,blk-ctrl");
-		if (IS_ERR(isi->gasket)) {
-			ret = PTR_ERR(isi->gasket);
-			dev_err(dev, "failed to get gasket: %d\n", ret);
-			return ret;
-		}
+		if (IS_ERR(isi->gasket))
+			return dev_err_probe(dev, PTR_ERR(isi->gasket),
+					     "failed to get gasket\n");
 	}
 
 	dma_size = isi->pdata->has_36bit_dma ? 36 : 32;
-	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(dma_size));
-	if (ret) {
-		dev_err(dev, "failed to set DMA mask\n");
-		return ret;
-	}
+	dma_set_mask_and_coherent(dev, DMA_BIT_MASK(dma_size));
 
-	pm_runtime_enable(dev);
+	ret = devm_pm_runtime_enable(dev);
+	if (ret)
+		return ret;
 
 	ret = mxc_isi_crossbar_init(isi);
-	if (ret) {
-		dev_err(dev, "Failed to initialize crossbar: %d\n", ret);
-		goto err_pm;
-	}
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "Failed to initialize crossbar\n");
 
 	for (i = 0; i < isi->pdata->num_channels; ++i) {
 		ret = mxc_isi_pipe_init(isi, i);
@@ -514,8 +528,7 @@ static int mxc_isi_probe(struct platform_device *pdev)
 
 err_xbar:
 	mxc_isi_crossbar_cleanup(&isi->crossbar);
-err_pm:
-	pm_runtime_disable(isi->dev);
+
 	return ret;
 }
 
@@ -534,14 +547,15 @@ static void mxc_isi_remove(struct platform_device *pdev)
 
 	mxc_isi_crossbar_cleanup(&isi->crossbar);
 	mxc_isi_v4l2_cleanup(isi);
-
-	pm_runtime_disable(isi->dev);
 }
 
 static const struct of_device_id mxc_isi_of_match[] = {
 	{ .compatible = "fsl,imx8mn-isi", .data = &mxc_imx8mn_data },
 	{ .compatible = "fsl,imx8mp-isi", .data = &mxc_imx8mp_data },
+	{ .compatible = "fsl,imx8qm-isi", .data = &mxc_imx8qm_data },
+	{ .compatible = "fsl,imx8qxp-isi", .data = &mxc_imx8qxp_data },
 	{ .compatible = "fsl,imx8ulp-isi", .data = &mxc_imx8ulp_data },
+	{ .compatible = "fsl,imx91-isi", .data = &mxc_imx91_data },
 	{ .compatible = "fsl,imx93-isi", .data = &mxc_imx93_data },
 	{ /* sentinel */ },
 };
@@ -558,7 +572,6 @@ static struct platform_driver mxc_isi_driver = {
 };
 module_platform_driver(mxc_isi_driver);
 
-MODULE_ALIAS("ISI");
 MODULE_AUTHOR("Freescale Semiconductor, Inc.");
 MODULE_DESCRIPTION("IMX8 Image Sensing Interface driver");
 MODULE_LICENSE("GPL");

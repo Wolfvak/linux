@@ -228,15 +228,18 @@ static inline unsigned long ccu_div_var_calc_divider(unsigned long rate,
 		       CCU_DIV_CLKDIV_MAX(mask));
 }
 
-static long ccu_div_var_round_rate(struct clk_hw *hw, unsigned long rate,
-				   unsigned long *parent_rate)
+static int ccu_div_var_determine_rate(struct clk_hw *hw,
+				      struct clk_rate_request *req)
 {
 	struct ccu_div *div = to_ccu_div(hw);
 	unsigned long divider;
 
-	divider = ccu_div_var_calc_divider(rate, *parent_rate, div->mask);
+	divider = ccu_div_var_calc_divider(req->rate, req->best_parent_rate,
+					   div->mask);
 
-	return ccu_div_calc_freq(*parent_rate, divider);
+	req->rate = ccu_div_calc_freq(req->best_parent_rate, divider);
+
+	return 0;
 }
 
 /*
@@ -308,12 +311,14 @@ static unsigned long ccu_div_fixed_recalc_rate(struct clk_hw *hw,
 	return ccu_div_calc_freq(parent_rate, div->divider);
 }
 
-static long ccu_div_fixed_round_rate(struct clk_hw *hw, unsigned long rate,
-				     unsigned long *parent_rate)
+static int ccu_div_fixed_determine_rate(struct clk_hw *hw,
+					struct clk_rate_request *req)
 {
 	struct ccu_div *div = to_ccu_div(hw);
 
-	return ccu_div_calc_freq(*parent_rate, div->divider);
+	req->rate = ccu_div_calc_freq(req->best_parent_rate, div->divider);
+
+	return 0;
 }
 
 static int ccu_div_fixed_set_rate(struct clk_hw *hw, unsigned long rate,
@@ -442,7 +447,7 @@ static void ccu_div_var_debug_init(struct clk_hw *hw, struct dentry *dentry)
 	num += !!(div->flags & CLK_SET_RATE_GATE) +
 		!!(div->features & CCU_DIV_RESET_DOMAIN);
 
-	bits = kcalloc(num, sizeof(*bits), GFP_KERNEL);
+	bits = kzalloc_objs(*bits, num);
 	if (!bits)
 		return;
 
@@ -484,7 +489,7 @@ static void ccu_div_gate_debug_init(struct clk_hw *hw, struct dentry *dentry)
 	struct ccu_div *div = to_ccu_div(hw);
 	struct ccu_div_dbgfs_bit *bit;
 
-	bit = kmalloc(sizeof(*bit), GFP_KERNEL);
+	bit = kmalloc_obj(*bit);
 	if (!bit)
 		return;
 
@@ -502,7 +507,7 @@ static void ccu_div_buf_debug_init(struct clk_hw *hw, struct dentry *dentry)
 	struct ccu_div *div = to_ccu_div(hw);
 	struct ccu_div_dbgfs_bit *bit;
 
-	bit = kmalloc(sizeof(*bit), GFP_KERNEL);
+	bit = kmalloc_obj(*bit);
 	if (!bit)
 		return;
 
@@ -534,14 +539,14 @@ static const struct clk_ops ccu_div_var_gate_to_set_ops = {
 	.disable = ccu_div_gate_disable,
 	.is_enabled = ccu_div_gate_is_enabled,
 	.recalc_rate = ccu_div_var_recalc_rate,
-	.round_rate = ccu_div_var_round_rate,
+	.determine_rate = ccu_div_var_determine_rate,
 	.set_rate = ccu_div_var_set_rate_fast,
 	.debug_init = ccu_div_var_debug_init
 };
 
 static const struct clk_ops ccu_div_var_nogate_ops = {
 	.recalc_rate = ccu_div_var_recalc_rate,
-	.round_rate = ccu_div_var_round_rate,
+	.determine_rate = ccu_div_var_determine_rate,
 	.set_rate = ccu_div_var_set_rate_slow,
 	.debug_init = ccu_div_var_debug_init
 };
@@ -551,7 +556,7 @@ static const struct clk_ops ccu_div_gate_ops = {
 	.disable = ccu_div_gate_disable,
 	.is_enabled = ccu_div_gate_is_enabled,
 	.recalc_rate = ccu_div_fixed_recalc_rate,
-	.round_rate = ccu_div_fixed_round_rate,
+	.determine_rate = ccu_div_fixed_determine_rate,
 	.set_rate = ccu_div_fixed_set_rate,
 	.debug_init = ccu_div_gate_debug_init
 };
@@ -565,7 +570,7 @@ static const struct clk_ops ccu_div_buf_ops = {
 
 static const struct clk_ops ccu_div_fixed_ops = {
 	.recalc_rate = ccu_div_fixed_recalc_rate,
-	.round_rate = ccu_div_fixed_round_rate,
+	.determine_rate = ccu_div_fixed_determine_rate,
 	.set_rate = ccu_div_fixed_set_rate,
 	.debug_init = ccu_div_fixed_debug_init
 };
@@ -580,7 +585,7 @@ struct ccu_div *ccu_div_hw_register(const struct ccu_div_init_data *div_init)
 	if (!div_init)
 		return ERR_PTR(-EINVAL);
 
-	div = kzalloc(sizeof(*div), GFP_KERNEL);
+	div = kzalloc_obj(*div);
 	if (!div)
 		return ERR_PTR(-ENOMEM);
 

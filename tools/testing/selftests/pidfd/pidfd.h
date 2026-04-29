@@ -16,8 +16,21 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#include "../kselftest.h"
+/*
+ * Remove the userspace definitions of the following preprocessor symbols
+ * to avoid duplicate-definition warnings from the subsequent in-kernel
+ * definitions.
+ */
+#undef SCHED_NORMAL
+#undef SCHED_FLAG_KEEP_ALL
+#undef SCHED_FLAG_UTIL_CLAMP
+
+#include "kselftest.h"
 #include "../clone3/clone3_selftests.h"
+
+#ifndef FD_PIDFS_ROOT
+#define FD_PIDFS_ROOT -10002
+#endif
 
 #ifndef P_PIDFD
 #define P_PIDFD 3
@@ -56,7 +69,7 @@
 #endif
 
 #ifndef PIDFD_SELF_THREAD_GROUP
-#define PIDFD_SELF_THREAD_GROUP		-20000 /* Current thread group leader. */
+#define PIDFD_SELF_THREAD_GROUP		-10001 /* Current thread group leader. */
 #endif
 
 #ifndef PIDFD_SELF
@@ -135,6 +148,14 @@
 #define PIDFD_INFO_COREDUMP	(1UL << 4)
 #endif
 
+#ifndef PIDFD_INFO_SUPPORTED_MASK
+#define PIDFD_INFO_SUPPORTED_MASK	(1UL << 5)
+#endif
+
+#ifndef PIDFD_INFO_COREDUMP_SIGNAL
+#define PIDFD_INFO_COREDUMP_SIGNAL	(1UL << 6)
+#endif
+
 #ifndef PIDFD_COREDUMPED
 #define PIDFD_COREDUMPED	(1U << 0) /* Did crash and... */
 #endif
@@ -170,8 +191,11 @@ struct pidfd_info {
 	__u32 fsuid;
 	__u32 fsgid;
 	__s32 exit_code;
-	__u32 coredump_mask;
-	__u32 __spare1;
+	struct {
+		__u32 coredump_mask;
+		__u32 coredump_signal;
+	};
+	__u64 supported_mask;
 };
 
 /*

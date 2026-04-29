@@ -4,7 +4,7 @@
  *
  * Builtin list command: list all event types
  *
- * Copyright (C) 2009, Thomas Gleixner <tglx@linutronix.de>
+ * Copyright (C) 2009, Linutronix GmbH, Thomas Gleixner <tglx@kernel.org>
  * Copyright (C) 2008-2009, Red Hat Inc, Ingo Molnar <mingo@redhat.com>
  * Copyright (C) 2011, Red Hat Inc, Arnaldo Carvalho de Melo <acme@redhat.com>
  */
@@ -58,6 +58,8 @@ struct print_state {
 	bool metrics;
 	/** @metricgroups: Controls printing of metric and metric groups. */
 	bool metricgroups;
+	/** @exclude_abi: Exclude PMUs with types less than PERF_TYPE_MAX except PERF_TYPE_RAW. */
+	bool exclude_abi;
 	/** @last_topic: The last printed event topic. */
 	char *last_topic;
 	/** @last_metricgroups: The last printed metric group. */
@@ -113,7 +115,8 @@ static void wordwrap(FILE *fp, const char *s, int start, int max, int corr)
 	}
 }
 
-static void default_print_event(void *ps, const char *topic, const char *pmu_name,
+static void default_print_event(void *ps, const char *topic,
+				const char *pmu_name, u32 pmu_type,
 				const char *event_name, const char *event_alias,
 				const char *scale_unit __maybe_unused,
 				bool deprecated, const char *event_type_desc,
@@ -127,7 +130,10 @@ static void default_print_event(void *ps, const char *topic, const char *pmu_nam
 	if (deprecated && !print_state->deprecated)
 		return;
 
-	if (print_state->pmu_glob && pmu_name && !strglobmatch(pmu_name, print_state->pmu_glob))
+	if (print_state->pmu_glob && (!pmu_name || !strglobmatch(pmu_name, print_state->pmu_glob)))
+		return;
+
+	if (print_state->exclude_abi && pmu_type < PERF_TYPE_MAX && pmu_type != PERF_TYPE_RAW)
 		return;
 
 	if (print_state->event_glob &&
@@ -277,8 +283,8 @@ static void default_print_metric(void *ps,
 }
 
 struct json_print_state {
-	/** @fp: File to write output to. */
-	FILE *fp;
+	/** The shared print_state */
+	struct print_state common;
 	/** Should a separator be printed prior to the next item? */
 	bool need_sep;
 };
@@ -286,7 +292,7 @@ struct json_print_state {
 static void json_print_start(void *ps)
 {
 	struct json_print_state *print_state = ps;
-	FILE *fp = print_state->fp;
+	FILE *fp = print_state->common.fp;
 
 	fprintf(fp, "[\n");
 }
@@ -294,7 +300,7 @@ static void json_print_start(void *ps)
 static void json_print_end(void *ps)
 {
 	struct json_print_state *print_state = ps;
-	FILE *fp = print_state->fp;
+	FILE *fp = print_state->common.fp;
 
 	fprintf(fp, "%s]\n", print_state->need_sep ? "\n" : "");
 }
@@ -354,7 +360,8 @@ static void fix_escape_fprintf(FILE *fp, struct strbuf *buf, const char *fmt, ..
 	fputs(buf->buf, fp);
 }
 
-static void json_print_event(void *ps, const char *topic, const char *pmu_name,
+static void json_print_event(void *ps, const char *topic,
+			     const char *pmu_name, u32 pmu_type __maybe_unused,
 			     const char *event_name, const char *event_alias,
 			     const char *scale_unit,
 			     bool deprecated, const char *event_type_desc,
@@ -363,8 +370,25 @@ static void json_print_event(void *ps, const char *topic, const char *pmu_name,
 {
 	struct json_print_state *print_state = ps;
 	bool need_sep = false;
-	FILE *fp = print_state->fp;
+	FILE *fp = print_state->common.fp;
 	struct strbuf buf;
+
+	if (deprecated && !print_state->common.deprecated)
+		return;
+
+	if (print_state->common.pmu_glob &&
+	    (!pmu_name || !strglobmatch(pmu_name, print_state->common.pmu_glob)))
+		return;
+
+	if (print_state->common.exclude_abi && pmu_type < PERF_TYPE_MAX &&
+	    pmu_type != PERF_TYPE_RAW)
+		return;
+
+	if (print_state->common.event_glob &&
+	    (!event_name || !strglobmatch(event_name, print_state->common.event_glob)) &&
+	    (!event_alias || !strglobmatch(event_alias, print_state->common.event_glob)) &&
+	    (!topic || !strglobmatch_nocase(topic, print_state->common.event_glob)))
+		return;
 
 	strbuf_init(&buf, 0);
 	fprintf(fp, "%s{\n", print_state->need_sep ? ",\n" : "");
@@ -439,8 +463,15 @@ static void json_print_metric(void *ps __maybe_unused, const char *group,
 {
 	struct json_print_state *print_state = ps;
 	bool need_sep = false;
-	FILE *fp = print_state->fp;
+	FILE *fp = print_state->common.fp;
 	struct strbuf buf;
+
+	if (print_state->common.event_glob &&
+	    (!print_state->common.metrics || !name ||
+	     !strglobmatch(name, print_state->common.event_glob)) &&
+	    (!print_state->common.metricgroups || !group ||
+	     !strglobmatch(group, print_state->common.event_glob)))
+		return;
 
 	strbuf_init(&buf, 0);
 	fprintf(fp, "%s{\n", print_state->need_sep ? ",\n" : "");
@@ -514,10 +545,12 @@ int cmd_list(int argc, const char **argv)
 		.fp = stdout,
 		.desc = true,
 	};
-	struct print_state json_ps = {
-		.fp = stdout,
+	struct json_print_state json_ps = {
+		.common = {
+			.fp = stdout,
+		},
 	};
-	void *ps = &default_ps;
+	struct print_state *ps = &default_ps;
 	struct print_callbacks print_cb = {
 		.print_start = default_print_start,
 		.print_end = default_print_end,
@@ -565,9 +598,11 @@ int cmd_list(int argc, const char **argv)
 	argc = parse_options(argc, argv, list_options, list_usage,
 			     PARSE_OPT_STOP_AT_NON_OPTION);
 
+	if (json)
+		ps = &json_ps.common;
+
 	if (output_path) {
-		default_ps.fp = fopen(output_path, "w");
-		json_ps.fp = default_ps.fp;
+		ps->fp = fopen(output_path, "w");
 	}
 
 	setup_pager();
@@ -583,14 +618,13 @@ int cmd_list(int argc, const char **argv)
 			.print_metric = json_print_metric,
 			.skip_duplicate_pmus = json_skip_duplicate_pmus,
 		};
-		ps = &json_ps;
 	} else {
-		default_ps.last_topic = strdup("");
-		assert(default_ps.last_topic);
-		default_ps.visited_metrics = strlist__new(NULL, NULL);
-		assert(default_ps.visited_metrics);
+		ps->last_topic = strdup("");
+		assert(ps->last_topic);
+		ps->visited_metrics = strlist__new(NULL, NULL);
+		assert(ps->visited_metrics);
 		if (unit_name)
-			default_ps.pmu_glob = strdup(unit_name);
+			ps->pmu_glob = strdup(unit_name);
 		else if (cputype) {
 			const struct perf_pmu *pmu = perf_pmus__pmu_for_pmu_filter(cputype);
 
@@ -599,34 +633,27 @@ int cmd_list(int argc, const char **argv)
 				ret = -1;
 				goto out;
 			}
-			default_ps.pmu_glob = strdup(pmu->name);
+			ps->pmu_glob = strdup(pmu->name);
 		}
 	}
 	print_cb.print_start(ps);
 
 	if (argc == 0) {
-		default_ps.metrics = true;
-		default_ps.metricgroups = true;
+		if (!unit_name) {
+			ps->metrics = true;
+			ps->metricgroups = true;
+		}
 		print_events(&print_cb, ps);
 		goto out;
 	}
 
 	for (i = 0; i < argc; ++i) {
-		char *sep, *s;
+		char *s;
 
-		if (strcmp(argv[i], "tracepoint") == 0)
-			print_tracepoint_events(&print_cb, ps);
-		else if (strcmp(argv[i], "hw") == 0 ||
-			 strcmp(argv[i], "hardware") == 0)
-			print_symbol_events(&print_cb, ps, PERF_TYPE_HARDWARE,
-					event_symbols_hw, PERF_COUNT_HW_MAX);
-		else if (strcmp(argv[i], "sw") == 0 ||
-			 strcmp(argv[i], "software") == 0) {
+		if (strcmp(argv[i], "tracepoint") == 0) {
 			char *old_pmu_glob = default_ps.pmu_glob;
 
-			print_symbol_events(&print_cb, ps, PERF_TYPE_SOFTWARE,
-					event_symbols_sw, PERF_COUNT_SW_MAX);
-			default_ps.pmu_glob = strdup("tool");
+			default_ps.pmu_glob = strdup("tracepoint");
 			if (!default_ps.pmu_glob) {
 				ret = -1;
 				goto out;
@@ -634,59 +661,100 @@ int cmd_list(int argc, const char **argv)
 			perf_pmus__print_pmu_events(&print_cb, ps);
 			zfree(&default_ps.pmu_glob);
 			default_ps.pmu_glob = old_pmu_glob;
-		} else if (strcmp(argv[i], "cache") == 0 ||
-			 strcmp(argv[i], "hwcache") == 0)
-			print_hwcache_events(&print_cb, ps);
-		else if (strcmp(argv[i], "pmu") == 0)
+		} else if (strcmp(argv[i], "hw") == 0 ||
+			   strcmp(argv[i], "hardware") == 0) {
+			char *old_event_glob = ps->event_glob;
+
+			ps->event_glob = strdup("legacy hardware");
+			if (!ps->event_glob) {
+				ret = -1;
+				goto out;
+			}
 			perf_pmus__print_pmu_events(&print_cb, ps);
-		else if (strcmp(argv[i], "sdt") == 0)
+			zfree(&ps->event_glob);
+			ps->event_glob = old_event_glob;
+		} else if (strcmp(argv[i], "sw") == 0 ||
+			 strcmp(argv[i], "software") == 0) {
+			char *old_pmu_glob = ps->pmu_glob;
+			static const char * const sw_globs[] = { "software", "tool" };
+
+			for (size_t j = 0; j < ARRAY_SIZE(sw_globs); j++) {
+				ps->pmu_glob = strdup(sw_globs[j]);
+				if (!ps->pmu_glob) {
+					ret = -1;
+					goto out;
+				}
+				perf_pmus__print_pmu_events(&print_cb, ps);
+				zfree(&ps->pmu_glob);
+			}
+			ps->pmu_glob = old_pmu_glob;
+		} else if (strcmp(argv[i], "cache") == 0 ||
+			   strcmp(argv[i], "hwcache") == 0) {
+			char *old_event_glob = ps->event_glob;
+
+			ps->event_glob = strdup("legacy cache");
+			if (!ps->event_glob) {
+				ret = -1;
+				goto out;
+			}
+			perf_pmus__print_pmu_events(&print_cb, ps);
+			zfree(&ps->event_glob);
+			ps->event_glob = old_event_glob;
+		} else if (strcmp(argv[i], "pmu") == 0) {
+			ps->exclude_abi = true;
+			perf_pmus__print_pmu_events(&print_cb, ps);
+			ps->exclude_abi = false;
+		} else if (strcmp(argv[i], "sdt") == 0)
 			print_sdt_events(&print_cb, ps);
 		else if (strcmp(argv[i], "metric") == 0 || strcmp(argv[i], "metrics") == 0) {
-			default_ps.metricgroups = false;
-			default_ps.metrics = true;
+			ps->metricgroups = false;
+			ps->metrics = true;
 			metricgroup__print(&print_cb, ps);
 		} else if (strcmp(argv[i], "metricgroup") == 0 ||
 			   strcmp(argv[i], "metricgroups") == 0) {
-			default_ps.metricgroups = true;
-			default_ps.metrics = false;
+			ps->metricgroups = true;
+			ps->metrics = false;
 			metricgroup__print(&print_cb, ps);
 		}
 #ifdef HAVE_LIBPFM
 		else if (strcmp(argv[i], "pfm") == 0)
 			print_libpfm_events(&print_cb, ps);
 #endif
-		else if ((sep = strchr(argv[i], ':')) != NULL) {
-			char *old_pmu_glob = default_ps.pmu_glob;
+		else if (strchr(argv[i], ':') != NULL) {
+			char *old_pmu_glob = ps->pmu_glob;
+			char *old_event_glob = ps->event_glob;
 
-			default_ps.event_glob = strdup(argv[i]);
-			if (!default_ps.event_glob) {
+			ps->event_glob = strdup(argv[i]);
+			if (!ps->event_glob) {
 				ret = -1;
 				goto out;
 			}
 
-			print_tracepoint_events(&print_cb, ps);
+			ps->pmu_glob = strdup("tracepoint");
+			if (!ps->pmu_glob) {
+				zfree(&ps->event_glob);
+				ret = -1;
+				goto out;
+			}
+			perf_pmus__print_pmu_events(&print_cb, ps);
+			zfree(&ps->pmu_glob);
+			ps->pmu_glob = old_pmu_glob;
 			print_sdt_events(&print_cb, ps);
-			default_ps.metrics = true;
-			default_ps.metricgroups = true;
+			ps->metrics = true;
+			ps->metricgroups = true;
 			metricgroup__print(&print_cb, ps);
-			zfree(&default_ps.event_glob);
-			default_ps.pmu_glob = old_pmu_glob;
+			zfree(&ps->event_glob);
+			ps->event_glob = old_event_glob;
 		} else {
 			if (asprintf(&s, "*%s*", argv[i]) < 0) {
 				printf("Critical: Not enough memory! Trying to continue...\n");
 				continue;
 			}
-			default_ps.event_glob = s;
-			print_symbol_events(&print_cb, ps, PERF_TYPE_HARDWARE,
-					event_symbols_hw, PERF_COUNT_HW_MAX);
-			print_symbol_events(&print_cb, ps, PERF_TYPE_SOFTWARE,
-					event_symbols_sw, PERF_COUNT_SW_MAX);
-			print_hwcache_events(&print_cb, ps);
+			ps->event_glob = s;
 			perf_pmus__print_pmu_events(&print_cb, ps);
-			print_tracepoint_events(&print_cb, ps);
 			print_sdt_events(&print_cb, ps);
-			default_ps.metrics = true;
-			default_ps.metricgroups = true;
+			ps->metrics = true;
+			ps->metricgroups = true;
 			metricgroup__print(&print_cb, ps);
 			free(s);
 		}
@@ -694,12 +762,12 @@ int cmd_list(int argc, const char **argv)
 
 out:
 	print_cb.print_end(ps);
-	free(default_ps.pmu_glob);
-	free(default_ps.last_topic);
-	free(default_ps.last_metricgroups);
-	strlist__delete(default_ps.visited_metrics);
+	free(ps->pmu_glob);
+	free(ps->last_topic);
+	free(ps->last_metricgroups);
+	strlist__delete(ps->visited_metrics);
 	if (output_path)
-		fclose(default_ps.fp);
+		fclose(ps->fp);
 
 	return ret;
 }

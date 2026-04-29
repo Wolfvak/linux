@@ -18,7 +18,9 @@ description: |
 
 properties:
   compatible:
-    const: qcom,fastrpc
+    enum:
+      - qcom,kaanapali-fastrpc
+      - qcom,fastrpc
 
   label:
     enum:
@@ -27,6 +29,8 @@ properties:
       - sdsp
       - cdsp
       - cdsp1
+      - gdsp0
+      - gdsp1
 
   memory-region:
     maxItems: 1

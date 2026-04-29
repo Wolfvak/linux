@@ -4,10 +4,19 @@
 //!
 //! This module provides bindings for working with faux devices in kernel modules.
 //!
-//! C header: [`include/linux/device/faux.h`]
+//! C header: [`include/linux/device/faux.h`](srctree/include/linux/device/faux.h)
 
-use crate::{bindings, device, error::code::*, prelude::*};
-use core::ptr::{addr_of_mut, null, null_mut, NonNull};
+use crate::{
+    bindings,
+    device,
+    prelude::*, //
+};
+use core::ptr::{
+    addr_of_mut,
+    null,
+    null_mut,
+    NonNull, //
+};
 
 /// The registration of a faux device.
 ///
@@ -54,7 +63,7 @@ impl AsRef<device::Device> for Registration {
     fn as_ref(&self) -> &device::Device {
         // SAFETY: The underlying `device` in `faux_device` is guaranteed by the C API to be
         // a valid initialized `device`.
-        unsafe { device::Device::as_ref(addr_of_mut!((*self.as_raw()).dev)) }
+        unsafe { device::Device::from_raw(addr_of_mut!((*self.as_raw()).dev)) }
     }
 }
 

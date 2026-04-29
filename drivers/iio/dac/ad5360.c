@@ -262,7 +262,7 @@ static int ad5360_update_ctrl(struct iio_dev *indio_dev, unsigned int set,
 	unsigned int clr)
 {
 	struct ad5360_state *st = iio_priv(indio_dev);
-	unsigned int ret;
+	int ret;
 
 	mutex_lock(&st->lock);
 
@@ -439,8 +439,8 @@ static int ad5360_alloc_channels(struct iio_dev *indio_dev)
 	struct iio_chan_spec *channels;
 	unsigned int i;
 
-	channels = kcalloc(st->chip_info->num_channels,
-			   sizeof(struct iio_chan_spec), GFP_KERNEL);
+	channels = kzalloc_objs(struct iio_chan_spec,
+				st->chip_info->num_channels);
 
 	if (!channels)
 		return -ENOMEM;

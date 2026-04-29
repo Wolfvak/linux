@@ -157,12 +157,6 @@ void gcs_free(struct task_struct *task)
 	if (!system_supports_gcs())
 		return;
 
-	/*
-	 * When fork() with CLONE_VM fails, the child (tsk) already
-	 * has a GCS allocated, and exit_thread() calls this function
-	 * to free it.  In this case the parent (current) and the
-	 * child share the same mm struct.
-	 */
 	if (!task->mm || task->mm != current->mm)
 		return;
 
@@ -205,8 +199,8 @@ int arch_set_shadow_stack_status(struct task_struct *task, unsigned long arg)
 
 		size = gcs_size(0);
 		gcs = alloc_gcs(0, size);
-		if (!gcs)
-			return -ENOMEM;
+		if (IS_ERR_VALUE(gcs))
+			return gcs;
 
 		task->thread.gcspr_el0 = gcs + size - sizeof(u64);
 		task->thread.gcs_base = gcs;

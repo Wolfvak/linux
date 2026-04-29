@@ -23,8 +23,8 @@
 #include <linux/xarray.h>
 #include <linux/perf_event.h>
 #include <linux/pci.h>
+#include <linux/generic_pt/iommu.h>
 
-#include <asm/cacheflush.h>
 #include <asm/iommu.h>
 #include <uapi/linux/iommufd.h>
 
@@ -77,7 +77,6 @@
 #define	DMAR_FEDATA_REG	0x3c	/* Fault event interrupt data register */
 #define	DMAR_FEADDR_REG	0x40	/* Fault event interrupt addr register */
 #define	DMAR_FEUADDR_REG 0x44	/* Upper address register */
-#define	DMAR_AFLOG_REG	0x58	/* Advanced Fault control */
 #define	DMAR_PMEN_REG	0x64	/* Enable Protected Memory Region */
 #define	DMAR_PLMBASE_REG 0x68	/* PMRR Low addr */
 #define	DMAR_PLMLIMIT_REG 0x6c	/* PMRR low limit */
@@ -173,8 +172,6 @@
 #define cap_pgsel_inv(c)	(((c) >> 39) & 1)
 
 #define cap_super_page_val(c)	(((c) >> 34) & 0xf)
-#define cap_super_offset(c)	(((find_first_bit(&cap_super_page_val(c), 4)) \
-					* OFFSET_STRIDE) + 21)
 
 #define cap_fault_reg_offset(c)	((((c) >> 24) & 0x3ff) * 16)
 #define cap_max_fault_reg_offset(c) \
@@ -462,7 +459,6 @@ enum {
 #define QI_PGRP_PASID(pasid)	(((u64)(pasid)) << 32)
 
 /* Page group response descriptor QW1 */
-#define QI_PGRP_LPIG(x)		(((u64)(x)) << 2)
 #define QI_PGRP_IDX(idx)	(((u64)(idx)) << 3)
 
 
@@ -541,7 +537,8 @@ enum {
 #define pasid_supported(iommu)	(sm_supported(iommu) &&			\
 				 ecap_pasid((iommu)->ecap))
 #define ssads_supported(iommu) (sm_supported(iommu) &&                 \
-				ecap_slads((iommu)->ecap))
+				ecap_slads((iommu)->ecap) &&           \
+				ecap_smpwc(iommu->ecap))
 #define nested_supported(iommu)	(sm_supported(iommu) &&			\
 				 ecap_nest((iommu)->ecap))
 
@@ -598,21 +595,22 @@ struct qi_batch {
 };
 
 struct dmar_domain {
-	int	nid;			/* node id */
+	union {
+		struct iommu_domain domain;
+		struct pt_iommu iommu;
+		/* First stage page table */
+		struct pt_iommu_x86_64 fspt;
+		/* Second stage page table */
+		struct pt_iommu_vtdss sspt;
+	};
+
 	struct xarray iommu_array;	/* Attached IOMMU array */
 
-	u8 iommu_coherency: 1;		/* indicate coherency of iommu access */
-	u8 force_snooping : 1;		/* Create IOPTEs with snoop control */
-	u8 set_pte_snp:1;
-	u8 use_first_level:1;		/* DMA translation for the domain goes
-					 * through the first level page table,
-					 * otherwise, goes through the second
-					 * level.
-					 */
+	u8 force_snooping:1;		/* Create PASID entry with snoop control */
 	u8 dirty_tracking:1;		/* Dirty tracking is enabled */
 	u8 nested_parent:1;		/* Has other domains nested on it */
-	u8 has_mappings:1;		/* Has mappings configured through
-					 * iommu_map() interface.
+	u8 iotlb_sync_map:1;		/* Need to flush IOTLB cache or write
+					 * buffer when creating mappings.
 					 */
 
 	spinlock_t lock;		/* Protect device tracking lists */
@@ -623,26 +621,9 @@ struct dmar_domain {
 	struct list_head cache_tags;	/* Cache tag list */
 	struct qi_batch *qi_batch;	/* Batched QI descriptors */
 
-	int		iommu_superpage;/* Level of superpages supported:
-					   0 == 4KiB (no superpages), 1 == 2MiB,
-					   2 == 1GiB, 3 == 512GiB, 4 == 1TiB */
 	union {
 		/* DMA remapping domain */
 		struct {
-			/* virtual address */
-			struct dma_pte	*pgd;
-			/* max guest address width */
-			int		gaw;
-			/*
-			 * adjusted guest address width:
-			 *   0: level 2 30-bit
-			 *   1: level 3 39-bit
-			 *   2: level 4 48-bit
-			 *   3: level 5 57-bit
-			 */
-			int		agaw;
-			/* maximum mapped address */
-			u64		max_addr;
 			/* Protect the s1_domains list */
 			spinlock_t	s1_lock;
 			/* Track s1_domains nested on this domain */
@@ -664,10 +645,10 @@ struct dmar_domain {
 			struct mmu_notifier notifier;
 		};
 	};
-
-	struct iommu_domain domain;	/* generic domain data structure for
-					   iommu core */
 };
+PT_IOMMU_CHECK_DOMAIN(struct dmar_domain, iommu, domain);
+PT_IOMMU_CHECK_DOMAIN(struct dmar_domain, sspt.iommu, domain);
+PT_IOMMU_CHECK_DOMAIN(struct dmar_domain, fspt.iommu, domain);
 
 /*
  * In theory, the VT-d 4.0 spec can support up to 2 ^ 16 counters.
@@ -866,11 +847,6 @@ struct dma_pte {
 	u64 val;
 };
 
-static inline void dma_clear_pte(struct dma_pte *pte)
-{
-	pte->val = 0;
-}
-
 static inline u64 dma_pte_addr(struct dma_pte *pte)
 {
 #ifdef CONFIG_64BIT
@@ -886,30 +862,9 @@ static inline bool dma_pte_present(struct dma_pte *pte)
 	return (pte->val & 3) != 0;
 }
 
-static inline bool dma_sl_pte_test_and_clear_dirty(struct dma_pte *pte,
-						   unsigned long flags)
-{
-	if (flags & IOMMU_DIRTY_NO_CLEAR)
-		return (pte->val & DMA_SL_PTE_DIRTY) != 0;
-
-	return test_and_clear_bit(DMA_SL_PTE_DIRTY_BIT,
-				  (unsigned long *)&pte->val);
-}
-
 static inline bool dma_pte_superpage(struct dma_pte *pte)
 {
 	return (pte->val & DMA_PTE_LARGE_PAGE);
-}
-
-static inline bool first_pte_in_page(struct dma_pte *pte)
-{
-	return IS_ALIGNED((unsigned long)pte, VTD_PAGE_SIZE);
-}
-
-static inline int nr_pte_to_next_page(struct dma_pte *pte)
-{
-	return first_pte_in_page(pte) ? BIT_ULL(VTD_STRIDE_SHIFT) :
-		(struct dma_pte *)ALIGN((unsigned long)pte, VTD_PAGE_SIZE) - pte;
 }
 
 static inline bool context_present(struct context_entry *context)
@@ -927,11 +882,6 @@ static inline int agaw_to_level(int agaw)
 	return agaw + 2;
 }
 
-static inline int agaw_to_width(int agaw)
-{
-	return min_t(int, 30 + agaw * LEVEL_STRIDE, MAX_AGAW_WIDTH);
-}
-
 static inline int width_to_agaw(int width)
 {
 	return DIV_ROUND_UP(width - 30, LEVEL_STRIDE);
@@ -947,29 +897,29 @@ static inline int pfn_level_offset(u64 pfn, int level)
 	return (pfn >> level_to_offset_bits(level)) & LEVEL_MASK;
 }
 
-static inline u64 level_mask(int level)
-{
-	return -1ULL << level_to_offset_bits(level);
-}
-
-static inline u64 level_size(int level)
-{
-	return 1ULL << level_to_offset_bits(level);
-}
-
-static inline u64 align_to_level(u64 pfn, int level)
-{
-	return (pfn + level_size(level) - 1) & level_mask(level);
-}
-
-static inline unsigned long lvl_to_nr_pages(unsigned int lvl)
-{
-	return 1UL << min_t(int, (lvl - 1) * LEVEL_STRIDE, MAX_AGAW_PFN_WIDTH);
-}
 
 static inline void context_set_present(struct context_entry *context)
 {
-	context->lo |= 1;
+	u64 val;
+
+	dma_wmb();
+	val = READ_ONCE(context->lo) | 1;
+	WRITE_ONCE(context->lo, val);
+}
+
+/*
+ * Clear the Present (P) bit (bit 0) of a context table entry. This initiates
+ * the transition of the entry's ownership from hardware to software. The
+ * caller is responsible for fulfilling the invalidation handshake recommended
+ * by the VT-d spec, Section 6.5.3.3 (Guidance to Software for Invalidations).
+ */
+static inline void context_clear_present(struct context_entry *context)
+{
+	u64 val;
+
+	val = READ_ONCE(context->lo) & GENMASK_ULL(63, 1);
+	WRITE_ONCE(context->lo, val);
+	dma_wmb();
 }
 
 static inline void context_set_fault_enable(struct context_entry *context)
@@ -1097,7 +1047,7 @@ static inline void qi_desc_iotlb(struct intel_iommu *iommu, u16 did, u64 addr,
 				 struct qi_desc *desc)
 {
 	u8 dw = 0, dr = 0;
-	int ih = 0;
+	int ih = addr & 1;
 
 	if (cap_write_drain(iommu->cap))
 		dw = 1;
@@ -1252,10 +1202,9 @@ domain_add_dev_pasid(struct iommu_domain *domain,
 void domain_remove_dev_pasid(struct iommu_domain *domain,
 			     struct device *dev, ioasid_t pasid);
 
-int __domain_setup_first_level(struct intel_iommu *iommu,
-			       struct device *dev, ioasid_t pasid,
-			       u16 did, pgd_t *pgd, int flags,
-			       struct iommu_domain *old);
+int __domain_setup_first_level(struct intel_iommu *iommu, struct device *dev,
+			       ioasid_t pasid, u16 did, phys_addr_t fsptptr,
+			       int flags, struct iommu_domain *old);
 
 int dmar_ir_support(void);
 
@@ -1378,6 +1327,18 @@ struct context_entry *iommu_context_addr(struct intel_iommu *iommu, u8 bus,
 					 u8 devfn, int alloc);
 
 extern const struct iommu_ops intel_iommu_ops;
+extern const struct iommu_domain_ops intel_fs_paging_domain_ops;
+extern const struct iommu_domain_ops intel_ss_paging_domain_ops;
+
+static inline bool intel_domain_is_fs_paging(struct dmar_domain *domain)
+{
+	return domain->domain.ops == &intel_fs_paging_domain_ops;
+}
+
+static inline bool intel_domain_is_ss_paging(struct dmar_domain *domain)
+{
+	return domain->domain.ops == &intel_ss_paging_domain_ops;
+}
 
 #ifdef CONFIG_INTEL_IOMMU
 extern int intel_iommu_sm;

@@ -318,27 +318,27 @@ static const struct lpuart_soc_data ls1028a_data = {
 	.rx_watermark = 0,
 };
 
-static struct lpuart_soc_data imx7ulp_data = {
+static const struct lpuart_soc_data imx7ulp_data = {
 	.devtype = IMX7ULP_LPUART,
 	.iotype = UPIO_MEM32,
 	.reg_off = IMX_REG_OFF,
 	.rx_watermark = 1,
 };
 
-static struct lpuart_soc_data imx8ulp_data = {
+static const struct lpuart_soc_data imx8ulp_data = {
 	.devtype = IMX8ULP_LPUART,
 	.iotype = UPIO_MEM32,
 	.reg_off = IMX_REG_OFF,
 	.rx_watermark = 3,
 };
 
-static struct lpuart_soc_data imx8qxp_data = {
+static const struct lpuart_soc_data imx8qxp_data = {
 	.devtype = IMX8QXP_LPUART,
 	.iotype = UPIO_MEM32,
 	.reg_off = IMX_REG_OFF,
 	.rx_watermark = 7, /* A lower watermark is ideal for low baud rates. */
 };
-static struct lpuart_soc_data imxrt1050_data = {
+static const struct lpuart_soc_data imxrt1050_data = {
 	.devtype = IMXRT1050_LPUART,
 	.iotype = UPIO_MEM32,
 	.reg_off = IMX_REG_OFF,
@@ -3087,6 +3087,8 @@ static int lpuart_suspend_noirq(struct device *dev)
 static int lpuart_resume_noirq(struct device *dev)
 {
 	struct lpuart_port *sport = dev_get_drvdata(dev);
+	struct tty_port *port = &sport->port.state->port;
+	bool wake_active;
 	u32 stat;
 
 	pinctrl_pm_select_default_state(dev);
@@ -3098,6 +3100,12 @@ static int lpuart_resume_noirq(struct device *dev)
 		if (lpuart_is_32(sport)) {
 			stat = lpuart32_read(&sport->port, UARTSTAT);
 			lpuart32_write(&sport->port, stat, UARTSTAT);
+
+			/* check whether lpuart wakeup was triggered */
+			wake_active = stat & (UARTSTAT_RDRF | UARTSTAT_RXEDGIF);
+
+			if (wake_active && irqd_is_wakeup_set(irq_get_irq_data(sport->port.irq)))
+				pm_wakeup_event(tty_port_tty_get(port)->dev, 0);
 		}
 	}
 

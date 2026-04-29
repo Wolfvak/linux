@@ -2,6 +2,7 @@
 /* Copyright (c) 2021, Microsoft Corporation. */
 
 #include <net/mana/gdma.h>
+#include <net/mana/mana.h>
 #include <net/mana/hw_channel.h>
 #include <linux/vmalloc.h>
 
@@ -117,6 +118,7 @@ static void mana_hwc_init_event_handler(void *ctx, struct gdma_queue *q_self,
 	struct gdma_dev *gd = hwc->gdma_dev;
 	union hwc_init_type_data type_data;
 	union hwc_init_eq_id_db eq_db;
+	struct mana_context *ac;
 	u32 type, val;
 	int ret;
 
@@ -193,6 +195,17 @@ static void mana_hwc_init_event_handler(void *ctx, struct gdma_queue *q_self,
 		switch (type) {
 		case HWC_DATA_CFG_HWC_TIMEOUT:
 			hwc->hwc_timeout = val;
+			break;
+
+		case HWC_DATA_HW_LINK_CONNECT:
+		case HWC_DATA_HW_LINK_DISCONNECT:
+			ac = gd->gdma_context->mana.driver_data;
+			if (!ac)
+				break;
+
+			WRITE_ONCE(ac->link_event, type);
+			schedule_work(&ac->link_change_work);
+
 			break;
 
 		default:
@@ -394,7 +407,7 @@ static int mana_hwc_create_cq(struct hw_channel_context *hwc, u16 q_depth,
 	if (cq_size < MANA_MIN_QSIZE)
 		cq_size = MANA_MIN_QSIZE;
 
-	hwc_cq = kzalloc(sizeof(*hwc_cq), GFP_KERNEL);
+	hwc_cq = kzalloc_obj(*hwc_cq);
 	if (!hwc_cq)
 		return -ENOMEM;
 
@@ -413,7 +426,7 @@ static int mana_hwc_create_cq(struct hw_channel_context *hwc, u16 q_depth,
 	}
 	hwc_cq->gdma_cq = cq;
 
-	comp_buf = kcalloc(q_depth, sizeof(*comp_buf), GFP_KERNEL);
+	comp_buf = kzalloc_objs(*comp_buf, q_depth);
 	if (!comp_buf) {
 		err = -ENOMEM;
 		goto out;
@@ -448,7 +461,7 @@ static int mana_hwc_alloc_dma_buf(struct hw_channel_context *hwc, u16 q_depth,
 	int err;
 	u16 i;
 
-	dma_buf = kzalloc(struct_size(dma_buf, reqs, q_depth), GFP_KERNEL);
+	dma_buf = kzalloc_flex(*dma_buf, reqs, q_depth);
 	if (!dma_buf)
 		return -ENOMEM;
 
@@ -526,7 +539,7 @@ static int mana_hwc_create_wq(struct hw_channel_context *hwc,
 	if (queue_size < MANA_MIN_QSIZE)
 		queue_size = MANA_MIN_QSIZE;
 
-	hwc_wq = kzalloc(sizeof(*hwc_wq), GFP_KERNEL);
+	hwc_wq = kzalloc_obj(*hwc_wq);
 	if (!hwc_wq)
 		return -ENOMEM;
 
@@ -631,7 +644,7 @@ static int mana_hwc_test_channel(struct hw_channel_context *hwc, u16 q_depth,
 			return err;
 	}
 
-	ctx = kcalloc(q_depth, sizeof(*ctx), GFP_KERNEL);
+	ctx = kzalloc_objs(*ctx, q_depth);
 	if (!ctx)
 		return -ENOMEM;
 
@@ -737,7 +750,7 @@ int mana_hwc_create_channel(struct gdma_context *gc)
 	u16 q_depth_max;
 	int err;
 
-	hwc = kzalloc(sizeof(*hwc), GFP_KERNEL);
+	hwc = kzalloc_obj(*hwc);
 	if (!hwc)
 		return -ENOMEM;
 
@@ -801,9 +814,6 @@ void mana_hwc_destroy_channel(struct gdma_context *gc)
 		gc->max_num_cqs = 0;
 	}
 
-	kfree(hwc->caller_ctx);
-	hwc->caller_ctx = NULL;
-
 	if (hwc->txq)
 		mana_hwc_destroy_wq(hwc, hwc->txq);
 
@@ -812,6 +822,9 @@ void mana_hwc_destroy_channel(struct gdma_context *gc)
 
 	if (hwc->cq)
 		mana_hwc_destroy_cq(hwc->gdma_dev->gdma_context, hwc->cq);
+
+	kfree(hwc->caller_ctx);
+	hwc->caller_ctx = NULL;
 
 	mana_gd_free_res_map(&hwc->inflight_msg_res);
 
@@ -879,7 +892,14 @@ int mana_hwc_send_request(struct hw_channel_context *hwc, u32 req_len,
 
 	if (!wait_for_completion_timeout(&ctx->comp_event,
 					 (msecs_to_jiffies(hwc->hwc_timeout)))) {
-		dev_err(hwc->dev, "HWC: Request timed out!\n");
+		if (hwc->hwc_timeout != 0)
+			dev_err(hwc->dev, "HWC: Request timed out: %u ms\n",
+				hwc->hwc_timeout);
+
+		/* Reduce further waiting if HWC no response */
+		if (hwc->hwc_timeout > 1)
+			hwc->hwc_timeout = 1;
+
 		err = -ETIMEDOUT;
 		goto out;
 	}
@@ -890,8 +910,13 @@ int mana_hwc_send_request(struct hw_channel_context *hwc, u32 req_len,
 	}
 
 	if (ctx->status_code && ctx->status_code != GDMA_STATUS_MORE_ENTRIES) {
-		dev_err(hwc->dev, "HWC: Failed hw_channel req: 0x%x\n",
-			ctx->status_code);
+		if (ctx->status_code == GDMA_STATUS_CMD_UNSUPPORTED) {
+			err = -EOPNOTSUPP;
+			goto out;
+		}
+		if (req_msg->req.msg_type != MANA_QUERY_PHY_STAT)
+			dev_err(hwc->dev, "HWC: Failed hw_channel req: 0x%x\n",
+				ctx->status_code);
 		err = -EPROTO;
 		goto out;
 	}

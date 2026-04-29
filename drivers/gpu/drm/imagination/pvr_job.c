@@ -415,7 +415,7 @@ create_job(struct pvr_device *pvr_dev,
 	    (args->hwrt.set_handle || args->hwrt.data_index))
 		return ERR_PTR(-EINVAL);
 
-	job = kzalloc(sizeof(*job), GFP_KERNEL);
+	job = kzalloc_obj(*job);
 	if (!job)
 		return ERR_PTR(-ENOMEM);
 
@@ -446,7 +446,7 @@ create_job(struct pvr_device *pvr_dev,
 	if (err)
 		goto err_put_job;
 
-	err = pvr_queue_job_init(job);
+	err = pvr_queue_job_init(job, pvr_file->file->client_id);
 	if (err)
 		goto err_put_job;
 
@@ -718,8 +718,8 @@ pvr_submit_jobs(struct pvr_device *pvr_dev, struct pvr_file *pvr_file,
 	if (err)
 		return err;
 
-	job_data = kvmalloc_array(args->jobs.count, sizeof(*job_data),
-				  GFP_KERNEL | __GFP_ZERO);
+	job_data = kvmalloc_objs(*job_data, args->jobs.count,
+				 GFP_KERNEL | __GFP_ZERO);
 	if (!job_data) {
 		err = -ENOMEM;
 		goto out_free;

@@ -3,8 +3,7 @@
  * Copyright IBM Corp. 2024
  */
 
-#define KMSG_COMPONENT "cpacf"
-#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
+#define pr_fmt(fmt) "cpacf: " fmt
 
 #include <linux/cpu.h>
 #include <linux/device.h>
@@ -101,7 +100,7 @@ static const struct bin_attribute *const cpacf_attrs[] = {
 
 static const struct attribute_group cpacf_attr_grp = {
 	.name = "cpacf",
-	.bin_attrs_new = cpacf_attrs,
+	.bin_attrs = cpacf_attrs,
 };
 
 static int __init cpacf_init(void)

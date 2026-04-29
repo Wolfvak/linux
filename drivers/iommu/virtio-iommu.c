@@ -231,7 +231,7 @@ static int __viommu_add_req(struct viommu_dev *viommu, void *buf, size_t len,
 	if (write_offset <= 0)
 		return -EINVAL;
 
-	req = kzalloc(struct_size(req, buf, len), GFP_ATOMIC);
+	req = kzalloc_flex(*req, buf, len, GFP_ATOMIC);
 	if (!req)
 		return -ENOMEM;
 
@@ -333,7 +333,7 @@ static int viommu_add_mapping(struct viommu_domain *vdomain, u64 iova, u64 end,
 	unsigned long irqflags;
 	struct viommu_mapping *mapping;
 
-	mapping = kzalloc(sizeof(*mapping), GFP_ATOMIC);
+	mapping = kzalloc_obj(*mapping, GFP_ATOMIC);
 	if (!mapping)
 		return -ENOMEM;
 
@@ -670,7 +670,7 @@ static struct iommu_domain *viommu_domain_alloc_paging(struct device *dev)
 		return ERR_PTR(-ENODEV);
 	}
 
-	vdomain = kzalloc(sizeof(*vdomain), GFP_KERNEL);
+	vdomain = kzalloc_obj(*vdomain);
 	if (!vdomain)
 		return ERR_PTR(-ENOMEM);
 
@@ -730,7 +730,8 @@ static struct iommu_domain *viommu_domain_alloc_identity(struct device *dev)
 	return domain;
 }
 
-static int viommu_attach_dev(struct iommu_domain *domain, struct device *dev)
+static int viommu_attach_dev(struct iommu_domain *domain, struct device *dev,
+			     struct iommu_domain *old)
 {
 	int ret = 0;
 	struct virtio_iommu_req_attach req;
@@ -781,7 +782,8 @@ static int viommu_attach_dev(struct iommu_domain *domain, struct device *dev)
 }
 
 static int viommu_attach_identity_domain(struct iommu_domain *domain,
-					 struct device *dev)
+					 struct device *dev,
+					 struct iommu_domain *old)
 {
 	int ret = 0;
 	struct virtio_iommu_req_attach req;
@@ -998,8 +1000,7 @@ static void viommu_get_resv_regions(struct device *dev, struct list_head *head)
 	iommu_dma_get_resv_regions(dev, head);
 }
 
-static struct iommu_ops viommu_ops;
-static struct virtio_driver virtio_iommu_drv;
+static const struct bus_type *virtio_bus_type;
 
 static int viommu_match_node(struct device *dev, const void *data)
 {
@@ -1008,8 +1009,9 @@ static int viommu_match_node(struct device *dev, const void *data)
 
 static struct viommu_dev *viommu_get_by_fwnode(struct fwnode_handle *fwnode)
 {
-	struct device *dev = driver_find_device(&virtio_iommu_drv.driver, NULL,
-						fwnode, viommu_match_node);
+	struct device *dev = bus_find_device(virtio_bus_type, NULL, fwnode,
+					     viommu_match_node);
+
 	put_device(dev);
 
 	return dev ? dev_to_virtio(dev)->priv : NULL;
@@ -1026,7 +1028,7 @@ static struct iommu_device *viommu_probe_device(struct device *dev)
 	if (!viommu)
 		return ERR_PTR(-ENODEV);
 
-	vdev = kzalloc(sizeof(*vdev), GFP_KERNEL);
+	vdev = kzalloc_obj(*vdev);
 	if (!vdev)
 		return ERR_PTR(-ENOMEM);
 
@@ -1086,7 +1088,7 @@ static bool viommu_capable(struct device *dev, enum iommu_cap cap)
 	}
 }
 
-static struct iommu_ops viommu_ops = {
+static const struct iommu_ops viommu_ops = {
 	.capable		= viommu_capable,
 	.domain_alloc_identity	= viommu_domain_alloc_identity,
 	.domain_alloc_paging	= viommu_domain_alloc_paging,
@@ -1160,6 +1162,9 @@ static int viommu_probe(struct virtio_device *vdev)
 	if (!viommu)
 		return -ENOMEM;
 
+	/* Borrow this for easy lookups later */
+	virtio_bus_type = dev->bus;
+
 	spin_lock_init(&viommu->request_lock);
 	ida_init(&viommu->domain_ids);
 	viommu->dev = dev;
@@ -1217,8 +1222,6 @@ static int viommu_probe(struct virtio_device *vdev)
 		viommu->first_domain++;
 	}
 
-	viommu_ops.pgsize_bitmap = viommu->pgsize_bitmap;
-
 	virtio_device_ready(vdev);
 
 	/* Populate the event queue with buffers */
@@ -1231,9 +1234,9 @@ static int viommu_probe(struct virtio_device *vdev)
 	if (ret)
 		goto err_free_vqs;
 
-	iommu_device_register(&viommu->iommu, &viommu_ops, parent_dev);
-
 	vdev->priv = viommu;
+
+	iommu_device_register(&viommu->iommu, &viommu_ops, parent_dev);
 
 	dev_info(dev, "input address: %u bits\n",
 		 order_base_2(viommu->geometry.aperture_end));

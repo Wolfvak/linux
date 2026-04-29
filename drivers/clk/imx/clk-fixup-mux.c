@@ -17,7 +17,7 @@
  * @fixup: a hook to fixup the write value
  *
  * The imx fixup multiplexer clock is a subclass of basic clk_mux
- * with an addtional fixup hook.
+ * with an additional fixup hook.
  */
 struct clk_fixup_mux {
 	struct clk_mux mux;
@@ -77,7 +77,7 @@ struct clk_hw *imx_clk_hw_fixup_mux(const char *name, void __iomem *reg,
 	if (!fixup)
 		return ERR_PTR(-EINVAL);
 
-	fixup_mux = kzalloc(sizeof(*fixup_mux), GFP_KERNEL);
+	fixup_mux = kzalloc_obj(*fixup_mux);
 	if (!fixup_mux)
 		return ERR_PTR(-ENOMEM);
 

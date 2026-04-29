@@ -14,6 +14,45 @@ struct bio_integrity_alloc {
 	struct bio_vec			bvecs[];
 };
 
+static mempool_t integrity_buf_pool;
+
+void bio_integrity_alloc_buf(struct bio *bio, bool zero_buffer)
+{
+	struct blk_integrity *bi = blk_get_integrity(bio->bi_bdev->bd_disk);
+	struct bio_integrity_payload *bip = bio_integrity(bio);
+	unsigned int len = bio_integrity_bytes(bi, bio_sectors(bio));
+	gfp_t gfp = GFP_NOIO | (zero_buffer ? __GFP_ZERO : 0);
+	void *buf;
+
+	buf = kmalloc(len, (gfp & ~__GFP_DIRECT_RECLAIM) |
+			__GFP_NOMEMALLOC | __GFP_NORETRY | __GFP_NOWARN);
+	if (unlikely(!buf)) {
+		struct page *page;
+
+		page = mempool_alloc(&integrity_buf_pool, GFP_NOFS);
+		if (zero_buffer)
+			memset(page_address(page), 0, len);
+		bvec_set_page(&bip->bip_vec[0], page, len, 0);
+		bip->bip_flags |= BIP_MEMPOOL;
+	} else {
+		bvec_set_page(&bip->bip_vec[0], virt_to_page(buf), len,
+				offset_in_page(buf));
+	}
+
+	bip->bip_vcnt = 1;
+	bip->bip_iter.bi_size = len;
+}
+
+void bio_integrity_free_buf(struct bio_integrity_payload *bip)
+{
+	struct bio_vec *bv = &bip->bip_vec[0];
+
+	if (bip->bip_flags & BIP_MEMPOOL)
+		mempool_free(bv->bv_page, &integrity_buf_pool);
+	else
+		kfree(bvec_virt(bv));
+}
+
 /**
  * bio_integrity_free - Free bio integrity payload
  * @bio:	bio containing bip to be freed
@@ -58,7 +97,7 @@ struct bio_integrity_payload *bio_integrity_alloc(struct bio *bio,
 	if (WARN_ON_ONCE(bio_has_crypt_ctx(bio)))
 		return ERR_PTR(-EOPNOTSUPP);
 
-	bia = kmalloc(struct_size(bia, bvecs, nr_vecs), gfp_mask);
+	bia = kmalloc_flex(*bia, bvecs, nr_vecs, gfp_mask);
 	if (unlikely(!bia))
 		return ERR_PTR(-ENOMEM);
 	bio_integrity_init(bio, &bia->bip, bia->bvecs, nr_vecs);
@@ -127,6 +166,9 @@ int bio_integrity_add_page(struct bio *bio, struct page *page,
 
 	if (bip->bip_vcnt > 0) {
 		struct bio_vec *bv = &bip->bip_vec[bip->bip_vcnt - 1];
+
+		if (!zone_device_pages_have_same_pgmap(bv->bv_page, page))
+			return 0;
 
 		if (bvec_try_merge_hw_page(q, bv, page, len, offset)) {
 			bip->bip_iter.bi_size += len;
@@ -227,7 +269,8 @@ static int bio_integrity_init_user(struct bio *bio, struct bio_vec *bvec,
 }
 
 static unsigned int bvec_from_pages(struct bio_vec *bvec, struct page **pages,
-				    int nr_vecs, ssize_t bytes, ssize_t offset)
+				    int nr_vecs, ssize_t bytes, ssize_t offset,
+				    bool *is_p2p)
 {
 	unsigned int nr_bvecs = 0;
 	int i, j;
@@ -248,6 +291,9 @@ static unsigned int bvec_from_pages(struct bio_vec *bvec, struct page **pages,
 			bytes -= next;
 		}
 
+		if (is_pci_p2pdma_page(pages[i]))
+			*is_p2p = true;
+
 		bvec_set_page(&bvec[nr_bvecs], pages[i], size, offset);
 		offset = 0;
 		nr_bvecs++;
@@ -259,13 +305,13 @@ static unsigned int bvec_from_pages(struct bio_vec *bvec, struct page **pages,
 int bio_integrity_map_user(struct bio *bio, struct iov_iter *iter)
 {
 	struct request_queue *q = bdev_get_queue(bio->bi_bdev);
-	unsigned int align = blk_lim_dma_alignment_and_pad(&q->limits);
 	struct page *stack_pages[UIO_FASTIOV], **pages = stack_pages;
 	struct bio_vec stack_vec[UIO_FASTIOV], *bvec = stack_vec;
+	iov_iter_extraction_t extraction_flags = 0;
 	size_t offset, bytes = iter->count;
+	bool copy, is_p2p = false;
 	unsigned int nr_bvecs;
 	int ret, nr_vecs;
-	bool copy;
 
 	if (bio_integrity(bio))
 		return -EINVAL;
@@ -276,22 +322,31 @@ int bio_integrity_map_user(struct bio *bio, struct iov_iter *iter)
 	if (nr_vecs > BIO_MAX_VECS)
 		return -E2BIG;
 	if (nr_vecs > UIO_FASTIOV) {
-		bvec = kcalloc(nr_vecs, sizeof(*bvec), GFP_KERNEL);
+		bvec = kzalloc_objs(*bvec, nr_vecs);
 		if (!bvec)
 			return -ENOMEM;
 		pages = NULL;
 	}
 
-	copy = !iov_iter_is_aligned(iter, align, align);
-	ret = iov_iter_extract_pages(iter, &pages, bytes, nr_vecs, 0, &offset);
+	copy = iov_iter_alignment(iter) &
+			blk_lim_dma_alignment_and_pad(&q->limits);
+
+	if (blk_queue_pci_p2pdma(q))
+		extraction_flags |= ITER_ALLOW_P2PDMA;
+
+	ret = iov_iter_extract_pages(iter, &pages, bytes, nr_vecs,
+					extraction_flags, &offset);
 	if (unlikely(ret < 0))
 		goto free_bvec;
 
-	nr_bvecs = bvec_from_pages(bvec, pages, nr_vecs, bytes, offset);
+	nr_bvecs = bvec_from_pages(bvec, pages, nr_vecs, bytes, offset,
+				   &is_p2p);
 	if (pages != stack_pages)
 		kvfree(pages);
 	if (nr_bvecs > queue_max_integrity_segments(q))
 		copy = true;
+	if (is_p2p)
+		bio->bi_opf |= REQ_NOMERGE;
 
 	if (copy)
 		ret = bio_integrity_copy_user(bio, bvec, nr_bvecs, bytes);
@@ -422,3 +477,12 @@ int bio_integrity_clone(struct bio *bio, struct bio *bio_src,
 
 	return 0;
 }
+
+static int __init bio_integrity_initfn(void)
+{
+	if (mempool_init_page_pool(&integrity_buf_pool, BIO_POOL_SIZE,
+			get_order(BLK_INTEGRITY_MAX_SIZE)))
+		panic("bio: can't create integrity buf pool\n");
+	return 0;
+}
+subsys_initcall(bio_integrity_initfn);

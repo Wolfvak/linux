@@ -19,10 +19,12 @@
 #include "intel_color.h"
 #include "intel_crtc.h"
 #include "intel_crtc_state_dump.h"
+#include "intel_dbuf_bw.h"
 #include "intel_ddi.h"
 #include "intel_de.h"
 #include "intel_display.h"
 #include "intel_display_power.h"
+#include "intel_display_regs.h"
 #include "intel_display_types.h"
 #include "intel_dmc.h"
 #include "intel_fifo_underrun.h"
@@ -92,10 +94,10 @@ static void intel_crtc_disable_noatomic_begin(struct intel_crtc *crtc,
 	crtc->active = false;
 	crtc->base.enabled = false;
 
-	if (crtc_state->shared_dpll)
-		intel_unreference_shared_dpll_crtc(crtc,
-						   crtc_state->shared_dpll,
-						   &crtc_state->shared_dpll->state);
+	if (crtc_state->intel_dpll)
+		intel_dpll_crtc_put(crtc,
+				    crtc_state->intel_dpll,
+				    &crtc_state->intel_dpll->state);
 }
 
 static void set_encoder_for_connector(struct intel_connector *connector,
@@ -175,6 +177,7 @@ static void intel_crtc_disable_noatomic_complete(struct intel_crtc *crtc)
 	intel_cdclk_crtc_disable_noatomic(crtc);
 	skl_wm_crtc_disable_noatomic(crtc);
 	intel_bw_crtc_disable_noatomic(crtc);
+	intel_dbuf_bw_crtc_disable_noatomic(crtc);
 
 	intel_pmdemand_update_port_clock(display, pmdemand_state, pipe, 0);
 }
@@ -565,7 +568,7 @@ static bool has_bogus_dpll_config(const struct intel_crtc_state *crtc_state)
 	 */
 	return display->platform.sandybridge &&
 		crtc_state->hw.active &&
-		crtc_state->shared_dpll &&
+		crtc_state->intel_dpll &&
 		crtc_state->port_clock == 0;
 }
 
@@ -850,17 +853,22 @@ static void intel_modeset_readout_hw_state(struct intel_display *display)
 			 */
 			if (plane_state->uapi.visible && plane->min_cdclk) {
 				if (crtc_state->double_wide || DISPLAY_VER(display) >= 10)
-					crtc_state->min_cdclk[plane->id] =
+					crtc_state->plane_min_cdclk[plane->id] =
 						DIV_ROUND_UP(crtc_state->pixel_rate, 2);
 				else
-					crtc_state->min_cdclk[plane->id] =
+					crtc_state->plane_min_cdclk[plane->id] =
 						crtc_state->pixel_rate;
 			}
 			drm_dbg_kms(display->drm,
 				    "[PLANE:%d:%s] min_cdclk %d kHz\n",
 				    plane->base.base.id, plane->base.name,
-				    crtc_state->min_cdclk[plane->id]);
+				    crtc_state->plane_min_cdclk[plane->id]);
 		}
+
+		crtc_state->min_cdclk = intel_crtc_min_cdclk(crtc_state);
+
+		drm_dbg_kms(display->drm, "[CRTC:%d:%s] min_cdclk %d kHz\n",
+			    crtc->base.base.id, crtc->base.name, crtc_state->min_cdclk);
 
 		intel_pmdemand_update_port_clock(display, pmdemand_state, pipe,
 						 crtc_state->port_clock);
@@ -871,6 +879,7 @@ static void intel_modeset_readout_hw_state(struct intel_display *display)
 		intel_wm_get_hw_state(display);
 
 	intel_bw_update_hw_state(display);
+	intel_dbuf_bw_update_hw_state(display);
 	intel_cdclk_update_hw_state(display);
 
 	intel_pmdemand_init_pmdemand_params(display, pmdemand_state);
@@ -931,7 +940,7 @@ void intel_modeset_setup_hw_state(struct intel_display *display,
 {
 	struct intel_encoder *encoder;
 	struct intel_crtc *crtc;
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 
 	wakeref = intel_display_power_get(display, POWER_DOMAIN_INIT);
 
@@ -960,7 +969,7 @@ void intel_modeset_setup_hw_state(struct intel_display *display,
 		drm_crtc_vblank_reset(&crtc->base);
 
 		if (crtc_state->hw.active) {
-			intel_dmc_enable_pipe(display, crtc->pipe);
+			intel_dmc_enable_pipe(crtc_state);
 			intel_crtc_vblank_on(crtc_state);
 		}
 	}

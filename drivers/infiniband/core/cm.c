@@ -34,7 +34,6 @@ MODULE_AUTHOR("Sean Hefty");
 MODULE_DESCRIPTION("InfiniBand CM");
 MODULE_LICENSE("Dual BSD/GPL");
 
-#define CM_DESTROY_ID_WAIT_TIMEOUT 10000 /* msecs */
 #define CM_DIRECT_RETRY_CTX ((void *) 1UL)
 #define CM_MRA_SETTING 24 /* 4.096us * 2^24 = ~68.7 seconds */
 
@@ -161,6 +160,7 @@ struct cm_counter_attribute {
 struct cm_port {
 	struct cm_device *cm_dev;
 	struct ib_mad_agent *mad_agent;
+	struct ib_mad_agent *rep_agent;
 	u32 port_num;
 	atomic_long_t counters[CM_COUNTER_GROUPS][CM_ATTR_COUNT];
 };
@@ -274,7 +274,8 @@ static inline void cm_deref_id(struct cm_id_private *cm_id_priv)
 		complete(&cm_id_priv->comp);
 }
 
-static struct ib_mad_send_buf *cm_alloc_msg(struct cm_id_private *cm_id_priv)
+static struct ib_mad_send_buf *
+cm_alloc_msg_agent(struct cm_id_private *cm_id_priv, bool rep_agent)
 {
 	struct ib_mad_agent *mad_agent;
 	struct ib_mad_send_buf *m;
@@ -286,7 +287,8 @@ static struct ib_mad_send_buf *cm_alloc_msg(struct cm_id_private *cm_id_priv)
 		return ERR_PTR(-EINVAL);
 
 	read_lock(&cm_id_priv->av.port->cm_dev->mad_agent_lock);
-	mad_agent = cm_id_priv->av.port->mad_agent;
+	mad_agent = rep_agent ? cm_id_priv->av.port->rep_agent :
+				cm_id_priv->av.port->mad_agent;
 	if (!mad_agent) {
 		m = ERR_PTR(-EINVAL);
 		goto out;
@@ -315,6 +317,11 @@ out:
 	return m;
 }
 
+static struct ib_mad_send_buf *cm_alloc_msg(struct cm_id_private *cm_id_priv)
+{
+	return cm_alloc_msg_agent(cm_id_priv, false);
+}
+
 static void cm_free_msg(struct ib_mad_send_buf *msg)
 {
 	if (msg->ah)
@@ -323,13 +330,14 @@ static void cm_free_msg(struct ib_mad_send_buf *msg)
 }
 
 static struct ib_mad_send_buf *
-cm_alloc_priv_msg(struct cm_id_private *cm_id_priv, enum ib_cm_state state)
+cm_alloc_priv_msg_rep(struct cm_id_private *cm_id_priv, enum ib_cm_state state,
+		      bool rep_agent)
 {
 	struct ib_mad_send_buf *msg;
 
 	lockdep_assert_held(&cm_id_priv->lock);
 
-	msg = cm_alloc_msg(cm_id_priv);
+	msg = cm_alloc_msg_agent(cm_id_priv, rep_agent);
 	if (IS_ERR(msg))
 		return msg;
 
@@ -342,6 +350,12 @@ cm_alloc_priv_msg(struct cm_id_private *cm_id_priv, enum ib_cm_state state)
 	msg->timeout_ms = cm_id_priv->timeout_ms;
 
 	return msg;
+}
+
+static struct ib_mad_send_buf *
+cm_alloc_priv_msg(struct cm_id_private *cm_id_priv, enum ib_cm_state state)
+{
+	return cm_alloc_priv_msg_rep(cm_id_priv, state, false);
 }
 
 static void cm_free_priv_msg(struct ib_mad_send_buf *msg)
@@ -813,7 +827,7 @@ static struct cm_id_private *cm_alloc_id_priv(struct ib_device *device,
 	u32 id;
 	int ret;
 
-	cm_id_priv = kzalloc(sizeof *cm_id_priv, GFP_KERNEL);
+	cm_id_priv = kzalloc_obj(*cm_id_priv);
 	if (!cm_id_priv)
 		return ERR_PTR(-ENOMEM);
 
@@ -962,7 +976,7 @@ static struct cm_timewait_info *cm_create_timewait_info(__be32 local_id)
 {
 	struct cm_timewait_info *timewait_info;
 
-	timewait_info = kzalloc(sizeof *timewait_info, GFP_KERNEL);
+	timewait_info = kzalloc_obj(*timewait_info);
 	if (!timewait_info)
 		return ERR_PTR(-ENOMEM);
 
@@ -1034,14 +1048,15 @@ static noinline void cm_destroy_id_wait_timeout(struct ib_cm_id *cm_id,
 	struct cm_id_private *cm_id_priv;
 
 	cm_id_priv = container_of(cm_id, struct cm_id_private, id);
-	pr_err("%s: cm_id=%p timed out. state %d -> %d, refcnt=%d\n", __func__,
-	       cm_id, old_state, cm_id->state, refcount_read(&cm_id_priv->refcount));
+	pr_err_ratelimited("%s: cm_id=%p timed out. state %d -> %d, refcnt=%d\n", __func__,
+			   cm_id, old_state, cm_id->state, refcount_read(&cm_id_priv->refcount));
 }
 
 static void cm_destroy_id(struct ib_cm_id *cm_id, int err)
 {
 	struct cm_id_private *cm_id_priv;
 	enum ib_cm_state old_state;
+	unsigned long timeout;
 	struct cm_work *work;
 	int ret;
 
@@ -1152,10 +1167,9 @@ retest:
 
 	xa_erase(&cm.local_id_table, cm_local_id(cm_id->local_id));
 	cm_deref_id(cm_id_priv);
+	timeout = msecs_to_jiffies((cm_id_priv->max_cm_retries * cm_id_priv->timeout_ms * 5) / 4);
 	do {
-		ret = wait_for_completion_timeout(&cm_id_priv->comp,
-						  msecs_to_jiffies(
-						  CM_DESTROY_ID_WAIT_TIMEOUT));
+		ret = wait_for_completion_timeout(&cm_id_priv->comp, timeout);
 		if (!ret) /* timeout happened */
 			cm_destroy_id_wait_timeout(cm_id, old_state);
 	} while (!ret);
@@ -2295,7 +2309,7 @@ int ib_send_cm_rep(struct ib_cm_id *cm_id,
 		goto out;
 	}
 
-	msg = cm_alloc_priv_msg(cm_id_priv, IB_CM_REP_SENT);
+	msg = cm_alloc_priv_msg_rep(cm_id_priv, IB_CM_REP_SENT, true);
 	if (IS_ERR(msg)) {
 		ret = PTR_ERR(msg);
 		goto out;
@@ -3888,7 +3902,7 @@ static int cm_establish(struct ib_cm_id *cm_id)
 	if (!cm_dev)
 		return -ENODEV;
 
-	work = kmalloc(sizeof *work, GFP_ATOMIC);
+	work = kmalloc_obj(*work, GFP_ATOMIC);
 	if (!work)
 		return -ENOMEM;
 
@@ -4036,7 +4050,7 @@ static void cm_recv_handler(struct ib_mad_agent *mad_agent,
 	attr_id = be16_to_cpu(mad_recv_wc->recv_buf.mad->mad_hdr.attr_id);
 	atomic_long_inc(&port->counters[CM_RECV][attr_id - CM_ATTR_ID_OFFSET]);
 
-	work = kmalloc(struct_size(work, path, paths), GFP_KERNEL);
+	work = kmalloc_flex(*work, path, paths);
 	if (!work) {
 		ib_free_recv_mad(mad_recv_wc);
 		return;
@@ -4334,8 +4348,7 @@ static int cm_add_one(struct ib_device *ib_device)
 	int count = 0;
 	u32 i;
 
-	cm_dev = kzalloc(struct_size(cm_dev, port, ib_device->phys_port_cnt),
-			 GFP_KERNEL);
+	cm_dev = kzalloc_flex(*cm_dev, port, ib_device->phys_port_cnt);
 	if (!cm_dev)
 		return -ENOMEM;
 
@@ -4352,7 +4365,7 @@ static int cm_add_one(struct ib_device *ib_device)
 		if (!rdma_cap_ib_cm(ib_device, i))
 			continue;
 
-		port = kzalloc(sizeof *port, GFP_KERNEL);
+		port = kzalloc_obj(*port);
 		if (!port) {
 			ret = -ENOMEM;
 			goto error1;
@@ -4380,9 +4393,22 @@ static int cm_add_one(struct ib_device *ib_device)
 			goto error2;
 		}
 
+		port->rep_agent = ib_register_mad_agent(ib_device, i,
+							IB_QPT_GSI,
+							NULL,
+							0,
+							cm_send_handler,
+							NULL,
+							port,
+							0);
+		if (IS_ERR(port->rep_agent)) {
+			ret = PTR_ERR(port->rep_agent);
+			goto error3;
+		}
+
 		ret = ib_modify_port(ib_device, i, 0, &port_modify);
 		if (ret)
-			goto error3;
+			goto error4;
 
 		count++;
 	}
@@ -4397,6 +4423,8 @@ static int cm_add_one(struct ib_device *ib_device)
 	write_unlock_irqrestore(&cm.device_lock, flags);
 	return 0;
 
+error4:
+	ib_unregister_mad_agent(port->rep_agent);
 error3:
 	ib_unregister_mad_agent(port->mad_agent);
 error2:
@@ -4410,6 +4438,7 @@ error1:
 
 		port = cm_dev->port[i-1];
 		ib_modify_port(ib_device, port->port_num, 0, &port_modify);
+		ib_unregister_mad_agent(port->rep_agent);
 		ib_unregister_mad_agent(port->mad_agent);
 		ib_port_unregister_client_groups(ib_device, i,
 						 cm_counter_groups);
@@ -4439,12 +4468,14 @@ static void cm_remove_one(struct ib_device *ib_device, void *client_data)
 
 	rdma_for_each_port (ib_device, i) {
 		struct ib_mad_agent *mad_agent;
+		struct ib_mad_agent *rep_agent;
 
 		if (!rdma_cap_ib_cm(ib_device, i))
 			continue;
 
 		port = cm_dev->port[i-1];
 		mad_agent = port->mad_agent;
+		rep_agent = port->rep_agent;
 		ib_modify_port(ib_device, port->port_num, 0, &port_modify);
 		/*
 		 * We flush the queue here after the going_down set, this
@@ -4458,8 +4489,10 @@ static void cm_remove_one(struct ib_device *ib_device, void *client_data)
 		 */
 		write_lock(&cm_dev->mad_agent_lock);
 		port->mad_agent = NULL;
+		port->rep_agent = NULL;
 		write_unlock(&cm_dev->mad_agent_lock);
 		ib_unregister_mad_agent(mad_agent);
+		ib_unregister_mad_agent(rep_agent);
 		ib_port_unregister_client_groups(ib_device, i,
 						 cm_counter_groups);
 	}
@@ -4483,7 +4516,7 @@ static int __init ib_cm_init(void)
 	get_random_bytes(&cm.random_id_operand, sizeof cm.random_id_operand);
 	INIT_LIST_HEAD(&cm.timewait_list);
 
-	cm.wq = alloc_workqueue("ib_cm", 0, 1);
+	cm.wq = alloc_workqueue("ib_cm", WQ_PERCPU, 1);
 	if (!cm.wq) {
 		ret = -ENOMEM;
 		goto error2;

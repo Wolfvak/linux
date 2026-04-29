@@ -35,6 +35,7 @@
 #include "ptp.h"
 #include "time_sync.h"
 #include "ftm-initiator.h"
+#include "nan.h"
 
 /**
  * DOC: Introduction
@@ -118,7 +119,11 @@
  * @monitor.cur_bssid: current bssid tracked by the sniffer
  * @monitor.ptp_time: set the Rx mactime using the device's PTP clock time
  * @monitor.p80: primary channel position relative to he whole bandwidth, in
- * steps of 80 MHz
+ *	steps of 80 MHz
+ * @monitor.phy: PHY data information
+ * @monitor.phy.data: PHY data (&struct iwl_rx_phy_air_sniffer_ntfy) received
+ * @monitor.phy.valid: PHY data is valid (was received)
+ * @monitor.phy.used: PHY data was used by an RX
  * @fw_id_to_link_sta: maps a fw id of a sta to the corresponding
  *	ieee80211_link_sta. This is not cleaned up on restart since we want to
  *	preserve the fw sta ids during a restart (for SN/PN restoring).
@@ -127,12 +132,15 @@
  *	cleanup using iwl_mld_free_internal_sta
  * @netdetect: indicates the FW is in suspend mode with netdetect configured
  * @p2p_device_vif: points to the p2p device vif if exists
+ * @bt_is_active: indicates that BT is active
  * @dev: pointer to device struct. For printing purposes
  * @trans: pointer to the transport layer
  * @cfg: pointer to the device configuration
  * @fw: a pointer to the fw object
  * @hw: pointer to the hw object.
  * @wiphy: a pointer to the wiphy struct, for easier access to it.
+ * @ext_capab: extended capabilities that will be set to wiphy on registration.
+ * @sta_ext_capab: extended capabilities for the station interface.
  * @nvm_data: pointer to the nvm_data that includes all our capabilities
  * @fwrt: fw runtime data
  * @debugfs_dir: debugfs directory
@@ -149,6 +157,7 @@
  * @running: true if the firmware is running
  * @do_not_dump_once: true if firmware dump must be prevented once
  * @in_d3: indicates FW is in suspend mode and should be resumed
+ * @resuming: indicates the driver is resuming from wowlan
  * @in_hw_restart: indicates that we are currently in restart flow.
  *	rather than restarted. Should be unset upon restart.
  * @radio_kill: bitmap of radio kill status
@@ -158,7 +167,9 @@
  *	device
  * @addresses: device MAC addresses.
  * @scan: instance of the scan object
+ * @channel_survey: channel survey information collected during scan
  * @wowlan: WoWLAN support data.
+ * @debug_max_sleep: maximum sleep time in D3 (for debug purposes)
  * @led: the led device
  * @mcc_src: the source id of the MCC, comes from the firmware
  * @bios_enable_puncturing: is puncturing enabled by bios
@@ -176,6 +187,8 @@
  * @mcast_filter_cmd: pointer to the multicast filter command.
  * @mgmt_tx_ant: stores the last TX antenna index; used for setting
  *	TX rate_n_flags for non-STA mgmt frames (toggles on every TX failure).
+ * @set_tx_ant: stores the last TX antenna bitmask set by user space (if any)
+ * @set_rx_ant: stores the last RX antenna bitmask set by user space (if any)
  * @fw_rates_ver_3: FW rates are in version 3
  * @low_latency: low-latency manager.
  * @tzone: thermal zone device's data
@@ -187,7 +200,7 @@
  * @ptp_data: data of the PTP clock
  * @time_sync: time sync data.
  * @ftm_initiator: FTM initiator data
- * @last_bt_notif: last received BT Coex notif
+ * @nan_device_vif: points to the NAN device vif if exists
  */
 struct iwl_mld {
 	/* Add here fields that need clean up on restart */
@@ -202,6 +215,10 @@ struct iwl_mld {
 			u32 ampdu_ref;
 			bool ampdu_toggle;
 			u8 p80;
+			struct {
+				struct iwl_rx_phy_air_sniffer_ntfy data;
+				u8 valid:1, used:1;
+			} phy;
 #ifdef CONFIG_IWLWIFI_DEBUGFS
 			__le16 cur_aid;
 			u8 cur_bssid[ETH_ALEN];
@@ -212,7 +229,8 @@ struct iwl_mld {
 		bool netdetect;
 #endif /* CONFIG_PM_SLEEP */
 		struct ieee80211_vif *p2p_device_vif;
-		struct iwl_bt_coex_profile_notif last_bt_notif;
+		bool bt_is_active;
+		struct ieee80211_vif *nan_device_vif;
 	);
 	struct ieee80211_link_sta __rcu *fw_id_to_link_sta[IWL_STATION_COUNT_MAX];
 	/* And here fields that survive a fw restart */
@@ -222,6 +240,8 @@ struct iwl_mld {
 	const struct iwl_fw *fw;
 	struct ieee80211_hw *hw;
 	struct wiphy *wiphy;
+	struct wiphy_iftype_ext_capab ext_capab[IWL_MLD_EXT_CAPA_NUM_IFTYPES];
+	u8 sta_ext_capab[IWL_MLD_STA_EXT_CAPA_SIZE];
 	struct iwl_nvm_data *nvm_data;
 	struct iwl_fw_runtime fwrt;
 	struct dentry *debugfs_dir;
@@ -236,6 +256,7 @@ struct iwl_mld {
 		    do_not_dump_once:1,
 #ifdef CONFIG_PM_SLEEP
 		    in_d3:1,
+		    resuming:1,
 #endif
 		    in_hw_restart:1;
 
@@ -250,8 +271,10 @@ struct iwl_mld {
 
 	struct mac_address addresses[IWL_MLD_MAX_ADDRESSES];
 	struct iwl_mld_scan scan;
+	struct iwl_mld_survey *channel_survey;
 #ifdef CONFIG_PM_SLEEP
 	struct wiphy_wowlan_support wowlan;
+	u32 debug_max_sleep;
 #endif /* CONFIG_PM_SLEEP */
 #ifdef CONFIG_IWLWIFI_LEDS
 	struct led_classdev led;
@@ -272,6 +295,9 @@ struct iwl_mld {
 	struct iwl_mcast_filter_cmd *mcast_filter_cmd;
 
 	u8 mgmt_tx_ant;
+
+	u8 set_tx_ant;
+	u8 set_rx_ant;
 
 	bool fw_rates_ver_3;
 
@@ -368,6 +394,9 @@ static inline u8 iwl_mld_get_valid_tx_ant(const struct iwl_mld *mld)
 	if (mld->nvm_data && mld->nvm_data->valid_tx_ant)
 		tx_ant &= mld->nvm_data->valid_tx_ant;
 
+	if (mld->set_tx_ant)
+		tx_ant &= mld->set_tx_ant;
+
 	return tx_ant;
 }
 
@@ -377,6 +406,9 @@ static inline u8 iwl_mld_get_valid_rx_ant(const struct iwl_mld *mld)
 
 	if (mld->nvm_data && mld->nvm_data->valid_rx_ant)
 		rx_ant &= mld->nvm_data->valid_rx_ant;
+
+	if (mld->set_rx_ant)
+		rx_ant &= mld->set_rx_ant;
 
 	return rx_ant;
 }

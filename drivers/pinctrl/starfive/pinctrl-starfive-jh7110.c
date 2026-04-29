@@ -143,7 +143,7 @@ static int jh7110_dt_node_to_map(struct pinctrl_dev *pctldev,
 	if (!pgnames)
 		return -ENOMEM;
 
-	map = kcalloc(nmaps, sizeof(*map), GFP_KERNEL);
+	map = kzalloc_objs(*map, nmaps);
 	if (!map)
 		return -ENOMEM;
 
@@ -608,8 +608,7 @@ static int jh7110_gpio_get(struct gpio_chip *gc, unsigned int gpio)
 	return !!(readl_relaxed(reg) & BIT(gpio % 32));
 }
 
-static void jh7110_gpio_set(struct gpio_chip *gc,
-			    unsigned int gpio, int value)
+static int jh7110_gpio_set(struct gpio_chip *gc, unsigned int gpio, int value)
 {
 	struct jh7110_pinctrl *sfp = container_of(gc,
 			struct jh7110_pinctrl, gc);
@@ -625,6 +624,8 @@ static void jh7110_gpio_set(struct gpio_chip *gc,
 	dout |= readl_relaxed(reg_dout) & ~mask;
 	writel_relaxed(dout, reg_dout);
 	raw_spin_unlock_irqrestore(&sfp->lock, flags);
+
+	return 0;
 }
 
 static int jh7110_gpio_set_config(struct gpio_chip *gc,
@@ -937,7 +938,7 @@ int jh7110_pinctrl_probe(struct platform_device *pdev)
 	sfp->gc.set = jh7110_gpio_set;
 	sfp->gc.set_config = jh7110_gpio_set_config;
 	sfp->gc.add_pin_ranges = jh7110_gpio_add_pin_ranges;
-	sfp->gc.base = info->gc_base;
+	sfp->gc.base = -1;
 	sfp->gc.ngpio = info->ngpios;
 
 	jh7110_irq_chip.name = sfp->gc.label;

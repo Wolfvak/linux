@@ -606,8 +606,8 @@ static void npc_set_features(struct rvu *rvu, int blkaddr, u8 intf)
 		if (!npc_check_field(rvu, blkaddr, NPC_LB, intf))
 			*features &= ~BIT_ULL(NPC_OUTER_VID);
 
-	/* Set SPI flag only if AH/ESP and IPSEC_SPI are in the key */
-	if (npc_check_field(rvu, blkaddr, NPC_IPSEC_SPI, intf) &&
+	/* Allow extracting SPI field from AH and ESP headers at same offset */
+	if (npc_is_field_present(rvu, NPC_IPSEC_SPI, intf) &&
 	    (*features & (BIT_ULL(NPC_IPPROTO_ESP) | BIT_ULL(NPC_IPPROTO_AH))))
 		*features |= BIT_ULL(NPC_IPSEC_SPI);
 
@@ -1297,7 +1297,7 @@ static int npc_install_flow(struct rvu *rvu, int blkaddr, u16 target,
 find_rule:
 	rule = rvu_mcam_find_rule(mcam, entry_index);
 	if (!rule) {
-		rule = kzalloc(sizeof(*rule), GFP_KERNEL);
+		rule = kzalloc_obj(*rule);
 		if (!rule)
 			return -ENOMEM;
 		new = true;
@@ -1741,7 +1741,7 @@ int npc_install_mcam_drop_rule(struct rvu *rvu, int mcam_idx, u16 *counter_idx,
 	}
 
 	/* Add this entry to mcam rules list */
-	rule = kzalloc(sizeof(*rule), GFP_KERNEL);
+	rule = kzalloc_obj(*rule);
 	if (!rule)
 		return -ENOMEM;
 

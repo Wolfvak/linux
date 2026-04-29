@@ -8,7 +8,6 @@
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/gpio/consumer.h>
 #include <linux/power_supply.h>
 #include <linux/regmap.h>
 #include <linux/types.h>
@@ -387,7 +386,7 @@ static void bq256xx_usb_work(struct work_struct *data)
 	}
 }
 
-static struct reg_default bq2560x_reg_defs[] = {
+static const struct reg_default bq2560x_reg_defs[] = {
 	{BQ256XX_INPUT_CURRENT_LIMIT, 0x17},
 	{BQ256XX_CHARGER_CONTROL_0, 0x1a},
 	{BQ256XX_CHARGE_CURRENT_LIMIT, 0xa2},
@@ -398,7 +397,7 @@ static struct reg_default bq2560x_reg_defs[] = {
 	{BQ256XX_CHARGER_CONTROL_3, 0x4c},
 };
 
-static struct reg_default bq25611d_reg_defs[] = {
+static const struct reg_default bq25611d_reg_defs[] = {
 	{BQ256XX_INPUT_CURRENT_LIMIT, 0x17},
 	{BQ256XX_CHARGER_CONTROL_0, 0x1a},
 	{BQ256XX_CHARGE_CURRENT_LIMIT, 0x91},
@@ -411,7 +410,7 @@ static struct reg_default bq25611d_reg_defs[] = {
 	{BQ256XX_CHARGER_CONTROL_4, 0x75},
 };
 
-static struct reg_default bq25618_619_reg_defs[] = {
+static const struct reg_default bq25618_619_reg_defs[] = {
 	{BQ256XX_INPUT_CURRENT_LIMIT, 0x17},
 	{BQ256XX_CHARGER_CONTROL_0, 0x1a},
 	{BQ256XX_CHARGE_CURRENT_LIMIT, 0x91},
@@ -1741,6 +1740,12 @@ static int bq256xx_probe(struct i2c_client *client)
 		usb_register_notifier(bq->usb3_phy, &bq->usb_nb);
 	}
 
+	ret = bq256xx_power_supply_init(bq, &psy_cfg, dev);
+	if (ret) {
+		dev_err(dev, "Failed to register power supply\n");
+		return ret;
+	}
+
 	if (client->irq) {
 		ret = devm_request_threaded_irq(dev, client->irq, NULL,
 						bq256xx_irq_handler_thread,
@@ -1751,12 +1756,6 @@ static int bq256xx_probe(struct i2c_client *client)
 			dev_err(dev, "get irq fail: %d\n", ret);
 			return ret;
 		}
-	}
-
-	ret = bq256xx_power_supply_init(bq, &psy_cfg, dev);
-	if (ret) {
-		dev_err(dev, "Failed to register power supply\n");
-		return ret;
 	}
 
 	ret = bq256xx_hw_init(bq);

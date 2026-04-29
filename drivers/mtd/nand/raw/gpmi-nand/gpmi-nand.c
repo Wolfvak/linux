@@ -145,6 +145,9 @@ err_clk:
 	return ret;
 }
 
+#define gpmi_enable_clk(x)	__gpmi_enable_clk(x, true)
+#define gpmi_disable_clk(x)	__gpmi_enable_clk(x, false)
+
 static int gpmi_init(struct gpmi_nand_data *this)
 {
 	struct resources *r = &this->resources;
@@ -188,7 +191,6 @@ static int gpmi_init(struct gpmi_nand_data *this)
 	       r->gpmi_regs + HW_GPMI_CTRL1_SET);
 
 err_out:
-	pm_runtime_mark_last_busy(this->dev);
 	pm_runtime_put_autosuspend(this->dev);
 	return ret;
 }
@@ -758,7 +760,6 @@ static int bch_set_geometry(struct gpmi_nand_data *this)
 
 	ret = 0;
 err_out:
-	pm_runtime_mark_last_busy(this->dev);
 	pm_runtime_put_autosuspend(this->dev);
 
 	return ret;
@@ -2664,7 +2665,6 @@ unmap:
 	this->bch = false;
 
 out_pm:
-	pm_runtime_mark_last_busy(this->dev);
 	pm_runtime_put_autosuspend(this->dev);
 
 	return ret;
@@ -2765,6 +2765,11 @@ static int gpmi_nand_probe(struct platform_device *pdev)
 	pm_runtime_enable(&pdev->dev);
 	pm_runtime_set_autosuspend_delay(&pdev->dev, 500);
 	pm_runtime_use_autosuspend(&pdev->dev);
+#ifndef CONFIG_PM
+	ret = gpmi_enable_clk(this);
+	if (ret)
+		goto exit_acquire_resources;
+#endif
 
 	ret = gpmi_init(this);
 	if (ret)
@@ -2800,6 +2805,9 @@ static void gpmi_nand_remove(struct platform_device *pdev)
 	release_resources(this);
 	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
+#ifndef CONFIG_PM
+	gpmi_disable_clk(this);
+#endif
 }
 
 static int gpmi_pm_suspend(struct device *dev)
@@ -2845,9 +2853,6 @@ static int gpmi_pm_resume(struct device *dev)
 
 	return 0;
 }
-
-#define gpmi_enable_clk(x)	__gpmi_enable_clk(x, true)
-#define gpmi_disable_clk(x)	__gpmi_enable_clk(x, false)
 
 static int gpmi_runtime_suspend(struct device *dev)
 {

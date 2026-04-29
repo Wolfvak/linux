@@ -333,7 +333,7 @@ int smu7_request_smu_load_fw(struct pp_hwmgr *hwmgr)
 	if (!smu_data->toc) {
 		struct SMU_DRAMData_TOC *toc;
 
-		smu_data->toc = kzalloc(sizeof(struct SMU_DRAMData_TOC), GFP_KERNEL);
+		smu_data->toc = kzalloc_obj(struct SMU_DRAMData_TOC);
 		if (!smu_data->toc)
 			return -ENOMEM;
 		toc = smu_data->toc;
@@ -401,7 +401,7 @@ failed:
 int smu7_check_fw_load_finish(struct pp_hwmgr *hwmgr, uint32_t fw_type)
 {
 	struct smu7_smumgr *smu_data = (struct smu7_smumgr *)(hwmgr->smu_backend);
-	uint32_t ret;
+	int ret;
 
 	ret = phm_wait_on_indirect_register(hwmgr, mmSMC_IND_INDEX_11,
 					smu_data->soft_regs_start + smum_get_offsetof(hwmgr,

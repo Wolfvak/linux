@@ -26,8 +26,6 @@
 #include "lkc.h"
 #include "qconf.h"
 
-#include "images.h"
-
 
 static QApplication *configApp;
 static ConfigSettings *configSettings;
@@ -37,6 +35,12 @@ QAction *ConfigMainWindow::saveAction;
 ConfigSettings::ConfigSettings()
 	: QSettings("kernel.org", "qconf")
 {
+	beginGroup("/kconfig/qconf");
+}
+
+ConfigSettings::~ConfigSettings()
+{
+	endGroup();
 }
 
 /**
@@ -92,7 +96,6 @@ void ConfigItem::updateMenu(void)
 {
 	ConfigList* list;
 	struct symbol* sym;
-	struct property *prop;
 	QString prompt;
 	int type;
 	tristate expr;
@@ -105,11 +108,10 @@ void ConfigItem::updateMenu(void)
 	}
 
 	sym = menu->sym;
-	prop = menu->prompt;
 	prompt = menu_get_prompt(menu);
 
-	if (prop) switch (prop->type) {
-	case P_MENU:
+	switch (menu->type) {
+	case M_MENU:
 		if (list->mode == singleMode) {
 			/* a menuconfig entry is displayed differently
 			 * depending whether it's at the view root or a child.
@@ -123,9 +125,15 @@ void ConfigItem::updateMenu(void)
 			setIcon(promptColIdx, QIcon());
 		}
 		goto set_prompt;
-	case P_COMMENT:
+	case M_COMMENT:
 		setIcon(promptColIdx, QIcon());
 		prompt = "*** " + prompt + " ***";
+		goto set_prompt;
+	case M_CHOICE:
+		setIcon(promptColIdx, QIcon());
+		sym = sym_calc_choice(menu);
+		if (sym)
+			setText(dataColIdx, sym->name);
 		goto set_prompt;
 	default:
 		;
@@ -188,7 +196,11 @@ void ConfigItem::testUpdateMenu(void)
 	if (!menu)
 		return;
 
-	sym_calc_value(menu->sym);
+	if (menu->type == M_CHOICE)
+		sym_calc_choice(menu);
+	else
+		sym_calc_value(menu->sym);
+
 	if (menu->flags & MENU_CHANGED) {
 		/* the menu entry changed, so update all list items */
 		menu->flags &= ~MENU_CHANGED;
@@ -478,7 +490,7 @@ void ConfigList::updateListAllForAll()
 	while (it.hasNext()) {
 		ConfigList *list = it.next();
 
-		list->updateList();
+		list->updateListAll();
 	}
 }
 
@@ -569,7 +581,7 @@ void ConfigList::setParentMenu(void)
 	oldroot = rootEntry;
 	if (rootEntry == &rootmenu)
 		return;
-	setRootMenu(menu_get_parent_menu(rootEntry->parent));
+	setRootMenu(menu_get_menu_or_parent_menu(rootEntry->parent));
 
 	QTreeWidgetItemIterator it(this);
 	while (*it) {
@@ -1269,13 +1281,14 @@ ConfigMainWindow::ConfigMainWindow(void)
 		move(x.toInt(), y.toInt());
 
 	// set up icons
-	ConfigItem::symbolYesIcon = QIcon(QPixmap(xpm_symbol_yes));
-	ConfigItem::symbolModIcon = QIcon(QPixmap(xpm_symbol_mod));
-	ConfigItem::symbolNoIcon = QIcon(QPixmap(xpm_symbol_no));
-	ConfigItem::choiceYesIcon = QIcon(QPixmap(xpm_choice_yes));
-	ConfigItem::choiceNoIcon = QIcon(QPixmap(xpm_choice_no));
-	ConfigItem::menuIcon = QIcon(QPixmap(xpm_menu));
-	ConfigItem::menubackIcon = QIcon(QPixmap(xpm_menuback));
+	QString iconsDir = QString(getenv(SRCTREE) ? getenv(SRCTREE) : QDir::currentPath()) + "/scripts/kconfig/icons/";
+	ConfigItem::symbolYesIcon = QIcon(QPixmap(iconsDir + "symbol_yes.xpm"));
+	ConfigItem::symbolModIcon = QIcon(QPixmap(iconsDir + "symbol_mod.xpm"));
+	ConfigItem::symbolNoIcon = QIcon(QPixmap(iconsDir + "symbol_no.xpm"));
+	ConfigItem::choiceYesIcon = QIcon(QPixmap(iconsDir + "choice_yes.xpm"));
+	ConfigItem::choiceNoIcon = QIcon(QPixmap(iconsDir + "choice_no.xpm"));
+	ConfigItem::menuIcon = QIcon(QPixmap(iconsDir + "menu.xpm"));
+	ConfigItem::menubackIcon = QIcon(QPixmap(iconsDir + "menuback.xpm"));
 
 	QWidget *widget = new QWidget(this);
 	setCentralWidget(widget);
@@ -1298,7 +1311,7 @@ ConfigMainWindow::ConfigMainWindow(void)
 
 	configList->setFocus();
 
-	backAction = new QAction(QPixmap(xpm_back), "Back", this);
+	backAction = new QAction(QPixmap(iconsDir + "back.xpm"), "Back", this);
 	backAction->setShortcut(QKeySequence::Back);
 	connect(backAction, &QAction::triggered,
 		this, &ConfigMainWindow::goBack);
@@ -1308,12 +1321,12 @@ ConfigMainWindow::ConfigMainWindow(void)
 	connect(quitAction, &QAction::triggered,
 		this, &ConfigMainWindow::close);
 
-	QAction *loadAction = new QAction(QPixmap(xpm_load), "&Open", this);
+	QAction *loadAction = new QAction(QPixmap(iconsDir + "load.xpm"), "&Open", this);
 	loadAction->setShortcut(QKeySequence::Open);
 	connect(loadAction, &QAction::triggered,
 		this, &ConfigMainWindow::loadConfig);
 
-	saveAction = new QAction(QPixmap(xpm_save), "&Save", this);
+	saveAction = new QAction(QPixmap(iconsDir + "save.xpm"), "&Save", this);
 	saveAction->setShortcut(QKeySequence::Save);
 	connect(saveAction, &QAction::triggered,
 		this, &ConfigMainWindow::saveConfig);
@@ -1330,15 +1343,15 @@ ConfigMainWindow::ConfigMainWindow(void)
 	searchAction->setShortcut(QKeySequence::Find);
 	connect(searchAction, &QAction::triggered,
 		this, &ConfigMainWindow::searchConfig);
-	singleViewAction = new QAction(QPixmap(xpm_single_view), "Single View", this);
+	singleViewAction = new QAction(QPixmap(iconsDir + "single_view.xpm"), "Single View", this);
 	singleViewAction->setCheckable(true);
 	connect(singleViewAction, &QAction::triggered,
 		this, &ConfigMainWindow::showSingleView);
-	splitViewAction = new QAction(QPixmap(xpm_split_view), "Split View", this);
+	splitViewAction = new QAction(QPixmap(iconsDir + "split_view.xpm"), "Split View", this);
 	splitViewAction->setCheckable(true);
 	connect(splitViewAction, &QAction::triggered,
 		this, &ConfigMainWindow::showSplitView);
-	fullViewAction = new QAction(QPixmap(xpm_tree_view), "Full View", this);
+	fullViewAction = new QAction(QPixmap(iconsDir + "tree_view.xpm"), "Full View", this);
 	fullViewAction->setCheckable(true);
 	connect(fullViewAction, &QAction::triggered,
 		this, &ConfigMainWindow::showFullView);
@@ -1362,6 +1375,19 @@ ConfigMainWindow::ConfigMainWindow(void)
 	ConfigList::showAllAction->setCheckable(true);
 	ConfigList::showPromptAction = new QAction("Show Prompt Options", optGroup);
 	ConfigList::showPromptAction->setCheckable(true);
+
+	switch (configList->optMode) {
+	case allOpt:
+		ConfigList::showAllAction->setChecked(true);
+		break;
+	case promptOpt:
+		ConfigList::showPromptAction->setChecked(true);
+		break;
+	case normalOpt:
+	default:
+		ConfigList::showNormalAction->setChecked(true);
+		break;
+	}
 
 	QAction *showDebugAction = new QAction("Show Debug Info", this);
 	  showDebugAction->setCheckable(true);
@@ -1532,7 +1558,7 @@ void ConfigMainWindow::setMenuLink(struct menu *menu)
 	switch (configList->mode) {
 	case singleMode:
 		list = configList;
-		parent = menu_get_parent_menu(menu);
+		parent = menu_get_menu_or_parent_menu(menu);
 		if (!parent)
 			return;
 		list->setRootMenu(parent);
@@ -1543,7 +1569,7 @@ void ConfigMainWindow::setMenuLink(struct menu *menu)
 			configList->clearSelection();
 			list = configList;
 		} else {
-			parent = menu_get_parent_menu(menu->parent);
+			parent = menu_get_menu_or_parent_menu(menu->parent);
 			if (!parent)
 				return;
 
@@ -1821,7 +1847,6 @@ int main(int ac, char** av)
 	configApp = new QApplication(ac, av);
 
 	configSettings = new ConfigSettings();
-	configSettings->beginGroup("/kconfig/qconf");
 	v = new ConfigMainWindow();
 
 	//zconfdump(stdout);
@@ -1829,7 +1854,6 @@ int main(int ac, char** av)
 	v->show();
 	configApp->exec();
 
-	configSettings->endGroup();
 	delete configSettings;
 	delete v;
 	delete configApp;

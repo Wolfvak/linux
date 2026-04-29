@@ -21,6 +21,7 @@
  * in this header file of the size of struct utp_upiu_header.
  */
 static_assert(sizeof(struct utp_upiu_header) == 12);
+static_assert(sizeof(struct utp_upiu_query) == 20);
 
 #define GENERAL_UPIU_REQUEST_SIZE (sizeof(struct utp_upiu_req))
 #define QUERY_DESC_MAX_SIZE       255
@@ -182,6 +183,11 @@ enum attr_idn {
 	QUERY_ATTR_IDN_CURR_WB_BUFF_SIZE        = 0x1F,
 	QUERY_ATTR_IDN_TIMESTAMP		= 0x30,
 	QUERY_ATTR_IDN_DEV_LVL_EXCEPTION_ID     = 0x34,
+	QUERY_ATTR_IDN_HID_DEFRAG_OPERATION	= 0x35,
+	QUERY_ATTR_IDN_HID_AVAILABLE_SIZE	= 0x36,
+	QUERY_ATTR_IDN_HID_SIZE			= 0x37,
+	QUERY_ATTR_IDN_HID_PROGRESS_RATIO	= 0x38,
+	QUERY_ATTR_IDN_HID_STATE		= 0x39,
 	QUERY_ATTR_IDN_WB_BUF_RESIZE_HINT	= 0x3C,
 	QUERY_ATTR_IDN_WB_BUF_RESIZE_EN		= 0x3D,
 	QUERY_ATTR_IDN_WB_BUF_RESIZE_STATUS	= 0x3E,
@@ -401,6 +407,7 @@ enum {
 	UFS_DEV_HPB_SUPPORT		= BIT(7),
 	UFS_DEV_WRITE_BOOSTER_SUP	= BIT(8),
 	UFS_DEV_LVL_EXCEPTION_SUP       = BIT(12),
+	UFS_DEV_HID_SUPPORT		= BIT(13),
 };
 #define UFS_DEV_HPB_SUPPORT_VERSION		0x310
 
@@ -464,6 +471,24 @@ enum ufs_ref_clk_freq {
 	REF_CLK_FREQ_38_4_MHZ	= 2,
 	REF_CLK_FREQ_52_MHZ	= 3,
 	REF_CLK_FREQ_INVAL	= -1,
+};
+
+/* bDefragOperation attribute values */
+enum ufs_hid_defrag_operation {
+	HID_ANALYSIS_AND_DEFRAG_DISABLE	= 0,
+	HID_ANALYSIS_ENABLE		= 1,
+	HID_ANALYSIS_AND_DEFRAG_ENABLE	= 2,
+};
+
+/* bHIDState attribute values */
+enum ufs_hid_state {
+	HID_IDLE		= 0,
+	ANALYSIS_IN_PROGRESS	= 1,
+	DEFRAG_REQUIRED		= 2,
+	DEFRAG_IN_PROGRESS	= 3,
+	DEFRAG_COMPLETED	= 4,
+	DEFRAG_NOT_REQUIRED	= 5,
+	NUM_UFS_HID_STATES	= 6,
 };
 
 /* bWriteBoosterBufferResizeEn attribute */
@@ -537,7 +562,7 @@ enum ufs_dev_pwr_mode {
 #define UFS_WB_BUF_REMAIN_PERCENT(val) ((val) / 10)
 
 /**
- * struct utp_cmd_rsp - Response UPIU structure
+ * struct utp_cmd_rsp - RESPONSE UPIU structure
  * @residual_transfer_count: Residual transfer count DW-3
  * @reserved: Reserved double words DW-4 to DW-7
  * @sense_data_len: Sense data length DW-8 U16
@@ -549,6 +574,8 @@ struct utp_cmd_rsp {
 	__be16 sense_data_len;
 	u8 sense_data[UFS_SENSE_SIZE];
 };
+
+static_assert(sizeof(struct utp_cmd_rsp) == 40);
 
 /**
  * struct utp_upiu_rsp - general upiu response structure
@@ -625,23 +652,13 @@ struct ufs_dev_info {
 	u32 rtc_update_period;
 
 	u8 rtt_cap; /* bDeviceRTTCap */
-};
 
-/*
- * This enum is used in string mapping in ufs_trace.h.
- */
-enum ufs_trace_str_t {
-	UFS_CMD_SEND, UFS_CMD_COMP, UFS_DEV_COMP,
-	UFS_QUERY_SEND, UFS_QUERY_COMP, UFS_QUERY_ERR,
-	UFS_TM_SEND, UFS_TM_COMP, UFS_TM_ERR
-};
+	bool hid_sup;
 
-/*
- * Transaction Specific Fields (TSF) type in the UPIU package, this enum is
- * used in ufs_trace.h for UFS command trace.
- */
-enum ufs_trace_tsf_t {
-	UFS_TSF_CDB, UFS_TSF_OSF, UFS_TSF_TM_INPUT, UFS_TSF_TM_OUTPUT
+	/* Unique device ID string (manufacturer+model+serial+version+date) */
+	char *device_id;
+	u8 rpmb_io_size;
+	u8 rpmb_region_size[4];
 };
 
 #endif /* End of Header */

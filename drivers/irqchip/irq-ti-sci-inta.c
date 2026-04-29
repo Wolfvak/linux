@@ -222,7 +222,7 @@ static struct ti_sci_inta_vint_desc *ti_sci_inta_alloc_parent_irq(struct irq_dom
 		goto free_vint;
 	}
 
-	vint_desc = kzalloc(sizeof(*vint_desc), GFP_KERNEL);
+	vint_desc = kzalloc_obj(*vint_desc);
 	if (!vint_desc) {
 		ret = -ENOMEM;
 		goto free_vint;
@@ -701,8 +701,7 @@ static int ti_sci_inta_irq_domain_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	domain = irq_domain_create_linear(of_fwnode_handle(dev_of_node(dev)),
-					  ti_sci_get_num_resources(inta->vint),
+	domain = irq_domain_create_linear(dev_fwnode(dev), ti_sci_get_num_resources(inta->vint),
 					  &ti_sci_inta_irq_domain_ops, inta);
 	if (!domain) {
 		dev_err(dev, "Failed to allocate IRQ domain\n");

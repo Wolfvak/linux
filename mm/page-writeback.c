@@ -38,10 +38,10 @@
 #include <linux/sched/rt.h>
 #include <linux/sched/signal.h>
 #include <linux/mm_inline.h>
+#include <linux/shmem_fs.h>
 #include <trace/events/writeback.h>
 
 #include "internal.h"
-#include "swap.h"
 
 /*
  * Sleep at most 200ms at a time in balance_dirty_pages().
@@ -108,14 +108,6 @@ EXPORT_SYMBOL_GPL(dirty_writeback_interval);
  * The longest time for which data is allowed to remain dirty
  */
 unsigned int dirty_expire_interval = 30 * 100; /* centiseconds */
-
-/*
- * Flag that puts the machine in "laptop mode". Doubles as a timeout in jiffies:
- * a full sync is triggered after this time elapses without any disk activity.
- */
-int laptop_mode;
-
-EXPORT_SYMBOL(laptop_mode);
 
 /* End of sysctl-exported parameters */
 
@@ -1101,9 +1093,7 @@ static void wb_position_ratio(struct dirty_throttle_control *dtc)
 	 * such filesystems balance_dirty_pages always checks wb counters
 	 * against wb limits. Even if global "nr_dirty" is under "freerun".
 	 * This is especially important for fuse which sets bdi->max_ratio to
-	 * 1% by default. Without strictlimit feature, fuse writeback may
-	 * consume arbitrary amount of RAM because it is accounted in
-	 * NR_WRITEBACK_TEMP which is not involved in calculating "nr_dirty".
+	 * 1% by default.
 	 *
 	 * Here, in wb_position_ratio(), we calculate pos_ratio based on
 	 * two values: wb_dirty and wb_thresh. Let's consider an example:
@@ -1845,17 +1835,7 @@ static int balance_dirty_pages(struct bdi_writeback *wb,
 			balance_domain_limits(mdtc, strictlimit);
 		}
 
-		/*
-		 * In laptop mode, we wait until hitting the higher threshold
-		 * before starting background writeout, and then write out all
-		 * the way down to the lower threshold.  So slow writers cause
-		 * minimal disk activity.
-		 *
-		 * In normal mode, we start background writeout at the lower
-		 * background_thresh, to keep the amount of dirty memory low.
-		 */
-		if (!laptop_mode && nr_dirty > gdtc->bg_thresh &&
-		    !writeback_in_progress(wb))
+		if (nr_dirty > gdtc->bg_thresh && !writeback_in_progress(wb))
 			wb_start_background_writeback(wb);
 
 		/*
@@ -1878,7 +1858,24 @@ free_running:
 			break;
 		}
 
-		/* Start writeback even when in laptop mode */
+		/*
+		 * Unconditionally start background writeback if it's not
+		 * already in progress. We need to do this because the global
+		 * dirty threshold check above (nr_dirty > gdtc->bg_thresh)
+		 * doesn't account for these cases:
+		 *
+		 * a) strictlimit BDIs: throttling is calculated using per-wb
+		 * thresholds. The per-wb threshold can be exceeded even when
+		 * nr_dirty < gdtc->bg_thresh
+		 *
+		 * b) memcg-based throttling: memcg uses its own dirty count and
+		 * thresholds and can trigger throttling even when global
+		 * nr_dirty < gdtc->bg_thresh
+		 *
+		 * Writeback needs to be started else the writer stalls in the
+		 * throttle loop waiting for dirty pages to be written back
+		 * while no writeback is running.
+		 */
 		if (unlikely(!writeback_in_progress(wb)))
 			wb_start_background_writeback(wb);
 
@@ -2200,41 +2197,6 @@ static int dirty_writeback_centisecs_handler(const struct ctl_table *table, int 
 }
 #endif
 
-void laptop_mode_timer_fn(struct timer_list *t)
-{
-	struct backing_dev_info *backing_dev_info =
-		timer_container_of(backing_dev_info, t, laptop_mode_wb_timer);
-
-	wakeup_flusher_threads_bdi(backing_dev_info, WB_REASON_LAPTOP_TIMER);
-}
-
-/*
- * We've spun up the disk and we're in laptop mode: schedule writeback
- * of all dirty data a few seconds from now.  If the flush is already scheduled
- * then push it back - the user is still using the disk.
- */
-void laptop_io_completion(struct backing_dev_info *info)
-{
-	mod_timer(&info->laptop_mode_wb_timer, jiffies + laptop_mode);
-}
-
-/*
- * We're in laptop mode and we've just synced. The sync's writes will have
- * caused another writeback to be scheduled by laptop_io_completion.
- * Nothing needs to be written back anymore, so we unschedule the writeback.
- */
-void laptop_sync_completion(void)
-{
-	struct backing_dev_info *bdi;
-
-	rcu_read_lock();
-
-	list_for_each_entry_rcu(bdi, &bdi_list, bdi_list)
-		timer_delete(&bdi->laptop_mode_wb_timer);
-
-	rcu_read_unlock();
-}
-
 /*
  * If ratelimit_pages is too high then we can get into dirty-data overload
  * if a large number of processes all perform writes at the same time.
@@ -2264,6 +2226,19 @@ static int page_writeback_cpu_online(unsigned int cpu)
 }
 
 #ifdef CONFIG_SYSCTL
+
+static int laptop_mode;
+static int laptop_mode_handler(const struct ctl_table *table, int write,
+			       void *buffer, size_t *lenp, loff_t *ppos)
+{
+	int ret = proc_dointvec_jiffies(table, write, buffer, lenp, ppos);
+
+	if (!ret && write)
+		pr_warn("%s: vm.laptop_mode is deprecated. Ignoring setting.\n",
+			current->comm);
+
+	return ret;
+}
 
 /* this is needed for the proc_doulongvec_minmax of vm_dirty_bytes */
 static const unsigned long dirty_bytes_min = 2 * PAGE_SIZE;
@@ -2334,7 +2309,7 @@ static const struct ctl_table vm_page_writeback_sysctls[] = {
 		.data		= &laptop_mode,
 		.maxlen		= sizeof(laptop_mode),
 		.mode		= 0644,
-		.proc_handler	= proc_dointvec_jiffies,
+		.proc_handler	= laptop_mode_handler,
 	},
 };
 #endif
@@ -2436,12 +2411,6 @@ static bool folio_prepare_writeback(struct address_space *mapping,
 	return true;
 }
 
-static xa_mark_t wbc_to_tag(struct writeback_control *wbc)
-{
-	if (wbc->sync_mode == WB_SYNC_ALL || wbc->tagged_writepages)
-		return PAGECACHE_TAG_TOWRITE;
-	return PAGECACHE_TAG_DIRTY;
-}
 
 static pgoff_t wbc_end(struct writeback_control *wbc)
 {
@@ -2592,36 +2561,6 @@ done:
 }
 EXPORT_SYMBOL_GPL(writeback_iter);
 
-/**
- * write_cache_pages - walk the list of dirty pages of the given address space and write all of them.
- * @mapping: address space structure to write
- * @wbc: subtract the number of written pages from *@wbc->nr_to_write
- * @writepage: function called for each page
- * @data: data passed to writepage function
- *
- * Return: %0 on success, negative error code otherwise
- *
- * Note: please use writeback_iter() instead.
- */
-int write_cache_pages(struct address_space *mapping,
-		      struct writeback_control *wbc, writepage_t writepage,
-		      void *data)
-{
-	struct folio *folio = NULL;
-	int error;
-
-	while ((folio = writeback_iter(mapping, wbc, folio, &error))) {
-		error = writepage(folio, wbc, data);
-		if (error == AOP_WRITEPAGE_ACTIVATE) {
-			folio_unlock(folio);
-			error = 0;
-		}
-	}
-
-	return error;
-}
-EXPORT_SYMBOL(write_cache_pages);
-
 int do_writepages(struct address_space *mapping, struct writeback_control *wbc)
 {
 	int ret;
@@ -2690,7 +2629,7 @@ static void folio_account_dirtied(struct folio *folio,
 		inode_attach_wb(inode, folio);
 		wb = inode_to_wb(inode);
 
-		__lruvec_stat_mod_folio(folio, NR_FILE_DIRTY, nr);
+		lruvec_stat_mod_folio(folio, NR_FILE_DIRTY, nr);
 		__zone_stat_mod_folio(folio, NR_ZONE_WRITE_PENDING, nr);
 		__node_stat_mod_folio(folio, NR_DIRTIED, nr);
 		wb_stat_mod(wb, WB_RECLAIMABLE, nr);
@@ -2737,12 +2676,18 @@ void __folio_mark_dirty(struct folio *folio, struct address_space *mapping,
 {
 	unsigned long flags;
 
+	/*
+	 * Shmem writeback relies on swap, and swap writeback is LRU based,
+	 * not using the dirty mark.
+	 */
+	VM_WARN_ON_ONCE(folio_test_swapcache(folio) || shmem_mapping(mapping));
+
 	xa_lock_irqsave(&mapping->i_pages, flags);
 	if (folio->mapping) {	/* Race with truncate? */
 		WARN_ON_ONCE(warn && !folio_test_uptodate(folio));
 		folio_account_dirtied(folio, mapping);
-		__xa_set_mark(&mapping->i_pages, folio_index(folio),
-				PAGECACHE_TAG_DIRTY);
+		__xa_set_mark(&mapping->i_pages, folio->index,
+			      PAGECACHE_TAG_DIRTY);
 	}
 	xa_unlock_irqrestore(&mapping->i_pages, flags);
 }
@@ -3016,25 +2961,22 @@ bool __folio_end_writeback(struct folio *folio)
 
 	if (mapping && mapping_use_writeback_tags(mapping)) {
 		struct inode *inode = mapping->host;
-		struct backing_dev_info *bdi = inode_to_bdi(inode);
+		struct bdi_writeback *wb;
 		unsigned long flags;
 
 		xa_lock_irqsave(&mapping->i_pages, flags);
 		ret = folio_xor_flags_has_waiters(folio, 1 << PG_writeback);
-		__xa_clear_mark(&mapping->i_pages, folio_index(folio),
+		__xa_clear_mark(&mapping->i_pages, folio->index,
 					PAGECACHE_TAG_WRITEBACK);
-		if (bdi->capabilities & BDI_CAP_WRITEBACK_ACCT) {
-			struct bdi_writeback *wb = inode_to_wb(inode);
 
-			wb_stat_mod(wb, WB_WRITEBACK, -nr);
-			__wb_writeout_add(wb, nr);
-			if (!mapping_tagged(mapping, PAGECACHE_TAG_WRITEBACK))
-				wb_inode_writeback_end(wb);
+		wb = inode_to_wb(inode);
+		wb_stat_mod(wb, WB_WRITEBACK, -nr);
+		__wb_writeout_add(wb, nr);
+		if (!mapping_tagged(mapping, PAGECACHE_TAG_WRITEBACK)) {
+			wb_inode_writeback_end(wb);
+			if (mapping->host)
+				sb_clear_inode_writeback(mapping->host);
 		}
-
-		if (mapping->host && !mapping_tagged(mapping,
-						     PAGECACHE_TAG_WRITEBACK))
-			sb_clear_inode_writeback(mapping->host);
 
 		xa_unlock_irqrestore(&mapping->i_pages, flags);
 	} else {
@@ -3058,9 +3000,9 @@ void __folio_start_writeback(struct folio *folio, bool keep_write)
 	VM_BUG_ON_FOLIO(!folio_test_locked(folio), folio);
 
 	if (mapping && mapping_use_writeback_tags(mapping)) {
-		XA_STATE(xas, &mapping->i_pages, folio_index(folio));
+		XA_STATE(xas, &mapping->i_pages, folio->index);
 		struct inode *inode = mapping->host;
-		struct backing_dev_info *bdi = inode_to_bdi(inode);
+		struct bdi_writeback *wb;
 		unsigned long flags;
 		bool on_wblist;
 
@@ -3071,21 +3013,19 @@ void __folio_start_writeback(struct folio *folio, bool keep_write)
 		on_wblist = mapping_tagged(mapping, PAGECACHE_TAG_WRITEBACK);
 
 		xas_set_mark(&xas, PAGECACHE_TAG_WRITEBACK);
-		if (bdi->capabilities & BDI_CAP_WRITEBACK_ACCT) {
-			struct bdi_writeback *wb = inode_to_wb(inode);
-
-			wb_stat_mod(wb, WB_WRITEBACK, nr);
-			if (!on_wblist)
-				wb_inode_writeback_start(wb);
+		wb = inode_to_wb(inode);
+		wb_stat_mod(wb, WB_WRITEBACK, nr);
+		if (!on_wblist) {
+			wb_inode_writeback_start(wb);
+			/*
+			 * We can come through here when swapping anonymous
+			 * folios, so we don't necessarily have an inode to
+			 * track for sync.
+			 */
+			if (mapping->host)
+				sb_mark_inode_writeback(mapping->host);
 		}
 
-		/*
-		 * We can come through here when swapping anonymous
-		 * folios, so we don't necessarily have an inode to
-		 * track for sync.
-		 */
-		if (mapping->host && !on_wblist)
-			sb_mark_inode_writeback(mapping->host);
 		if (!folio_test_dirty(folio))
 			xas_clear_mark(&xas, PAGECACHE_TAG_DIRTY);
 		if (!keep_write)

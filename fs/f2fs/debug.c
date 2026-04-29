@@ -21,7 +21,7 @@
 #include "gc.h"
 
 static LIST_HEAD(f2fs_stat_list);
-static DEFINE_RAW_SPINLOCK(f2fs_stat_lock);
+static DEFINE_SPINLOCK(f2fs_stat_lock);
 #ifdef CONFIG_DEBUG_FS
 static struct dentry *f2fs_debugfs_root;
 #endif
@@ -91,7 +91,7 @@ static void update_multidevice_stats(struct f2fs_sb_info *sbi)
 			seg_blks = get_seg_entry(sbi, j)->valid_blocks;
 
 			/* update segment stats */
-			if (IS_CURSEG(sbi, j))
+			if (is_curseg(sbi, j))
 				dev_stats[i].devstats[0][DEVSTAT_INUSE]++;
 			else if (seg_blks == BLKS_PER_SEG(sbi))
 				dev_stats[i].devstats[0][DEVSTAT_FULL]++;
@@ -109,7 +109,7 @@ static void update_multidevice_stats(struct f2fs_sb_info *sbi)
 			sec_blks = get_sec_entry(sbi, j)->valid_blocks;
 
 			/* update section stats */
-			if (IS_CURSEC(sbi, GET_SEC_FROM_SEG(sbi, j)))
+			if (is_cursec(sbi, GET_SEC_FROM_SEG(sbi, j)))
 				dev_stats[i].devstats[1][DEVSTAT_INUSE]++;
 			else if (sec_blks == BLKS_PER_SEC(sbi))
 				dev_stats[i].devstats[1][DEVSTAT_FULL]++;
@@ -251,6 +251,7 @@ static void update_general_status(struct f2fs_sb_info *sbi)
 	for (i = CURSEG_HOT_DATA; i < NO_CHECK_TYPE; i++) {
 		struct curseg_info *curseg = CURSEG_I(sbi, i);
 
+		si->blkoff[i] = curseg->next_blkoff;
 		si->curseg[i] = curseg->segno;
 		si->cursec[i] = GET_SEC_FROM_SEG(sbi, curseg->segno);
 		si->curzone[i] = GET_ZONE_FROM_SEC(sbi, si->cursec[i]);
@@ -422,6 +423,7 @@ static const char *s_flag[MAX_SBI_FLAG] = {
 	[SBI_IS_RESIZEFS]	= "resizefs",
 	[SBI_IS_FREEZING]	= "freezefs",
 	[SBI_IS_WRITABLE]	= "writable",
+	[SBI_ENABLE_CHECKPOINT]	= "enable_checkpoint",
 };
 
 static const char *ipu_mode_names[F2FS_IPU_MAX] = {
@@ -439,9 +441,8 @@ static int stat_show(struct seq_file *s, void *v)
 {
 	struct f2fs_stat_info *si;
 	int i = 0, j = 0;
-	unsigned long flags;
 
-	raw_spin_lock_irqsave(&f2fs_stat_lock, flags);
+	spin_lock(&f2fs_stat_lock);
 	list_for_each_entry(si, &f2fs_stat_list, stat_list) {
 		struct f2fs_sb_info *sbi = si->sbi;
 
@@ -509,55 +510,63 @@ static int stat_show(struct seq_file *s, void *v)
 		seq_printf(s, "\nMain area: %d segs, %d secs %d zones\n",
 			   si->main_area_segs, si->main_area_sections,
 			   si->main_area_zones);
-		seq_printf(s, "    TYPE         %8s %8s %8s %10s %10s %10s\n",
-			   "segno", "secno", "zoneno", "dirty_seg", "full_seg", "valid_blk");
-		seq_printf(s, "  - COLD   data: %8d %8d %8d %10u %10u %10u\n",
+		seq_printf(s, "    TYPE         %8s %8s %8s %8s %10s %10s %10s\n",
+			   "blkoff", "segno", "secno", "zoneno", "dirty_seg", "full_seg", "valid_blk");
+		seq_printf(s, "  - COLD   data: %8d %8d %8d %8d %10u %10u %10u\n",
+			   si->blkoff[CURSEG_COLD_DATA],
 			   si->curseg[CURSEG_COLD_DATA],
 			   si->cursec[CURSEG_COLD_DATA],
 			   si->curzone[CURSEG_COLD_DATA],
 			   si->dirty_seg[CURSEG_COLD_DATA],
 			   si->full_seg[CURSEG_COLD_DATA],
 			   si->valid_blks[CURSEG_COLD_DATA]);
-		seq_printf(s, "  - WARM   data: %8d %8d %8d %10u %10u %10u\n",
+		seq_printf(s, "  - WARM   data: %8d %8d %8d %8d %10u %10u %10u\n",
+			   si->blkoff[CURSEG_WARM_DATA],
 			   si->curseg[CURSEG_WARM_DATA],
 			   si->cursec[CURSEG_WARM_DATA],
 			   si->curzone[CURSEG_WARM_DATA],
 			   si->dirty_seg[CURSEG_WARM_DATA],
 			   si->full_seg[CURSEG_WARM_DATA],
 			   si->valid_blks[CURSEG_WARM_DATA]);
-		seq_printf(s, "  - HOT    data: %8d %8d %8d %10u %10u %10u\n",
+		seq_printf(s, "  - HOT    data: %8d %8d %8d %8d %10u %10u %10u\n",
+			   si->blkoff[CURSEG_HOT_DATA],
 			   si->curseg[CURSEG_HOT_DATA],
 			   si->cursec[CURSEG_HOT_DATA],
 			   si->curzone[CURSEG_HOT_DATA],
 			   si->dirty_seg[CURSEG_HOT_DATA],
 			   si->full_seg[CURSEG_HOT_DATA],
 			   si->valid_blks[CURSEG_HOT_DATA]);
-		seq_printf(s, "  - Dir   dnode: %8d %8d %8d %10u %10u %10u\n",
+		seq_printf(s, "  - Dir   dnode: %8d %8d %8d %8d %10u %10u %10u\n",
+			   si->blkoff[CURSEG_HOT_NODE],
 			   si->curseg[CURSEG_HOT_NODE],
 			   si->cursec[CURSEG_HOT_NODE],
 			   si->curzone[CURSEG_HOT_NODE],
 			   si->dirty_seg[CURSEG_HOT_NODE],
 			   si->full_seg[CURSEG_HOT_NODE],
 			   si->valid_blks[CURSEG_HOT_NODE]);
-		seq_printf(s, "  - File  dnode: %8d %8d %8d %10u %10u %10u\n",
+		seq_printf(s, "  - File  dnode: %8d %8d %8d %8d %10u %10u %10u\n",
+			   si->blkoff[CURSEG_WARM_NODE],
 			   si->curseg[CURSEG_WARM_NODE],
 			   si->cursec[CURSEG_WARM_NODE],
 			   si->curzone[CURSEG_WARM_NODE],
 			   si->dirty_seg[CURSEG_WARM_NODE],
 			   si->full_seg[CURSEG_WARM_NODE],
 			   si->valid_blks[CURSEG_WARM_NODE]);
-		seq_printf(s, "  - Indir nodes: %8d %8d %8d %10u %10u %10u\n",
+		seq_printf(s, "  - Indir nodes: %8d %8d %8d %8d %10u %10u %10u\n",
+			   si->blkoff[CURSEG_COLD_NODE],
 			   si->curseg[CURSEG_COLD_NODE],
 			   si->cursec[CURSEG_COLD_NODE],
 			   si->curzone[CURSEG_COLD_NODE],
 			   si->dirty_seg[CURSEG_COLD_NODE],
 			   si->full_seg[CURSEG_COLD_NODE],
 			   si->valid_blks[CURSEG_COLD_NODE]);
-		seq_printf(s, "  - Pinned file: %8d %8d %8d\n",
+		seq_printf(s, "  - Pinned file: %8d %8d %8d %8d\n",
+			   si->blkoff[CURSEG_COLD_DATA_PINNED],
 			   si->curseg[CURSEG_COLD_DATA_PINNED],
 			   si->cursec[CURSEG_COLD_DATA_PINNED],
 			   si->curzone[CURSEG_COLD_DATA_PINNED]);
-		seq_printf(s, "  - ATGC   data: %8d %8d %8d\n",
+		seq_printf(s, "  - ATGC   data: %8d %8d %8d %8d\n",
+			   si->blkoff[CURSEG_ALL_DATA_ATGC],
 			   si->curseg[CURSEG_ALL_DATA_ATGC],
 			   si->cursec[CURSEG_ALL_DATA_ATGC],
 			   si->curzone[CURSEG_ALL_DATA_ATGC]);
@@ -753,7 +762,7 @@ static int stat_show(struct seq_file *s, void *v)
 		seq_printf(s, "  - paged : %llu KB\n",
 				si->page_mem >> 10);
 	}
-	raw_spin_unlock_irqrestore(&f2fs_stat_lock, flags);
+	spin_unlock(&f2fs_stat_lock);
 	return 0;
 }
 
@@ -765,7 +774,6 @@ int f2fs_build_stats(struct f2fs_sb_info *sbi)
 	struct f2fs_super_block *raw_super = F2FS_RAW_SUPER(sbi);
 	struct f2fs_stat_info *si;
 	struct f2fs_dev_stats *dev_stats;
-	unsigned long flags;
 	int i;
 
 	si = f2fs_kzalloc(sbi, sizeof(struct f2fs_stat_info), GFP_KERNEL);
@@ -817,9 +825,9 @@ int f2fs_build_stats(struct f2fs_sb_info *sbi)
 
 	atomic_set(&sbi->max_aw_cnt, 0);
 
-	raw_spin_lock_irqsave(&f2fs_stat_lock, flags);
+	spin_lock(&f2fs_stat_lock);
 	list_add_tail(&si->stat_list, &f2fs_stat_list);
-	raw_spin_unlock_irqrestore(&f2fs_stat_lock, flags);
+	spin_unlock(&f2fs_stat_lock);
 
 	return 0;
 }
@@ -827,11 +835,10 @@ int f2fs_build_stats(struct f2fs_sb_info *sbi)
 void f2fs_destroy_stats(struct f2fs_sb_info *sbi)
 {
 	struct f2fs_stat_info *si = F2FS_STAT(sbi);
-	unsigned long flags;
 
-	raw_spin_lock_irqsave(&f2fs_stat_lock, flags);
+	spin_lock(&f2fs_stat_lock);
 	list_del(&si->stat_list);
-	raw_spin_unlock_irqrestore(&f2fs_stat_lock, flags);
+	spin_unlock(&f2fs_stat_lock);
 
 	kfree(si->dev_stats);
 	kfree(si);

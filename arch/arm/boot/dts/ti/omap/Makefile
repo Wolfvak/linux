@@ -86,13 +86,13 @@ dtb-$(CONFIG_SOC_AM33XX) += \
 	am335x-baltos-ir2110.dtb \
 	am335x-baltos-ir3220.dtb \
 	am335x-baltos-ir5221.dtb \
-	am335x-base0033.dtb \
 	am335x-bone.dtb \
 	am335x-boneblack.dtb \
 	am335x-boneblack-wireless.dtb \
 	am335x-boneblue.dtb \
 	am335x-bonegreen.dtb \
 	am335x-bonegreen-wireless.dtb \
+	am335x-bonegreen-eco.dtb \
 	am335x-chiliboard.dtb \
 	am335x-cm-t335.dtb \
 	am335x-evm.dtb \
@@ -100,6 +100,7 @@ dtb-$(CONFIG_SOC_AM33XX) += \
 	am335x-guardian.dtb \
 	am335x-icev2.dtb \
 	am335x-lxm.dtb \
+	am335x-mba335x.dtb \
 	am335x-moxa-uc-2101.dtb \
 	am335x-moxa-uc-8100-me-t.dtb \
 	am335x-myirtech-myd.dtb \

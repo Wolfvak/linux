@@ -153,26 +153,21 @@ static struct msi_parent_ops pch_msi_parent_ops = {
 	.init_dev_msi_info	= msi_lib_init_dev_msi_info,
 };
 
-static int pch_msi_init_domains(struct pch_msi_data *priv,
-				struct irq_domain *parent,
+static int pch_msi_init_domains(struct pch_msi_data *priv, struct irq_domain *parent,
 				struct fwnode_handle *domain_handle)
 {
-	struct irq_domain *middle_domain;
+	struct irq_domain_info info = {
+		.ops		= &pch_msi_middle_domain_ops,
+		.size		= priv->num_irqs,
+		.parent		= parent,
+		.host_data	= priv,
+		.fwnode		= domain_handle,
+	};
 
-	middle_domain = irq_domain_create_hierarchy(parent, 0, priv->num_irqs,
-						    domain_handle,
-						    &pch_msi_middle_domain_ops,
-						    priv);
-	if (!middle_domain) {
+	if (!msi_create_parent_irq_domain(&info, &pch_msi_parent_ops)) {
 		pr_err("Failed to create the MSI middle domain\n");
 		return -ENOMEM;
 	}
-
-	irq_domain_update_bus_token(middle_domain, DOMAIN_BUS_NEXUS);
-
-	middle_domain->flags |= IRQ_DOMAIN_FLAG_MSI_PARENT;
-	middle_domain->msi_parent_ops = &pch_msi_parent_ops;
-
 	return 0;
 }
 
@@ -182,7 +177,7 @@ static int pch_msi_init(phys_addr_t msg_address, int irq_base, int irq_count,
 	int ret;
 	struct pch_msi_data *priv;
 
-	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+	priv = kzalloc_obj(*priv);
 	if (!priv)
 		return -ENOMEM;
 
@@ -268,12 +263,13 @@ struct fwnode_handle *get_pch_msi_handle(int pci_segment)
 
 int __init pch_msi_acpi_init(struct irq_domain *parent, struct acpi_madt_msi_pic *acpi_pchmsi)
 {
-	int ret;
+	phys_addr_t msg_address = (phys_addr_t)acpi_pchmsi->msg_address;
 	struct fwnode_handle *domain_handle;
+	int ret;
 
-	domain_handle = irq_domain_alloc_fwnode(&acpi_pchmsi->msg_address);
-	ret = pch_msi_init(acpi_pchmsi->msg_address, acpi_pchmsi->start,
-				acpi_pchmsi->count, parent, domain_handle);
+	domain_handle = irq_domain_alloc_fwnode(&msg_address);
+	ret = pch_msi_init(msg_address, acpi_pchmsi->start, acpi_pchmsi->count,
+			   parent, domain_handle);
 	if (ret < 0)
 		irq_domain_free_fwnode(domain_handle);
 

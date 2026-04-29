@@ -2101,7 +2101,7 @@ static void wm5100_micd_irq(struct wm5100_priv *wm5100)
 int wm5100_detect(struct snd_soc_component *component, struct snd_soc_jack *jack)
 {
 	struct wm5100_priv *wm5100 = snd_soc_component_get_drvdata(component);
-	struct snd_soc_dapm_context *dapm = snd_soc_component_get_dapm(component);
+	struct snd_soc_dapm_context *dapm = snd_soc_component_to_dapm(component);
 
 	if (jack) {
 		wm5100->jack = jack;
@@ -2290,7 +2290,7 @@ static const struct gpio_chip wm5100_template_chip = {
 	.label			= "wm5100",
 	.owner			= THIS_MODULE,
 	.direction_output	= wm5100_gpio_direction_out,
-	.set_rv			= wm5100_gpio_set,
+	.set			= wm5100_gpio_set,
 	.direction_input	= wm5100_gpio_direction_in,
 	.get			= wm5100_gpio_get,
 	.can_sleep		= 1,
@@ -2329,7 +2329,7 @@ static void wm5100_free_gpio(struct i2c_client *i2c)
 
 static int wm5100_probe(struct snd_soc_component *component)
 {
-	struct snd_soc_dapm_context *dapm = snd_soc_component_get_dapm(component);
+	struct snd_soc_dapm_context *dapm = snd_soc_component_to_dapm(component);
 	struct i2c_client *i2c = to_i2c_client(component->dev);
 	struct wm5100_priv *wm5100 = snd_soc_component_get_drvdata(component);
 	int ret, i;

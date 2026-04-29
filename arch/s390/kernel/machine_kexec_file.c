@@ -129,7 +129,7 @@ static int kexec_file_update_purgatory(struct kimage *image,
 static int kexec_file_add_purgatory(struct kimage *image,
 				    struct s390_load_data *data)
 {
-	struct kexec_buf buf;
+	struct kexec_buf buf = {};
 	int ret;
 
 	buf.image = image;
@@ -152,7 +152,7 @@ static int kexec_file_add_purgatory(struct kimage *image,
 static int kexec_file_add_initrd(struct kimage *image,
 				 struct s390_load_data *data)
 {
-	struct kexec_buf buf;
+	struct kexec_buf buf = {};
 	int ret;
 
 	buf.image = image;
@@ -184,7 +184,7 @@ static int kexec_file_add_ipl_report(struct kimage *image,
 {
 	__u32 *lc_ipl_parmblock_ptr;
 	unsigned int len, ncerts;
-	struct kexec_buf buf;
+	struct kexec_buf buf = {};
 	unsigned long addr;
 	void *ptr, *end;
 	int ret;
@@ -270,8 +270,10 @@ void *kexec_file_add_components(struct kimage *image,
 	if (image->kernel_buf_len < minsize + max_command_line_size)
 		goto out;
 
-	if (image->cmdline_buf_len >= max_command_line_size)
+	if (image->cmdline_buf_len >= max_command_line_size) {
+		pr_err("Kernel command line exceeds supported limit of %lu", max_command_line_size);
 		goto out;
+	}
 
 	memcpy(data.parm->command_line, image->cmdline_buf,
 	       image->cmdline_buf_len);

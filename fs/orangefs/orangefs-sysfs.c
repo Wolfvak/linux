@@ -217,36 +217,31 @@ static ssize_t sysfs_int_show(struct kobject *kobj,
 
 	if (!strcmp(kobj->name, ORANGEFS_KOBJ_ID)) {
 		if (!strcmp(attr->attr.name, "op_timeout_secs")) {
-			rc = scnprintf(buf,
-				       PAGE_SIZE,
+			rc = sysfs_emit(buf,
 				       "%d\n",
 				       op_timeout_secs);
 			goto out;
 		} else if (!strcmp(attr->attr.name,
 				   "slot_timeout_secs")) {
-			rc = scnprintf(buf,
-				       PAGE_SIZE,
+			rc = sysfs_emit(buf,
 				       "%d\n",
 				       slot_timeout_secs);
 			goto out;
 		} else if (!strcmp(attr->attr.name,
 				   "cache_timeout_msecs")) {
-			rc = scnprintf(buf,
-				       PAGE_SIZE,
+			rc = sysfs_emit(buf,
 				       "%d\n",
 				       orangefs_cache_timeout_msecs);
 			goto out;
 		} else if (!strcmp(attr->attr.name,
 				   "dcache_timeout_msecs")) {
-			rc = scnprintf(buf,
-				       PAGE_SIZE,
+			rc = sysfs_emit(buf,
 				       "%d\n",
 				       orangefs_dcache_timeout_msecs);
 			goto out;
 		} else if (!strcmp(attr->attr.name,
 				   "getattr_timeout_msecs")) {
-			rc = scnprintf(buf,
-				       PAGE_SIZE,
+			rc = sysfs_emit(buf,
 				       "%d\n",
 				       orangefs_getattr_timeout_msecs);
 			goto out;
@@ -256,14 +251,12 @@ static ssize_t sysfs_int_show(struct kobject *kobj,
 
 	} else if (!strcmp(kobj->name, STATS_KOBJ_ID)) {
 		if (!strcmp(attr->attr.name, "reads")) {
-			rc = scnprintf(buf,
-				       PAGE_SIZE,
+			rc = sysfs_emit(buf,
 				       "%lu\n",
 				       orangefs_stats.reads);
 			goto out;
 		} else if (!strcmp(attr->attr.name, "writes")) {
-			rc = scnprintf(buf,
-				       PAGE_SIZE,
+			rc = sysfs_emit(buf,
 				       "%lu\n",
 				       orangefs_stats.writes);
 			goto out;
@@ -497,19 +490,18 @@ out:
 		if (strcmp(kobj->name, PC_KOBJ_ID)) {
 			if (new_op->upcall.req.param.op ==
 			    ORANGEFS_PARAM_REQUEST_OP_READAHEAD_COUNT_SIZE) {
-				rc = scnprintf(buf, PAGE_SIZE, "%d %d\n",
+				rc = sysfs_emit(buf, "%d %d\n",
 				    (int)new_op->downcall.resp.param.u.
 				    value32[0],
 				    (int)new_op->downcall.resp.param.u.
 				    value32[1]);
 			} else {
-				rc = scnprintf(buf, PAGE_SIZE, "%d\n",
+				rc = sysfs_emit(buf, "%d\n",
 				    (int)new_op->downcall.resp.param.u.value64);
 			}
 		} else {
-			rc = scnprintf(
+			rc = sysfs_emit(
 				buf,
-				PAGE_SIZE,
 				"%s",
 				new_op->downcall.resp.perf_count.buffer);
 		}
@@ -1178,7 +1170,7 @@ int orangefs_sysfs_init(void)
 	gossip_debug(GOSSIP_SYSFS_DEBUG, "orangefs_sysfs_init: start\n");
 
 	/* create /sys/fs/orangefs. */
-	orangefs_obj = kzalloc(sizeof(*orangefs_obj), GFP_KERNEL);
+	orangefs_obj = kzalloc_obj(*orangefs_obj);
 	if (!orangefs_obj)
 		goto out;
 
@@ -1193,7 +1185,7 @@ int orangefs_sysfs_init(void)
 	kobject_uevent(orangefs_obj, KOBJ_ADD);
 
 	/* create /sys/fs/orangefs/acache. */
-	acache_orangefs_obj = kzalloc(sizeof(*acache_orangefs_obj), GFP_KERNEL);
+	acache_orangefs_obj = kzalloc_obj(*acache_orangefs_obj);
 	if (!acache_orangefs_obj) {
 		rc = -EINVAL;
 		goto ofs_obj_bail;
@@ -1210,8 +1202,7 @@ int orangefs_sysfs_init(void)
 	kobject_uevent(acache_orangefs_obj, KOBJ_ADD);
 
 	/* create /sys/fs/orangefs/capcache. */
-	capcache_orangefs_obj =
-		kzalloc(sizeof(*capcache_orangefs_obj), GFP_KERNEL);
+	capcache_orangefs_obj = kzalloc_obj(*capcache_orangefs_obj);
 	if (!capcache_orangefs_obj) {
 		rc = -EINVAL;
 		goto acache_obj_bail;
@@ -1227,8 +1218,7 @@ int orangefs_sysfs_init(void)
 	kobject_uevent(capcache_orangefs_obj, KOBJ_ADD);
 
 	/* create /sys/fs/orangefs/ccache. */
-	ccache_orangefs_obj =
-		kzalloc(sizeof(*ccache_orangefs_obj), GFP_KERNEL);
+	ccache_orangefs_obj = kzalloc_obj(*ccache_orangefs_obj);
 	if (!ccache_orangefs_obj) {
 		rc = -EINVAL;
 		goto capcache_obj_bail;
@@ -1244,7 +1234,7 @@ int orangefs_sysfs_init(void)
 	kobject_uevent(ccache_orangefs_obj, KOBJ_ADD);
 
 	/* create /sys/fs/orangefs/ncache. */
-	ncache_orangefs_obj = kzalloc(sizeof(*ncache_orangefs_obj), GFP_KERNEL);
+	ncache_orangefs_obj = kzalloc_obj(*ncache_orangefs_obj);
 	if (!ncache_orangefs_obj) {
 		rc = -EINVAL;
 		goto ccache_obj_bail;
@@ -1261,7 +1251,7 @@ int orangefs_sysfs_init(void)
 	kobject_uevent(ncache_orangefs_obj, KOBJ_ADD);
 
 	/* create /sys/fs/orangefs/perf_counters. */
-	pc_orangefs_obj = kzalloc(sizeof(*pc_orangefs_obj), GFP_KERNEL);
+	pc_orangefs_obj = kzalloc_obj(*pc_orangefs_obj);
 	if (!pc_orangefs_obj) {
 		rc = -EINVAL;
 		goto ncache_obj_bail;
@@ -1278,7 +1268,7 @@ int orangefs_sysfs_init(void)
 	kobject_uevent(pc_orangefs_obj, KOBJ_ADD);
 
 	/* create /sys/fs/orangefs/stats. */
-	stats_orangefs_obj = kzalloc(sizeof(*stats_orangefs_obj), GFP_KERNEL);
+	stats_orangefs_obj = kzalloc_obj(*stats_orangefs_obj);
 	if (!stats_orangefs_obj) {
 		rc = -EINVAL;
 		goto pc_obj_bail;

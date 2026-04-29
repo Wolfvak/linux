@@ -98,13 +98,21 @@ const char *const aa_profile_mode_names[] = {
 	"user",
 };
 
+void aa_destroy_tags(struct aa_tags_struct *tags)
+{
+	kfree_sensitive(tags->hdrs.table);
+	kfree_sensitive(tags->sets.table);
+	aa_destroy_str_table(&tags->strs);
+	memset(tags, 0, sizeof(*tags));
+}
 
 static void aa_free_pdb(struct aa_policydb *pdb)
 {
 	if (pdb) {
 		aa_put_dfa(pdb->dfa);
 		kvfree(pdb->perms);
-		aa_free_str_table(&pdb->trans);
+		aa_destroy_str_table(&pdb->trans);
+		aa_destroy_tags(&pdb->tags);
 		kfree(pdb);
 	}
 }
@@ -123,7 +131,7 @@ void aa_pdb_free_kref(struct kref *kref)
 
 struct aa_policydb *aa_alloc_pdb(gfp_t gfp)
 {
-	struct aa_policydb *pdb = kzalloc(sizeof(struct aa_policydb), gfp);
+	struct aa_policydb *pdb = kzalloc_obj(struct aa_policydb, gfp);
 
 	if (!pdb)
 		return NULL;
@@ -183,19 +191,43 @@ static void __list_remove_profile(struct aa_profile *profile)
 }
 
 /**
- * __remove_profile - remove old profile, and children
- * @profile: profile to be replaced  (NOT NULL)
+ * __remove_profile - remove profile, and children
+ * @profile: profile to be removed  (NOT NULL)
  *
  * Requires: namespace list lock be held, or list not be shared
  */
 static void __remove_profile(struct aa_profile *profile)
 {
+	struct aa_profile *curr, *to_remove;
+
 	AA_BUG(!profile);
 	AA_BUG(!profile->ns);
 	AA_BUG(!mutex_is_locked(&profile->ns->lock));
 
 	/* release any children lists first */
-	__aa_profile_list_release(&profile->base.profiles);
+	if (!list_empty(&profile->base.profiles)) {
+		curr = list_first_entry(&profile->base.profiles, struct aa_profile, base.list);
+
+		while (curr != profile) {
+
+			while (!list_empty(&curr->base.profiles))
+				curr = list_first_entry(&curr->base.profiles,
+							struct aa_profile, base.list);
+
+			to_remove = curr;
+			if (!list_is_last(&to_remove->base.list,
+					  &aa_deref_parent(curr)->base.profiles))
+				curr = list_next_entry(to_remove, base.list);
+			else
+				curr = aa_deref_parent(curr);
+
+			/* released by free_profile */
+			aa_label_remove(&to_remove->label);
+			__aafs_profile_rmdir(to_remove);
+			__list_remove_profile(to_remove);
+		}
+	}
+
 	/* released by free_profile */
 	aa_label_remove(&profile->label);
 	__aafs_profile_rmdir(profile);
@@ -224,6 +256,9 @@ static void aa_free_data(void *ptr, void *arg)
 {
 	struct aa_data *data = ptr;
 
+	if (!ptr)
+		return;
+
 	kvfree_sensitive(data->data, data->size);
 	kfree_sensitive(data->key);
 	kfree_sensitive(data);
@@ -232,6 +267,9 @@ static void aa_free_data(void *ptr, void *arg)
 static void free_attachment(struct aa_attachment *attach)
 {
 	int i;
+
+	if (!attach)
+		return;
 
 	for (i = 0; i < attach->xattr_count; i++)
 		kfree_sensitive(attach->xattrs[i]);
@@ -242,6 +280,9 @@ static void free_attachment(struct aa_attachment *attach)
 static void free_ruleset(struct aa_ruleset *rules)
 {
 	int i;
+
+	if (!rules)
+	  return;
 
 	aa_put_pdb(rules->file);
 	aa_put_pdb(rules->policy);
@@ -258,9 +299,7 @@ struct aa_ruleset *aa_alloc_ruleset(gfp_t gfp)
 {
 	struct aa_ruleset *rules;
 
-	rules = kzalloc(sizeof(*rules), gfp);
-	if (rules)
-		INIT_LIST_HEAD(&rules->list);
+	rules = kzalloc_obj(*rules, gfp);
 
 	return rules;
 }
@@ -277,10 +316,9 @@ struct aa_ruleset *aa_alloc_ruleset(gfp_t gfp)
  */
 void aa_free_profile(struct aa_profile *profile)
 {
-	struct aa_ruleset *rule, *tmp;
 	struct rhashtable *rht;
 
-	AA_DEBUG("%s(%p)\n", __func__, profile);
+	AA_DEBUG(DEBUG_POLICY, "%s(%p)\n", __func__, profile);
 
 	if (!profile)
 		return;
@@ -299,10 +337,9 @@ void aa_free_profile(struct aa_profile *profile)
 	 * at this point there are no tasks that can have a reference
 	 * to rules
 	 */
-	list_for_each_entry_safe(rule, tmp, &profile->rules, list) {
-		list_del_init(&rule->list);
-		free_ruleset(rule);
-	}
+	for (int i = 0; i < profile->n_rules; i++)
+		free_ruleset(profile->label.rules[i]);
+
 	kfree_sensitive(profile->dirname);
 
 	if (profile->data) {
@@ -313,7 +350,7 @@ void aa_free_profile(struct aa_profile *profile)
 	}
 
 	kfree_sensitive(profile->hash);
-	aa_put_loaddata(profile->rawdata);
+	aa_put_profile_loaddata(profile->rawdata);
 	aa_label_destroy(&profile->label);
 
 	kfree_sensitive(profile);
@@ -331,10 +368,12 @@ struct aa_profile *aa_alloc_profile(const char *hname, struct aa_proxy *proxy,
 				    gfp_t gfp)
 {
 	struct aa_profile *profile;
-	struct aa_ruleset *rules;
 
-	/* freed by free_profile - usually through aa_put_profile */
-	profile = kzalloc(struct_size(profile, label.vec, 2), gfp);
+	/* freed by free_profile - usually through aa_put_profile
+	 * this adds space for a single ruleset in the rules section of the
+	 * label
+	 */
+	profile = kzalloc_flex(*profile, label.rules, 1, gfp);
 	if (!profile)
 		return NULL;
 
@@ -343,13 +382,11 @@ struct aa_profile *aa_alloc_profile(const char *hname, struct aa_proxy *proxy,
 	if (!aa_label_init(&profile->label, 1, gfp))
 		goto fail;
 
-	INIT_LIST_HEAD(&profile->rules);
-
 	/* allocate the first ruleset, but leave it empty */
-	rules = aa_alloc_ruleset(gfp);
-	if (!rules)
+	profile->label.rules[0] = aa_alloc_ruleset(gfp);
+	if (!profile->label.rules[0])
 		goto fail;
-	list_add(&rules->list, &profile->rules);
+	profile->n_rules = 1;
 
 	/* update being set needed by fs interface */
 	if (!proxy) {
@@ -364,6 +401,7 @@ struct aa_profile *aa_alloc_profile(const char *hname, struct aa_proxy *proxy,
 	profile->label.flags |= FLAG_PROFILE;
 	profile->label.vec[0] = profile;
 
+	profile->signal = SIGKILL;
 	/* refcount released by caller */
 	return profile;
 
@@ -371,6 +409,41 @@ fail:
 	aa_free_profile(profile);
 
 	return NULL;
+}
+
+static inline bool ANY_RULE_MEDIATES(struct aa_profile *profile,
+				     unsigned char class)
+{
+	int i;
+
+	for (i = 0; i < profile->n_rules; i++) {
+		if (RULE_MEDIATES(profile->label.rules[i], class))
+			return true;
+	}
+	return false;
+}
+
+/* set of rules that are mediated by unconfined */
+static int unconfined_mediates[] = { AA_CLASS_NS, AA_CLASS_IO_URING, 0 };
+
+/* must be called after profile rulesets and start information is setup */
+void aa_compute_profile_mediates(struct aa_profile *profile)
+{
+	int c;
+
+	if (profile_unconfined(profile)) {
+		int *pos;
+
+		for (pos = unconfined_mediates; *pos; pos++) {
+			if (ANY_RULE_MEDIATES(profile, *pos))
+				profile->label.mediates |= ((u64) 1) << AA_CLASS_NS;
+		}
+		return;
+	}
+	for (c = 0; c <= AA_CLASS_LAST; c++) {
+		if (ANY_RULE_MEDIATES(profile, c))
+			profile->label.mediates |= ((u64) 1) << c;
+	}
 }
 
 /* TODO: profile accounting - setup in remove */
@@ -463,7 +536,7 @@ static struct aa_policy *__lookup_parent(struct aa_ns *ns,
 }
 
 /**
- * __create_missing_ancestors - create place holders for missing ancestores
+ * __create_missing_ancestors - create place holders for missing ancestors
  * @ns: namespace to lookup profile in (NOT NULL)
  * @hname: hierarchical profile name to find parent of (NOT NULL)
  * @gfp: type of allocation.
@@ -621,13 +694,15 @@ struct aa_profile *aa_alloc_null(struct aa_profile *parent, const char *name,
 	/* TODO: ideally we should inherit abi from parent */
 	profile->label.flags |= FLAG_NULL;
 	profile->attach.xmatch = aa_get_pdb(nullpdb);
-	rules = list_first_entry(&profile->rules, typeof(*rules), list);
+	rules = profile->label.rules[0];
 	rules->file = aa_get_pdb(nullpdb);
 	rules->policy = aa_get_pdb(nullpdb);
+	aa_compute_profile_mediates(profile);
 
 	if (parent) {
 		profile->path_flags = parent->path_flags;
-
+		/* override/inherit what is mediated from parent */
+		profile->label.mediates = parent->label.mediates;
 		/* released on free_profile */
 		rcu_assign_pointer(profile->parent, aa_get_profile(parent));
 		profile->ns = aa_get_ns(parent->ns);
@@ -660,24 +735,27 @@ struct aa_profile *aa_new_learning_profile(struct aa_profile *parent, bool hat,
 	struct aa_profile *p, *profile;
 	const char *bname;
 	char *name = NULL;
+	size_t name_sz;
 
 	AA_BUG(!parent);
 
 	if (base) {
-		name = kmalloc(strlen(parent->base.hname) + 8 + strlen(base),
-			       gfp);
+		name_sz = strlen(parent->base.hname) + 8 + strlen(base);
+		name = kmalloc(name_sz, gfp);
 		if (name) {
-			sprintf(name, "%s//null-%s", parent->base.hname, base);
+			snprintf(name, name_sz, "%s//null-%s",
+				 parent->base.hname, base);
 			goto name;
 		}
 		/* fall through to try shorter uniq */
 	}
 
-	name = kmalloc(strlen(parent->base.hname) + 2 + 7 + 8, gfp);
+	name_sz = strlen(parent->base.hname) + 2 + 7 + 8;
+	name = kmalloc(name_sz, gfp);
 	if (!name)
 		return NULL;
-	sprintf(name, "%s//null-%x", parent->base.hname,
-		atomic_inc_return(&parent->ns->uniq_null));
+	snprintf(name, name_sz, "%s//null-%x", parent->base.hname,
+		 atomic_inc_return(&parent->ns->uniq_null));
 
 name:
 	/* lookup to see if this is a dup creation */
@@ -833,8 +911,8 @@ bool aa_policy_admin_capable(const struct cred *subj_cred,
 	bool capable = policy_ns_capable(subj_cred, label, user_ns,
 					 CAP_MAC_ADMIN) == 0;
 
-	AA_DEBUG("cap_mac_admin? %d\n", capable);
-	AA_DEBUG("policy locked? %d\n", aa_g_lock_policy);
+	AA_DEBUG(DEBUG_POLICY, "cap_mac_admin? %d\n", capable);
+	AA_DEBUG(DEBUG_POLICY, "policy locked? %d\n", aa_g_lock_policy);
 
 	return aa_policy_view_capable(subj_cred, label, ns) && capable &&
 		!aa_g_lock_policy;
@@ -843,11 +921,11 @@ bool aa_policy_admin_capable(const struct cred *subj_cred,
 bool aa_current_policy_view_capable(struct aa_ns *ns)
 {
 	struct aa_label *label;
-	bool res;
+	bool needput, res;
 
-	label = __begin_current_label_crit_section();
+	label = __begin_current_label_crit_section(&needput);
 	res = aa_policy_view_capable(current_cred(), label, ns);
-	__end_current_label_crit_section(label);
+	__end_current_label_crit_section(label, needput);
 
 	return res;
 }
@@ -855,26 +933,53 @@ bool aa_current_policy_view_capable(struct aa_ns *ns)
 bool aa_current_policy_admin_capable(struct aa_ns *ns)
 {
 	struct aa_label *label;
-	bool res;
+	bool needput, res;
 
-	label = __begin_current_label_crit_section();
+	label = __begin_current_label_crit_section(&needput);
 	res = aa_policy_admin_capable(current_cred(), label, ns);
-	__end_current_label_crit_section(label);
+	__end_current_label_crit_section(label, needput);
 
 	return res;
 }
+
+static bool is_subset_of_obj_privilege(const struct cred *cred,
+				       struct aa_label *label,
+				       const struct cred *ocred)
+{
+	if (cred == ocred)
+		return true;
+
+	if (!aa_label_is_subset(label, cred_label(ocred)))
+		return false;
+	/* don't allow crossing userns for now */
+	if (cred->user_ns != ocred->user_ns)
+		return false;
+	if (!cap_issubset(cred->cap_inheritable, ocred->cap_inheritable))
+		return false;
+	if (!cap_issubset(cred->cap_permitted, ocred->cap_permitted))
+		return false;
+	if (!cap_issubset(cred->cap_effective, ocred->cap_effective))
+		return false;
+	if (!cap_issubset(cred->cap_bset, ocred->cap_bset))
+		return false;
+	if (!cap_issubset(cred->cap_ambient, ocred->cap_ambient))
+		return false;
+	return true;
+}
+
 
 /**
  * aa_may_manage_policy - can the current task manage policy
  * @subj_cred: subjects cred
  * @label: label to check if it can manage policy
  * @ns: namespace being managed by @label (may be NULL if @label's ns)
+ * @ocred: object cred if request is coming from an open object
  * @mask: contains the policy manipulation operation being done
  *
  * Returns: 0 if the task is allowed to manipulate policy else error
  */
 int aa_may_manage_policy(const struct cred *subj_cred, struct aa_label *label,
-			 struct aa_ns *ns, u32 mask)
+			 struct aa_ns *ns, const struct cred *ocred, u32 mask)
 {
 	const char *op;
 
@@ -888,6 +993,11 @@ int aa_may_manage_policy(const struct cred *subj_cred, struct aa_label *label,
 	/* check if loading policy is locked out */
 	if (aa_g_lock_policy)
 		return audit_policy(label, op, NULL, NULL, "policy_locked",
+				    -EACCES);
+
+	if (ocred && !is_subset_of_obj_privilege(subj_cred, label, ocred))
+		return audit_policy(label, op, NULL, NULL,
+				    "not privileged for target profile",
 				    -EACCES);
 
 	if (!aa_policy_admin_capable(subj_cred, label, ns))
@@ -1061,14 +1171,14 @@ ssize_t aa_replace_profiles(struct aa_ns *policy_ns, struct aa_label *label,
 	LIST_HEAD(lh);
 
 	op = mask & AA_MAY_REPLACE_POLICY ? OP_PROF_REPL : OP_PROF_LOAD;
-	aa_get_loaddata(udata);
+	aa_get_profile_loaddata(udata);
 	/* released below */
 	error = aa_unpack(udata, &lh, &ns_name);
 	if (error)
 		goto out;
 
 	/* ensure that profiles are all for the same ns
-	 * TODO: update locking to remove this constaint. All profiles in
+	 * TODO: update locking to remove this constraint. All profiles in
 	 *       the load set must succeed as a set or the load will
 	 *       fail. Sort ent list and take ns locks in hierarchy order
 	 */
@@ -1088,6 +1198,7 @@ ssize_t aa_replace_profiles(struct aa_ns *policy_ns, struct aa_label *label,
 				goto fail;
 			}
 			ns_name = ent->ns_name;
+			ent->ns_name = NULL;
 		} else
 			count++;
 	}
@@ -1112,10 +1223,10 @@ ssize_t aa_replace_profiles(struct aa_ns *policy_ns, struct aa_label *label,
 			if (aa_rawdata_eq(rawdata_ent, udata)) {
 				struct aa_loaddata *tmp;
 
-				tmp = __aa_get_loaddata(rawdata_ent);
+				tmp = aa_get_profile_loaddata(rawdata_ent);
 				/* check we didn't fail the race */
 				if (tmp) {
-					aa_put_loaddata(udata);
+					aa_put_profile_loaddata(udata);
 					udata = tmp;
 					break;
 				}
@@ -1128,7 +1239,7 @@ ssize_t aa_replace_profiles(struct aa_ns *policy_ns, struct aa_label *label,
 		struct aa_profile *p;
 
 		if (aa_g_export_binary)
-			ent->new->rawdata = aa_get_loaddata(udata);
+			ent->new->rawdata = aa_get_profile_loaddata(udata);
 		error = __lookup_replace(ns, ent->new->base.hname,
 					 !(mask & AA_MAY_REPLACE_POLICY),
 					 &ent->old, &info);
@@ -1261,7 +1372,7 @@ ssize_t aa_replace_profiles(struct aa_ns *policy_ns, struct aa_label *label,
 
 out:
 	aa_put_ns(ns);
-	aa_put_loaddata(udata);
+	aa_put_profile_loaddata(udata);
 	kfree(ns_name);
 
 	if (error)

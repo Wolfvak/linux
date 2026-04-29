@@ -27,8 +27,6 @@
  * @dev: the GPIO device struct
  * @chrdev: character device for the GPIO device
  * @id: numerical ID number for the GPIO chip
- * @mockdev: class device used by the deprecated sysfs interface (may be
- * NULL)
  * @owner: helps prevent removal of modules exporting active GPIOs
  * @chip: pointer to the corresponding gpiochip, holding static
  * data for this device
@@ -65,7 +63,6 @@ struct gpio_device {
 	struct device		dev;
 	struct cdev		chrdev;
 	int			id;
-	struct device		*mockdev;
 	struct module		*owner;
 	struct gpio_chip __rcu	*chip;
 	struct gpio_desc	*descs;
@@ -189,24 +186,26 @@ struct gpio_desc {
 	struct gpio_device	*gdev;
 	unsigned long		flags;
 /* flag symbols are bit numbers */
-#define FLAG_REQUESTED			0
-#define FLAG_IS_OUT			1
-#define FLAG_EXPORT			2	/* protected by sysfs_lock */
-#define FLAG_SYSFS			3	/* exported via /sys/class/gpio/control */
-#define FLAG_ACTIVE_LOW			6	/* value has active low */
-#define FLAG_OPEN_DRAIN			7	/* Gpio is open drain type */
-#define FLAG_OPEN_SOURCE		8	/* Gpio is open source type */
-#define FLAG_USED_AS_IRQ		9	/* GPIO is connected to an IRQ */
-#define FLAG_IRQ_IS_ENABLED		10	/* GPIO is connected to an enabled IRQ */
-#define FLAG_IS_HOGGED			11	/* GPIO is hogged */
-#define FLAG_TRANSITORY			12	/* GPIO may lose value in sleep or reset */
-#define FLAG_PULL_UP			13	/* GPIO has pull up enabled */
-#define FLAG_PULL_DOWN			14	/* GPIO has pull down enabled */
-#define FLAG_BIAS_DISABLE		15	/* GPIO has pull disabled */
-#define FLAG_EDGE_RISING		16	/* GPIO CDEV detects rising edge events */
-#define FLAG_EDGE_FALLING		17	/* GPIO CDEV detects falling edge events */
-#define FLAG_EVENT_CLOCK_REALTIME	18	/* GPIO CDEV reports REALTIME timestamps in events */
-#define FLAG_EVENT_CLOCK_HTE		19	/* GPIO CDEV reports hardware timestamps in events */
+#define GPIOD_FLAG_REQUESTED		0  /* GPIO is in use */
+#define GPIOD_FLAG_IS_OUT		1  /* GPIO is in output mode */
+#define GPIOD_FLAG_EXPORT		2  /* GPIO is exported to user-space */
+#define GPIOD_FLAG_SYSFS		3  /* GPIO is exported via /sys/class/gpio */
+#define GPIOD_FLAG_ACTIVE_LOW		6  /* GPIO is active-low */
+#define GPIOD_FLAG_OPEN_DRAIN		7  /* GPIO is open drain type */
+#define GPIOD_FLAG_OPEN_SOURCE		8  /* GPIO is open source type */
+#define GPIOD_FLAG_USED_AS_IRQ		9  /* GPIO is connected to an IRQ */
+#define GPIOD_FLAG_IRQ_IS_ENABLED	10 /* GPIO is connected to an enabled IRQ */
+#define GPIOD_FLAG_IS_HOGGED		11 /* GPIO is hogged */
+#define GPIOD_FLAG_TRANSITORY		12 /* GPIO may lose value in sleep or reset */
+#define GPIOD_FLAG_PULL_UP		13 /* GPIO has pull up enabled */
+#define GPIOD_FLAG_PULL_DOWN		14 /* GPIO has pull down enabled */
+#define GPIOD_FLAG_BIAS_DISABLE		15 /* GPIO has pull disabled */
+#define GPIOD_FLAG_EDGE_RISING		16 /* GPIO CDEV detects rising edge events */
+#define GPIOD_FLAG_EDGE_FALLING		17 /* GPIO CDEV detects falling edge events */
+#define GPIOD_FLAG_EVENT_CLOCK_REALTIME	18 /* GPIO CDEV reports REALTIME timestamps in events */
+#define GPIOD_FLAG_EVENT_CLOCK_HTE	19 /* GPIO CDEV reports hardware timestamps in events */
+#define GPIOD_FLAG_SHARED		20 /* GPIO is shared by multiple consumers */
+#define GPIOD_FLAG_SHARED_PROXY		21 /* GPIO is a virtual proxy to a physically shared pin. */
 
 	/* Connection label */
 	struct gpio_desc_label __rcu *label;
@@ -245,7 +244,9 @@ DEFINE_CLASS(gpio_chip_guard,
 	     struct gpio_desc *desc)
 
 int gpiod_request(struct gpio_desc *desc, const char *label);
+int gpiod_request_commit(struct gpio_desc *desc, const char *label);
 void gpiod_free(struct gpio_desc *desc);
+void gpiod_free_commit(struct gpio_desc *desc);
 
 static inline int gpiod_request_user(struct gpio_desc *desc, const char *label)
 {
@@ -276,49 +277,30 @@ int gpiochip_get_ngpios(struct gpio_chip *gc, struct device *dev);
 struct gpio_desc *gpiochip_get_desc(struct gpio_chip *gc, unsigned int hwnum);
 const char *gpiod_get_label(struct gpio_desc *desc);
 
-/*
- * Return the GPIO number of the passed descriptor relative to its chip
- */
-static inline int gpio_chip_hwgpio(const struct gpio_desc *desc)
-{
-	return desc - &desc->gdev->descs[0];
-}
-
 /* With descriptor prefix */
 
-#define gpiod_err(desc, fmt, ...) \
+#define __gpiod_pr(level, desc, fmt, ...) \
 do { \
 	scoped_guard(srcu, &desc->gdev->desc_srcu) { \
-		pr_err("gpio-%d (%s): " fmt, desc_to_gpio(desc), \
-		       gpiod_get_label(desc) ? : "?", ##__VA_ARGS__); \
+		pr_##level("gpio-%d (%s): " fmt, desc_to_gpio(desc), \
+			   gpiod_get_label(desc) ?: "?", ##__VA_ARGS__); \
 	} \
 } while (0)
 
-#define gpiod_warn(desc, fmt, ...) \
-do { \
-	scoped_guard(srcu, &desc->gdev->desc_srcu) { \
-		pr_warn("gpio-%d (%s): " fmt, desc_to_gpio(desc), \
-			gpiod_get_label(desc) ? : "?", ##__VA_ARGS__); \
-	} \
-} while (0)
-
-#define gpiod_dbg(desc, fmt, ...) \
-do { \
-	scoped_guard(srcu, &desc->gdev->desc_srcu) { \
-		pr_debug("gpio-%d (%s): " fmt, desc_to_gpio(desc), \
-			 gpiod_get_label(desc) ? : "?", ##__VA_ARGS__); \
-	} \
-} while (0)
+#define gpiod_err(desc, fmt, ...) __gpiod_pr(err, desc, fmt, ##__VA_ARGS__)
+#define gpiod_warn(desc, fmt, ...) __gpiod_pr(warn, desc, fmt, ##__VA_ARGS__)
+#define gpiod_dbg(desc, fmt, ...) __gpiod_pr(debug, desc, fmt, ##__VA_ARGS__)
 
 /* With chip prefix */
 
-#define chip_err(gc, fmt, ...)					\
-	dev_err(&gc->gpiodev->dev, "(%s): " fmt, gc->label, ##__VA_ARGS__)
-#define chip_warn(gc, fmt, ...)					\
-	dev_warn(&gc->gpiodev->dev, "(%s): " fmt, gc->label, ##__VA_ARGS__)
-#define chip_info(gc, fmt, ...)					\
-	dev_info(&gc->gpiodev->dev, "(%s): " fmt, gc->label, ##__VA_ARGS__)
-#define chip_dbg(gc, fmt, ...)					\
-	dev_dbg(&gc->gpiodev->dev, "(%s): " fmt, gc->label, ##__VA_ARGS__)
+#define __gpiochip_pr(level, gc, fmt, ...) \
+do { \
+	dev_##level(&gc->gpiodev->dev, "(%s): " fmt, gc->label, ##__VA_ARGS__); \
+} while (0)
+
+#define gpiochip_err(gc, fmt, ...) __gpiochip_pr(err, gc, fmt, ##__VA_ARGS__)
+#define gpiochip_warn(gc, fmt, ...) __gpiochip_pr(warn, gc, fmt, ##__VA_ARGS__)
+#define gpiochip_info(gc, fmt, ...) __gpiochip_pr(info, gc, fmt, ##__VA_ARGS__)
+#define gpiochip_dbg(gc, fmt, ...) __gpiochip_pr(dbg, gc, fmt, ##__VA_ARGS__)
 
 #endif /* GPIOLIB_H */

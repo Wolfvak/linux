@@ -6,6 +6,8 @@
 
 #include <linux/wait_bit.h>
 
+#include <drm/drm_print.h>
+
 #include "intel_runtime_pm.h"
 #include "intel_wakeref.h"
 #include "i915_drv.h"
@@ -78,7 +80,7 @@ void __intel_wakeref_put_last(struct intel_wakeref *wf, unsigned long flags)
 	/* Assume we are not in process context and so cannot sleep. */
 	if (flags & INTEL_WAKEREF_PUT_ASYNC || !mutex_trylock(&wf->mutex)) {
 		mod_delayed_work(wf->i915->unordered_wq, &wf->work,
-				 FIELD_GET(INTEL_WAKEREF_PUT_DELAY, flags));
+				 FIELD_GET(INTEL_WAKEREF_PUT_DELAY_MASK, flags));
 		return;
 	}
 
@@ -114,7 +116,8 @@ void __intel_wakeref_init(struct intel_wakeref *wf,
 			 "wakeref.work", &key->work, 0);
 
 #if IS_ENABLED(CONFIG_DRM_I915_DEBUG_WAKEREF)
-	ref_tracker_dir_init(&wf->debug, INTEL_REFTRACK_DEAD_COUNT, name);
+	if (!wf->debug.class)
+		ref_tracker_dir_init(&wf->debug, INTEL_REFTRACK_DEAD_COUNT, "intel_wakeref");
 #endif
 }
 

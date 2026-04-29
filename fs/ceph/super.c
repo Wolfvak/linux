@@ -30,6 +30,9 @@
 
 #include <uapi/linux/magic.h>
 
+#define CREATE_TRACE_POINTS
+#include <trace/events/ceph.h>
+
 static DEFINE_SPINLOCK(ceph_fsc_lock);
 static LIST_HEAD(ceph_fsc_list);
 
@@ -244,20 +247,6 @@ static void canonicalize_path(char *path)
 	if (j > 1 && path[j - 1] == '/')
 		j--;
 	path[j] = '\0';
-}
-
-/*
- * Check if the mds namespace in ceph_mount_options matches
- * the passed in namespace string. First time match (when
- * ->mds_namespace is NULL) is treated specially, since
- * ->mds_namespace needs to be initialized by the caller.
- */
-static int namespace_equals(struct ceph_mount_options *fsopt,
-			    const char *namespace, size_t len)
-{
-	return !(fsopt->mds_namespace &&
-		 (strlen(fsopt->mds_namespace) != len ||
-		  strncmp(fsopt->mds_namespace, namespace, len)));
 }
 
 static int ceph_parse_old_source(const char *dev_name, const char *dev_name_end,
@@ -820,7 +809,7 @@ static struct ceph_fs_client *create_fs_client(struct ceph_mount_options *fsopt,
 	struct ceph_fs_client *fsc;
 	int err;
 
-	fsc = kzalloc(sizeof(*fsc), GFP_KERNEL);
+	fsc = kzalloc_obj(*fsc);
 	if (!fsc) {
 		err = -ENOMEM;
 		goto fail;
@@ -862,7 +851,7 @@ static struct ceph_fs_client *create_fs_client(struct ceph_mount_options *fsopt,
 	fsc->inode_wq = alloc_workqueue("ceph-inode", WQ_UNBOUND, 0);
 	if (!fsc->inode_wq)
 		goto fail_client;
-	fsc->cap_wq = alloc_workqueue("ceph-cap", 0, 1);
+	fsc->cap_wq = alloc_workqueue("ceph-cap", WQ_PERCPU, 1);
 	if (!fsc->cap_wq)
 		goto fail_inode_wq;
 
@@ -1042,7 +1031,7 @@ static const struct super_operations ceph_super_ops = {
 	.alloc_inode	= ceph_alloc_inode,
 	.free_inode	= ceph_free_inode,
 	.write_inode    = ceph_write_inode,
-	.drop_inode	= generic_delete_inode,
+	.drop_inode	= inode_just_drop,
 	.evict_inode	= ceph_evict_inode,
 	.sync_fs        = ceph_sync_fs,
 	.put_super	= ceph_put_super,
@@ -1163,7 +1152,7 @@ static struct dentry *ceph_real_mount(struct ceph_fs_client *fsc,
 		const char *path = fsc->mount_options->server_path ?
 				     fsc->mount_options->server_path + 1 : "";
 
-		err = __ceph_open_session(fsc->client, started);
+		err = __ceph_open_session(fsc->client);
 		if (err < 0)
 			goto out;
 
@@ -1219,7 +1208,7 @@ static int ceph_set_super(struct super_block *s, struct fs_context *fc)
 	fsc->max_file_size = 1ULL << 40; /* temp value until we get mdsmap */
 
 	s->s_op = &ceph_super_ops;
-	s->s_d_op = &ceph_dentry_ops;
+	set_default_d_op(s, &ceph_dentry_ops);
 	s->s_export_op = &ceph_export_ops;
 
 	s->s_time_gran = 1;
@@ -1440,7 +1429,7 @@ static int ceph_init_fs_context(struct fs_context *fc)
 	struct ceph_parse_opts_ctx *pctx;
 	struct ceph_mount_options *fsopt;
 
-	pctx = kzalloc(sizeof(*pctx), GFP_KERNEL);
+	pctx = kzalloc_obj(*pctx);
 	if (!pctx)
 		return -ENOMEM;
 
@@ -1448,7 +1437,7 @@ static int ceph_init_fs_context(struct fs_context *fc)
 	if (!pctx->copts)
 		goto nomem;
 
-	pctx->opts = kzalloc(sizeof(*pctx->opts), GFP_KERNEL);
+	pctx->opts = kzalloc_obj(*pctx->opts);
 	if (!pctx->opts)
 		goto nomem;
 

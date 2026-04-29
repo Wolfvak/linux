@@ -75,6 +75,7 @@
 */
 
 #include <linux/delay.h>
+#include <linux/hex.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/pci.h>
@@ -1594,7 +1595,7 @@ static int snd_riptide_playback_open(struct snd_pcm_substream *substream)
 	chip->playback_substream[sub_num] = substream;
 	runtime->hw = snd_riptide_playback;
 
-	data = kzalloc(sizeof(struct pcmhw), GFP_KERNEL);
+	data = kzalloc_obj(struct pcmhw);
 	if (data == NULL)
 		return -ENOMEM;
 	data->paths = lbus_play_paths[sub_num];
@@ -1617,7 +1618,7 @@ static int snd_riptide_capture_open(struct snd_pcm_substream *substream)
 	chip->capture_substream = substream;
 	runtime->hw = snd_riptide_capture;
 
-	data = kzalloc(sizeof(struct pcmhw), GFP_KERNEL);
+	data = kzalloc_obj(struct pcmhw);
 	if (data == NULL)
 		return -ENOMEM;
 	data->paths = lbus_rec_path;
@@ -1688,7 +1689,7 @@ static int snd_riptide_pcm(struct snd_riptide *chip, int device)
 			&snd_riptide_capture_ops);
 	pcm->private_data = chip;
 	pcm->info_flags = 0;
-	strcpy(pcm->name, "RIPTIDE");
+	strscpy(pcm->name, "RIPTIDE");
 	chip->pcm = pcm;
 	snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_DEV_SG,
 				       &chip->pci->dev, 64 * 1024, 128 * 1024);
@@ -1767,7 +1768,7 @@ static int snd_riptide_initialize(struct snd_riptide *chip)
 
 	cif = chip->cif;
 	if (!cif) {
-		cif = kzalloc(sizeof(struct cmdif), GFP_KERNEL);
+		cif = kzalloc_obj(struct cmdif);
 		if (!cif)
 			return -ENOMEM;
 		cif->dev = chip->card->dev;
@@ -2098,8 +2099,8 @@ __snd_card_riptide_probe(struct pci_dev *pci, const struct pci_device_id *pci_id
 	}
 #endif
 
-	strcpy(card->driver, "RIPTIDE");
-	strcpy(card->shortname, "Riptide");
+	strscpy(card->driver, "RIPTIDE");
+	strscpy(card->shortname, "Riptide");
 #ifdef SUPPORT_JOYSTICK
 	scnprintf(card->longname, sizeof(card->longname),
 		  "%s at 0x%lx, irq %i mpu 0x%x opl3 0x%x gameport 0x%x",

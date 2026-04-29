@@ -242,7 +242,7 @@ static struct rvt_mr *__rvt_alloc_mr(int count, struct ib_pd *pd)
 
 	/* Allocate struct plus pointers to first level page tables. */
 	m = (count + RVT_SEGSZ - 1) / RVT_SEGSZ;
-	mr = kzalloc(struct_size(mr, mr.map, m), GFP_KERNEL);
+	mr = kzalloc_flex(*mr, mr.map, m);
 	if (!mr)
 		goto bail;
 
@@ -292,7 +292,7 @@ struct ib_mr *rvt_get_dma_mr(struct ib_pd *pd, int acc)
 	if (ibpd_to_rvtpd(pd)->user)
 		return ERR_PTR(-EPERM);
 
-	mr = kzalloc(sizeof(*mr), GFP_KERNEL);
+	mr = kzalloc_obj(*mr);
 	if (!mr) {
 		ret = ERR_PTR(-ENOMEM);
 		goto bail;
@@ -329,12 +329,14 @@ bail:
  * @length: length of region to register
  * @virt_addr: associated virtual address
  * @mr_access_flags: access flags for this memory region
+ * @dmah: dma handle
  * @udata: unused by the driver
  *
  * Return: the memory region on success, otherwise returns an errno.
  */
 struct ib_mr *rvt_reg_user_mr(struct ib_pd *pd, u64 start, u64 length,
 			      u64 virt_addr, int mr_access_flags,
+			      struct ib_dmah *dmah,
 			      struct ib_udata *udata)
 {
 	struct rvt_mr *mr;
@@ -342,6 +344,9 @@ struct ib_mr *rvt_reg_user_mr(struct ib_pd *pd, u64 start, u64 length,
 	struct sg_page_iter sg_iter;
 	int n, m;
 	struct ib_mr *ret;
+
+	if (dmah)
+		return ERR_PTR(-EOPNOTSUPP);
 
 	if (length == 0)
 		return ERR_PTR(-EINVAL);

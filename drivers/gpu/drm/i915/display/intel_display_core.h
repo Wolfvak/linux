@@ -41,8 +41,9 @@ struct intel_cdclk_vals;
 struct intel_color_funcs;
 struct intel_crtc;
 struct intel_crtc_state;
+struct intel_display_parent_interface;
 struct intel_dmc;
-struct intel_dpll_funcs;
+struct intel_dpll_global_funcs;
 struct intel_dpll_mgr;
 struct intel_fbdev;
 struct intel_fdi_funcs;
@@ -122,11 +123,11 @@ struct intel_audio {
  * intel_{prepare,enable,disable}_shared_dpll.  Must be global rather than per
  * dpll, because on some platforms plls share registers.
  */
-struct intel_dpll {
+struct intel_dpll_global {
 	struct mutex lock;
 
-	int num_shared_dpll;
-	struct intel_shared_dpll shared_dplls[I915_NUM_PLLS];
+	int num_dpll;
+	struct intel_dpll dplls[I915_NUM_PLLS];
 	const struct intel_dpll_mgr *mgr;
 
 	struct {
@@ -141,14 +142,13 @@ struct intel_dpll {
 };
 
 struct intel_frontbuffer_tracking {
+	/* protects busy_bits */
 	spinlock_t lock;
 
 	/*
-	 * Tracking bits for delayed frontbuffer flushing du to gpu activity or
-	 * scheduled flips.
+	 * Tracking bits for delayed frontbuffer flushing due to gpu activity.
 	 */
 	unsigned busy_bits;
-	unsigned flip_bits;
 };
 
 struct intel_hotplug {
@@ -291,6 +291,9 @@ struct intel_display {
 	/* Intel PCH: where the south display engine lives */
 	enum intel_pch pch_type;
 
+	/* Parent, or core, driver functions exposed to display */
+	const struct intel_display_parent_interface *parent;
+
 	/* Display functions */
 	struct {
 		/* Top level crtc-ish functions */
@@ -300,7 +303,7 @@ struct intel_display {
 		const struct intel_cdclk_funcs *cdclk;
 
 		/* Display pll funcs */
-		const struct intel_dpll_funcs *dpll;
+		const struct intel_dpll_global_funcs *dpll;
 
 		/* irq display functions */
 		const struct intel_hotplug_funcs *hotplug;
@@ -370,6 +373,10 @@ struct intel_display {
 	} dbuf;
 
 	struct {
+		struct intel_global_obj obj;
+	} dbuf_bw;
+
+	struct {
 		/*
 		 * dkl.phy_lock protects against concurrent access of the
 		 * Dekel TypeC PHYs.
@@ -379,13 +386,28 @@ struct intel_display {
 
 	struct {
 		struct intel_dmc *dmc;
-		intel_wakeref_t wakeref;
+		struct ref_tracker *wakeref;
 	} dmc;
 
 	struct {
 		/* VLV/CHV/BXT/GLK DSI MMIO register base address */
 		u32 mmio_base;
 	} dsi;
+
+	struct {
+		const struct dram_info *info;
+	} dram;
+
+	struct {
+		struct intel_fbc *instances[I915_MAX_FBCS];
+
+		/* xe3p_lpd+: FBC instance utilizing the system cache */
+		struct sys_cache_cfg {
+			/* Protect concurrecnt access to system cache configuration */
+			struct mutex lock;
+			enum intel_fbc_id id;
+		} sys_cache;
+	} fbc;
 
 	struct {
 		/* list of fbdev register on this device */
@@ -475,9 +497,29 @@ struct intel_display {
 
 		struct work_struct vblank_notify_work;
 
-		u32 de_irq_mask[I915_MAX_PIPES];
+		/*
+		 * Cached value of VLV/CHV IMR to avoid reads in updating the
+		 * bitfield.
+		 */
+		u32 vlv_imr_mask;
+		/*
+		 * Cached value of gen 5-7 DE IMR to avoid reads in updating the
+		 * bitfield.
+		 */
+		u32 ilk_de_imr_mask;
+		/*
+		 * Cached value of BDW+ DE pipe IMR to avoid reads in updating
+		 * the bitfield.
+		 */
+		u32 de_pipe_imr_mask[I915_MAX_PIPES];
 		u32 pipestat_irq_mask[I915_MAX_PIPES];
 	} irq;
+
+	struct {
+		/* protected by wm.wm_mutex */
+		u16 linetime[I915_MAX_PIPES];
+		bool disable[I915_MAX_PIPES];
+	} pkgc;
 
 	struct {
 		wait_queue_head_t waitqueue;
@@ -539,6 +581,11 @@ struct intel_display {
 	} sagv;
 
 	struct {
+		/* LPT/WPT IOSF sideband protection */
+		struct mutex lock;
+	} sbi;
+
+	struct {
 		/*
 		 * DG2: Mask of PHYs that were not calibrated by the firmware
 		 * and should not be used.
@@ -557,6 +604,11 @@ struct intel_display {
 	} state;
 
 	struct {
+		unsigned int hpll_freq;
+		unsigned int czclk_freq;
+	} vlv_clock;
+
+	struct {
 		/* ordered wq for modesets */
 		struct workqueue_struct *modeset;
 
@@ -565,13 +617,15 @@ struct intel_display {
 
 		/* hipri wq for commit cleanups */
 		struct workqueue_struct *cleanup;
+
+		/* unordered workqueue for all display unordered work */
+		struct workqueue_struct *unordered;
 	} wq;
 
 	/* Grouping using named structs. Keep sorted. */
 	struct drm_dp_tunnel_mgr *dp_tunnel_mgr;
 	struct intel_audio audio;
-	struct intel_dpll dpll;
-	struct intel_fbc *fbc[I915_MAX_FBCS];
+	struct intel_dpll_global dpll;
 	struct intel_frontbuffer_tracking fb_tracking;
 	struct intel_hotplug hotplug;
 	struct intel_opregion *opregion;

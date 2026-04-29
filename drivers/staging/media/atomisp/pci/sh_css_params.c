@@ -4,6 +4,8 @@
  * Copyright (c) 2015, Intel Corporation.
  */
 
+#include <linux/math.h>
+
 #include "gdc_device.h"		/* gdc_lut_store(), ... */
 #include "isp.h"			/* ISP_VEC_ELEMBITS */
 #include "vamem.h"
@@ -21,8 +23,6 @@
 
 #include "platform_support.h"
 #include "assert_support.h"
-#include "misc_support.h"	/* NOT_USED */
-#include "math_support.h"	/* max(), min()  EVEN_FLOOR()*/
 
 #include "ia_css_stream.h"
 #include "sh_css_params_internal.h"
@@ -1369,7 +1369,7 @@ struct ia_css_morph_table *ia_css_morph_table_allocate(
 
 	IA_CSS_ENTER("");
 
-	me = kvmalloc(sizeof(*me), GFP_KERNEL);
+	me = kvmalloc_obj(*me);
 	if (!me) {
 		IA_CSS_ERROR("out of memory");
 		return me;
@@ -1516,7 +1516,7 @@ ia_css_isp_3a_statistics_map_allocate(
 	 * so we use a local char * instead. */
 	char *base_ptr;
 
-	me = kvmalloc(sizeof(*me), GFP_KERNEL);
+	me = kvmalloc_obj(*me);
 	if (!me) {
 		IA_CSS_LEAVE("cannot allocate memory");
 		goto err;
@@ -2136,7 +2136,7 @@ ia_css_isp_3a_statistics_allocate(const struct ia_css_3a_grid_info *grid)
 	if (!grid->enable)
 		return NULL;
 
-	me = kvcalloc(1, sizeof(*me), GFP_KERNEL);
+	me = kvzalloc_objs(*me, 1);
 	if (!me)
 		goto err;
 
@@ -2200,7 +2200,7 @@ ia_css_metadata_allocate(const struct ia_css_metadata_info *metadata_info)
 	if (metadata_info->size == 0)
 		return NULL;
 
-	md = kvmalloc(sizeof(*md), GFP_KERNEL);
+	md = kvmalloc_obj(*md);
 	if (!md)
 		goto error;
 
@@ -2330,7 +2330,7 @@ sh_css_create_isp_params(struct ia_css_stream *stream,
 	int err;
 	size_t params_size;
 	struct ia_css_isp_parameters *params =
-	kvmalloc(sizeof(struct ia_css_isp_parameters), GFP_KERNEL);
+	kvmalloc_obj(struct ia_css_isp_parameters);
 
 	if (!params) {
 		*isp_params_out = NULL;
@@ -4042,10 +4042,10 @@ sh_css_update_uds_and_crop_info(
 		}
 
 		/* Must enforce that the crop position is even */
-		crop_x = EVEN_FLOOR(crop_x);
-		crop_y = EVEN_FLOOR(crop_y);
-		uds_xc = EVEN_FLOOR(uds_xc);
-		uds_yc = EVEN_FLOOR(uds_yc);
+		crop_x = round_down(crop_x, 2);
+		crop_y = round_down(crop_y, 2);
+		uds_xc = round_down(uds_xc, 2);
+		uds_yc = round_down(uds_yc, 2);
 
 		uds->xc = (uint16_t)uds_xc;
 		uds->yc = (uint16_t)uds_yc;
@@ -4161,7 +4161,7 @@ ia_css_3a_statistics_allocate(const struct ia_css_3a_grid_info *grid)
 
 	assert(grid);
 
-	me = kvcalloc(1, sizeof(*me), GFP_KERNEL);
+	me = kvzalloc_objs(*me, 1);
 	if (!me)
 		goto err;
 
@@ -4201,7 +4201,7 @@ ia_css_dvs_statistics_allocate(const struct ia_css_dvs_grid_info *grid)
 
 	assert(grid);
 
-	me = kvcalloc(1, sizeof(*me), GFP_KERNEL);
+	me = kvzalloc_objs(*me, 1);
 	if (!me)
 		goto err;
 
@@ -4239,7 +4239,7 @@ ia_css_dvs_coefficients_allocate(const struct ia_css_dvs_grid_info *grid)
 
 	assert(grid);
 
-	me = kvcalloc(1, sizeof(*me), GFP_KERNEL);
+	me = kvzalloc_objs(*me, 1);
 	if (!me)
 		goto err;
 
@@ -4280,7 +4280,7 @@ ia_css_dvs2_statistics_allocate(const struct ia_css_dvs_grid_info *grid)
 
 	assert(grid);
 
-	me = kvcalloc(1, sizeof(*me), GFP_KERNEL);
+	me = kvzalloc_objs(*me, 1);
 	if (!me)
 		goto err;
 
@@ -4371,7 +4371,7 @@ ia_css_dvs2_coefficients_allocate(const struct ia_css_dvs_grid_info *grid)
 
 	assert(grid);
 
-	me = kvcalloc(1, sizeof(*me), GFP_KERNEL);
+	me = kvzalloc_objs(*me, 1);
 	if (!me)
 		goto err;
 
@@ -4464,8 +4464,7 @@ ia_css_dvs2_6axis_config_allocate(const struct ia_css_stream *stream)
 	if (!params || !params->pipe_dvs_6axis_config[IA_CSS_PIPE_ID_VIDEO])
 		goto err;
 
-	dvs_config = kvcalloc(1, sizeof(struct ia_css_dvs_6axis_config),
-			      GFP_KERNEL);
+	dvs_config = kvzalloc_objs(struct ia_css_dvs_6axis_config, 1);
 	if (!dvs_config)
 		goto err;
 

@@ -21,6 +21,7 @@ static unsigned int priority_to_irq[EXCCODE_INT_NUM] = {
 	[INT_HWI5]	= CPU_IP5,
 	[INT_HWI6]	= CPU_IP6,
 	[INT_HWI7]	= CPU_IP7,
+	[INT_AVEC]	= CPU_AVEC,
 };
 
 static int kvm_irq_deliver(struct kvm_vcpu *vcpu, unsigned int priority)
@@ -30,6 +31,11 @@ static int kvm_irq_deliver(struct kvm_vcpu *vcpu, unsigned int priority)
 	clear_bit(priority, &vcpu->arch.irq_pending);
 	if (priority < EXCCODE_INT_NUM)
 		irq = priority_to_irq[priority];
+
+	if (kvm_guest_has_msgint(&vcpu->arch) && (priority == INT_AVEC)) {
+		set_gcsr_estat(irq);
+		return 1;
+	}
 
 	switch (priority) {
 	case INT_TI:
@@ -58,6 +64,11 @@ static int kvm_irq_clear(struct kvm_vcpu *vcpu, unsigned int priority)
 	if (priority < EXCCODE_INT_NUM)
 		irq = priority_to_irq[priority];
 
+	if (kvm_guest_has_msgint(&vcpu->arch) && (priority == INT_AVEC)) {
+		clear_gcsr_estat(irq);
+		return 1;
+	}
+
 	switch (priority) {
 	case INT_TI:
 	case INT_IPI:
@@ -83,28 +94,11 @@ void kvm_deliver_intr(struct kvm_vcpu *vcpu)
 	unsigned long *pending = &vcpu->arch.irq_pending;
 	unsigned long *pending_clr = &vcpu->arch.irq_clear;
 
-	if (!(*pending) && !(*pending_clr))
-		return;
+	for_each_set_bit(priority, pending_clr, EXCCODE_INT_NUM)
+		kvm_irq_clear(vcpu, priority);
 
-	if (*pending_clr) {
-		priority = __ffs(*pending_clr);
-		while (priority <= INT_IPI) {
-			kvm_irq_clear(vcpu, priority);
-			priority = find_next_bit(pending_clr,
-					BITS_PER_BYTE * sizeof(*pending_clr),
-					priority + 1);
-		}
-	}
-
-	if (*pending) {
-		priority = __ffs(*pending);
-		while (priority <= INT_IPI) {
-			kvm_irq_deliver(vcpu, priority);
-			priority = find_next_bit(pending,
-					BITS_PER_BYTE * sizeof(*pending),
-					priority + 1);
-		}
-	}
+	for_each_set_bit(priority, pending, EXCCODE_INT_NUM)
+		kvm_irq_deliver(vcpu, priority);
 }
 
 int kvm_pending_timer(struct kvm_vcpu *vcpu)

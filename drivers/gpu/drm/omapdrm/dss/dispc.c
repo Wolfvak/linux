@@ -524,7 +524,7 @@ static void dispc_save_context(struct dispc_device *dispc)
 	DSSDBG("context saved\n");
 }
 
-static void dispc_restore_context(struct dispc_device *dispc)
+static noinline_for_stack void dispc_restore_context(struct dispc_device *dispc)
 {
 	int i, j;
 
@@ -4603,7 +4603,7 @@ static int dispc_bind(struct device *dev, struct device *master, void *data)
 	int r = 0;
 	struct device_node *np = pdev->dev.of_node;
 
-	dispc = kzalloc(sizeof(*dispc), GFP_KERNEL);
+	dispc = kzalloc_obj(*dispc);
 	if (!dispc)
 		return -ENOMEM;
 

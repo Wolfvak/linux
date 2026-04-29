@@ -122,13 +122,12 @@ static bool ex_handler_sgx(const struct exception_table_entry *fixup,
 static bool ex_handler_fprestore(const struct exception_table_entry *fixup,
 				 struct pt_regs *regs)
 {
-	regs->ip = ex_fixup_addr(fixup);
-
 	WARN_ONCE(1, "Bad FPU state detected at %pB, reinitializing FPU registers.",
 		  (void *)instruction_pointer(regs));
 
 	fpu_reset_from_exception_fixup();
-	return true;
+
+	return ex_handler_default(fixup, regs);
 }
 
 /*
@@ -412,14 +411,11 @@ void __init early_fixup_exception(struct pt_regs *regs, int trapnr)
 		return;
 
 	if (trapnr == X86_TRAP_UD) {
-		if (report_bug(regs->ip, regs) == BUG_TRAP_TYPE_WARN) {
-			/* Skip the ud2. */
-			regs->ip += LEN_UD2;
+		if (handle_bug(regs))
 			return;
-		}
 
 		/*
-		 * If this was a BUG and report_bug returns or if this
+		 * If this was a BUG and handle_bug returns or if this
 		 * was just a normal #UD, we want to continue onward and
 		 * crash.
 		 */

@@ -177,6 +177,7 @@ core_pattern
 	%E		executable path
 	%c		maximum size of core file by resource limit RLIMIT_CORE
 	%C		CPU the task ran on
+	%F		pidfd number
 	%<OTHER>	both are dropped
 	========	==========================================
 
@@ -396,13 +397,14 @@ a hung task is detected.
 hung_task_panic
 ===============
 
-Controls the kernel's behavior when a hung task is detected.
+When set to a non-zero value, a kernel panic will be triggered if the
+number of hung tasks found during a single scan reaches this value.
 This file shows up if ``CONFIG_DETECT_HUNG_TASK`` is enabled.
 
-= =================================================
+= =======================================================
 0 Continue operation. This is the default behavior.
-1 Panic immediately.
-= =================================================
+N Panic when N hung tasks are found during a single scan.
+= =======================================================
 
 
 hung_task_check_count
@@ -420,6 +422,11 @@ the system boot.
 
 This file shows up if ``CONFIG_DETECT_HUNG_TASK`` is enabled.
 
+hung_task_sys_info
+==================
+A comma separated list of extra system information to be dumped when
+hung task is detected, for example, "tasks,mem,timers,locks,...".
+Refer 'panic_sys_info' section below for more details.
 
 hung_task_timeout_secs
 ======================
@@ -514,6 +521,15 @@ default), only processes with the CAP_SYS_ADMIN capability may create
 io_uring instances.
 
 
+kernel_sys_info
+===============
+A comma separated list of extra system information to be dumped when
+soft/hard lockup is detected, for example, "tasks,mem,timers,locks,...".
+Refer 'panic_sys_info' section below for more details.
+
+It serves as the default kernel control knob, which will take effect
+when a kernel module calls sys_info() with parameter==0.
+
 kexec_load_disabled
 ===================
 
@@ -575,6 +591,14 @@ if leaking kernel pointer values to unprivileged users is a concern.
 When ``kptr_restrict`` is set to 2, kernel pointers printed using
 %pK will be replaced with 0s regardless of privileges.
 
+For disabling these security restrictions early at boot time (and once
+for all), use the ``hash_pointers`` boot parameter instead.
+
+softlockup_sys_info & hardlockup_sys_info
+=========================================
+A comma separated list of extra system information to be dumped when
+soft/hard lockup is detected, for example, "tasks,mem,timers,locks,...".
+Refer 'panic_sys_info' section below for more details.
 
 modprobe
 ========
@@ -889,7 +913,7 @@ bit 1  print system memory info
 bit 2  print timer info
 bit 3  print locks info if ``CONFIG_LOCKDEP`` is on
 bit 4  print ftrace buffer
-bit 5  print all printk messages in buffer
+bit 5  replay all kernel messages on consoles at the end of panic
 bit 6  print all CPUs backtrace (if available in the arch)
 bit 7  print only tasks in uninterruptible (blocked) state
 =====  ============================================
@@ -897,6 +921,24 @@ bit 7  print only tasks in uninterruptible (blocked) state
 So for example to print tasks and memory info on panic, user can::
 
   echo 3 > /proc/sys/kernel/panic_print
+
+
+panic_sys_info
+==============
+
+A comma separated list of extra information to be dumped on panic,
+for example, "tasks,mem,timers,...".  It is a human readable alternative
+to 'panic_print'. Possible values are:
+
+=============   ===================================================
+tasks           print all tasks info
+mem             print system memory info
+timers          print timers info
+locks           print locks info if CONFIG_LOCKDEP is on
+ftrace          print ftrace buffer
+all_bt          print all CPUs backtrace (if available in the arch)
+blocked_tasks   print only tasks in uninterruptible (blocked) state
+=============   ===================================================
 
 
 panic_on_rcu_stall
@@ -1014,30 +1056,26 @@ perf_user_access (arm64 and riscv only)
 
 Controls user space access for reading perf event counters.
 
-arm64
-=====
+* for arm64
+  The default value is 0 (access disabled).
 
-The default value is 0 (access disabled).
+  When set to 1, user space can read performance monitor counter registers
+  directly.
 
-When set to 1, user space can read performance monitor counter registers
-directly.
+  See Documentation/arch/arm64/perf.rst for more information.
 
-See Documentation/arch/arm64/perf.rst for more information.
+* for riscv
+  When set to 0, user space access is disabled.
 
-riscv
-=====
+  The default value is 1, user space can read performance monitor counter
+  registers through perf, any direct access without perf intervention will trigger
+  an illegal instruction.
 
-When set to 0, user space access is disabled.
+  When set to 2, which enables legacy mode (user space has direct access to cycle
+  and insret CSRs only). Note that this legacy value is deprecated and will be
+  removed once all user space applications are fixed.
 
-The default value is 1, user space can read performance monitor counter
-registers through perf, any direct access without perf intervention will trigger
-an illegal instruction.
-
-When set to 2, which enables legacy mode (user space has direct access to cycle
-and insret CSRs only). Note that this legacy value is deprecated and will be
-removed once all user space applications are fixed.
-
-Note that the time CSR is always directly accessible to all modes.
+  Note that the time CSR is always directly accessible to all modes.
 
 pid_max
 =======
@@ -1110,7 +1148,8 @@ printk_ratelimit_burst
 While long term we enforce one message per `printk_ratelimit`_
 seconds, we do allow a burst of messages to pass through.
 ``printk_ratelimit_burst`` specifies the number of messages we can
-send before ratelimiting kicks in.
+send before ratelimiting kicks in.  After `printk_ratelimit`_ seconds
+have elapsed, another burst of messages may be sent.
 
 The default value is 10 messages.
 
@@ -1197,12 +1236,6 @@ that support this feature.
     with ``CONFIG_COMPAT_BRK`` enabled, which excludes the heap from process
     address space randomization.
 ==  ===========================================================================
-
-
-real-root-dev
-=============
-
-See Documentation/admin-guide/initrd.rst.
 
 
 reboot-cmd (SPARC only)
@@ -1465,7 +1498,7 @@ stack_erasing
 =============
 
 This parameter can be used to control kernel stack erasing at the end
-of syscalls for kernels built with ``CONFIG_GCC_PLUGIN_STACKLEAK``.
+of syscalls for kernels built with ``CONFIG_KSTACK_ERASE``.
 
 That erasing reduces the information which kernel stack leak bugs
 can reveal and blocks some uninitialized stack variable attacks.
@@ -1473,7 +1506,7 @@ The tradeoff is the performance impact: on a single CPU system kernel
 compilation sees a 1% slowdown, other systems and workloads may vary.
 
 = ====================================================================
-0 Kernel stack erasing is disabled, STACKLEAK_METRICS are not updated.
+0 Kernel stack erasing is disabled, KSTACK_ERASE_METRICS are not updated.
 1 Kernel stack erasing is enabled (default), it is performed before
   returning to the userspace at the end of syscalls.
 = ====================================================================

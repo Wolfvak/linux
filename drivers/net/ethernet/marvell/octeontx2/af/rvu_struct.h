@@ -13,6 +13,8 @@
 
 #define RVU_MULTI_BLK_VER		0x7ULL
 
+#define NIX_MAX_CTX_SIZE		128
+
 /* RVU Block Address Enumeration */
 enum rvu_block_addr_e {
 	BLKADDR_RVUM		= 0x0ULL,
@@ -33,7 +35,8 @@ enum rvu_block_addr_e {
 	BLKADDR_NDC_NIX1_RX	= 0x10ULL,
 	BLKADDR_NDC_NIX1_TX	= 0x11ULL,
 	BLKADDR_APR		= 0x16ULL,
-	BLK_COUNT		= 0x17ULL,
+	BLKADDR_MBOX		= 0x1bULL,
+	BLK_COUNT		= 0x1cULL,
 };
 
 /* RVU Block Type Enumeration */
@@ -49,7 +52,8 @@ enum rvu_block_type_e {
 	BLKTYPE_TIM  = 0x8,
 	BLKTYPE_CPT  = 0x9,
 	BLKTYPE_NDC  = 0xa,
-	BLKTYPE_MAX  = 0xa,
+	BLKTYPE_MBOX = 0x13,
+	BLKTYPE_MAX  = 0x13,
 };
 
 /* RVU Admin function Interrupt Vector Enumeration */
@@ -368,7 +372,11 @@ struct nix_cq_ctx_s {
 	u64 qsize		: 4;
 	u64 cq_err_int		: 8;
 	u64 cq_err_int_ena	: 8;
+	/* Ensure all context sizes are 128 bytes */
+	u64 padding[12];
 };
+
+static_assert(sizeof(struct nix_cq_ctx_s) == NIX_MAX_CTX_SIZE);
 
 /* CN10K NIX Receive queue context structure */
 struct nix_cn10k_rq_ctx_s {
@@ -411,7 +419,8 @@ struct nix_cn10k_rq_ctx_s {
 	u64 rsvd_171		: 1;
 	u64 later_skip		: 6;
 	u64 xqe_imm_size	: 6;
-	u64 rsvd_189_184	: 6;
+	u64 band_prof_id_h	: 4;
+	u64 rsvd_189_188	: 2;
 	u64 xqe_imm_copy	: 1;
 	u64 xqe_hdr_split	: 1;
 	u64 xqe_drop		: 8; /* W3 */
@@ -457,6 +466,8 @@ struct nix_cn10k_rq_ctx_s {
 	u64 rsvd_959_896;		/* W14 */
 	u64 rsvd_1023_960;		/* W15 */
 };
+
+static_assert(sizeof(struct nix_cn10k_rq_ctx_s) == NIX_MAX_CTX_SIZE);
 
 /* CN10K NIX Send queue context structure */
 struct nix_cn10k_sq_ctx_s {
@@ -520,6 +531,8 @@ struct nix_cn10k_sq_ctx_s {
 	u64 dropped_pkts          : 48;
 	u64 rsvd_1023_1008        : 16;
 };
+
+static_assert(sizeof(struct nix_cn10k_sq_ctx_s) == NIX_MAX_CTX_SIZE);
 
 /* NIX Receive queue context structure */
 struct nix_rq_ctx_s {
@@ -591,6 +604,8 @@ struct nix_rq_ctx_s {
 	u64 rsvd_959_896;		/* W14 */
 	u64 rsvd_1023_960;		/* W15 */
 };
+
+static_assert(sizeof(struct nix_rq_ctx_s) == NIX_MAX_CTX_SIZE);
 
 /* NIX sqe sizes */
 enum nix_maxsqesz {
@@ -666,12 +681,17 @@ struct nix_sq_ctx_s {
 	u64 rsvd_1023_1008        : 16;
 };
 
+static_assert(sizeof(struct nix_sq_ctx_s) == NIX_MAX_CTX_SIZE);
+
 /* NIX Receive side scaling entry structure*/
 struct nix_rsse_s {
 	uint32_t rq			: 20;
 	uint32_t reserved_20_31		: 12;
-
+	/* Ensure all context sizes are minimum 128 bytes */
+	u64 padding[15];
 };
+
+static_assert(sizeof(struct nix_rsse_s) == NIX_MAX_CTX_SIZE);
 
 /* NIX receive multicast/mirror entry structure */
 struct nix_rx_mce_s {
@@ -682,7 +702,11 @@ struct nix_rx_mce_s {
 	uint64_t rsvd_31_24 : 8;
 	uint64_t pf_func    : 16;
 	uint64_t next       : 16;
+	/* Ensure all context sizes are minimum 128 bytes */
+	u64 padding[15];
 };
+
+static_assert(sizeof(struct nix_rx_mce_s) == NIX_MAX_CTX_SIZE);
 
 enum nix_band_prof_layers {
 	BAND_PROF_LEAF_LAYER = 0,
@@ -734,7 +758,8 @@ struct nix_bandprof_s {
 	uint64_t rc_action                   :  2;
 	uint64_t meter_algo                  :  2;
 	uint64_t band_prof_id                :  7;
-	uint64_t reserved_111_118            :  8;
+	uint64_t band_prof_id_h              :  4;
+	uint64_t reserved_115_118            :  4;
 	uint64_t hl_en                       :  1;
 	uint64_t reserved_120_127            :  8;
 	uint64_t ts                          : 48; /* W2 */
@@ -766,6 +791,8 @@ struct nix_bandprof_s {
 	uint64_t red_octs_drop               : 48; /* W15 */
 	uint64_t reserved_1008_1023          : 16;
 };
+
+static_assert(sizeof(struct nix_bandprof_s) == NIX_MAX_CTX_SIZE);
 
 enum nix_lsoalg {
 	NIX_LSOALG_NOP,

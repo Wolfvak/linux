@@ -435,6 +435,23 @@ HWCAP2_SME_SF8DP4
 HWCAP2_POE
     Functionality implied by ID_AA64MMFR3_EL1.S1POE == 0b0001.
 
+HWCAP3_MTE_FAR
+    Functionality implied by ID_AA64PFR2_EL1.MTEFAR == 0b0001.
+
+HWCAP3_MTE_STORE_ONLY
+    Functionality implied by ID_AA64PFR2_EL1.MTESTOREONLY == 0b0001.
+
+HWCAP3_LSFE
+    Functionality implied by ID_AA64ISAR3_EL1.LSFE == 0b0001
+
+HWCAP3_LS64
+    Functionality implied by ID_AA64ISAR1_EL1.LS64 == 0b0001. Note that
+    the function of instruction ld64b/st64b requires support by CPU, system
+    and target (device) memory location and HWCAP3_LS64 implies the support
+    of CPU. User should only use ld64b/st64b on supported target (device)
+    memory location, otherwise fallback to the non-atomic alternatives.
+
+
 4. Unused AT_HWCAP bits
 -----------------------
 

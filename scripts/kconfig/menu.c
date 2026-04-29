@@ -127,8 +127,18 @@ static struct expr *rewrite_m(struct expr *e)
 	return e;
 }
 
-void menu_add_dep(struct expr *dep)
+void menu_add_dep(struct expr *dep, struct expr *cond)
 {
+	if (cond) {
+		/*
+		 * We have "depends on X if Y" and we want:
+		 *	Y != n --> X
+		 *	Y == n --> y
+		 * That simplifies to: (X || (Y == n))
+		 */
+		dep = expr_alloc_or(dep,
+				expr_trans_compare(cond, E_EQUAL, &symbol_no));
+	}
 	current_entry->dep = expr_alloc_and(current_entry->dep, dep);
 }
 
@@ -575,7 +585,27 @@ const char *menu_get_prompt(const struct menu *menu)
 	return NULL;
 }
 
+/**
+ * menu_get_parent_menu - return the parent menu or NULL
+ * @menu: pointer to the menu
+ * return: the parent menu, or NULL if there is no parent.
+ */
 struct menu *menu_get_parent_menu(struct menu *menu)
+{
+	for (menu = menu->parent; menu; menu = menu->parent)
+		if (menu->type == M_MENU)
+			return menu;
+
+	return NULL;
+}
+
+/**
+ * menu_get_menu_or_parent_menu - return the parent menu or the menu itself
+ * @menu: pointer to the menu
+ * return: the parent menu. If the given argument is already a menu, return
+ *         itself.
+ */
+struct menu *menu_get_menu_or_parent_menu(struct menu *menu)
 {
 	enum prop_type type;
 
@@ -767,4 +797,78 @@ void menu_get_ext_help(struct menu *menu, struct gstr *help)
 	str_printf(help, "%s\n", help_text);
 	if (sym)
 		get_symbol_str(help, sym, NULL);
+}
+
+/**
+ * menu_dump - dump all menu entries in a tree-like format
+ */
+void menu_dump(void)
+{
+	struct menu *menu = &rootmenu;
+	unsigned long long bits = 0;
+	int indent = 0;
+
+	while (menu) {
+
+		for (int i = indent - 1; i >= 0; i--) {
+			if (bits & (1ULL << i)) {
+				if (i > 0)
+					printf("|   ");
+				else
+					printf("|-- ");
+			} else {
+				if (i > 0)
+					printf("    ");
+				else
+					printf("`-- ");
+			}
+		}
+
+		switch (menu->type) {
+		case M_CHOICE:
+			printf("choice \"%s\"\n", menu->prompt->text);
+			break;
+		case M_COMMENT:
+			printf("comment \"%s\"\n", menu->prompt->text);
+			break;
+		case M_IF:
+			printf("if\n");
+			break;
+		case M_MENU:
+			printf("menu \"%s\"", menu->prompt->text);
+			if (!menu->sym) {
+				printf("\n");
+				break;
+			}
+			printf(" + ");
+			/* fallthrough */
+		case M_NORMAL:
+			printf("symbol %s\n", menu->sym->name);
+			break;
+		}
+		if (menu->list) {
+			bits <<= 1;
+			menu = menu->list;
+			if (menu->next)
+				bits |= 1;
+			else
+				bits &= ~1;
+			indent++;
+			continue;
+		}
+
+		while (menu && !menu->next) {
+			menu = menu->parent;
+			bits >>= 1;
+			indent--;
+		}
+
+		if (menu) {
+			menu = menu->next;
+			if (menu->next)
+				bits |= 1;
+			else
+				bits &= ~1;
+		}
+	}
 }

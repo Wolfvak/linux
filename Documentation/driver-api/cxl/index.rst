@@ -14,6 +14,7 @@ that have impacts on each other.  The docs here break up configurations steps.
 
    theory-of-operation
    maturity-map
+   conventions
 
 .. toctree::
    :maxdepth: 2
@@ -29,6 +30,7 @@ that have impacts on each other.  The docs here break up configurations steps.
    platform/acpi
    platform/cdat
    platform/example-configs
+   platform/device-hotplug
 
 .. toctree::
    :maxdepth: 2
@@ -49,5 +51,3 @@ that have impacts on each other.  The docs here break up configurations steps.
    allocation/page-allocator
    allocation/reclaim
    allocation/hugepages.rst
-
-.. only::  subproject and html

@@ -76,7 +76,6 @@ struct xgbe_prv_data *xgbe_alloc_pdata(struct device *dev)
 	pdata->netdev = netdev;
 	pdata->dev = dev;
 
-	spin_lock_init(&pdata->lock);
 	spin_lock_init(&pdata->xpcs_lock);
 	mutex_init(&pdata->rss_mutex);
 	spin_lock_init(&pdata->tstamp_lock);
@@ -275,7 +274,7 @@ int xgbe_config_netdev(struct xgbe_prv_data *pdata)
 
 	netdev->priv_flags |= IFF_UNICAST_FLT;
 	netdev->min_mtu = 0;
-	netdev->max_mtu = XGMAC_JUMBO_PACKET_MTU;
+	netdev->max_mtu = XGMAC_GIANT_PACKET_MTU - XGBE_ETH_FRAME_HDR;
 
 	/* Use default watchdog timeout */
 	netdev->watchdog_timeo = 0;

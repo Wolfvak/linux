@@ -528,8 +528,10 @@ static int enic_grxclsrule(struct enic *enic, struct ethtool_rxnfc *cmd)
 	return 0;
 }
 
-static int enic_get_rx_flow_hash(struct enic *enic, struct ethtool_rxnfc *cmd)
+static int enic_get_rx_flow_hash(struct net_device *dev,
+				 struct ethtool_rxfh_fields *cmd)
 {
+	struct enic *enic = netdev_priv(dev);
 	u8 rss_hash_type = 0;
 	cmd->data = 0;
 
@@ -571,6 +573,13 @@ static int enic_get_rx_flow_hash(struct enic *enic, struct ethtool_rxnfc *cmd)
 	return 0;
 }
 
+static u32 enic_get_rx_ring_count(struct net_device *dev)
+{
+	struct enic *enic = netdev_priv(dev);
+
+	return enic->rq_count;
+}
+
 static int enic_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd,
 			  u32 *rule_locs)
 {
@@ -578,9 +587,6 @@ static int enic_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd,
 	int ret = 0;
 
 	switch (cmd->cmd) {
-	case ETHTOOL_GRXRINGS:
-		cmd->data = enic->rq_count;
-		break;
 	case ETHTOOL_GRXCLSRLCNT:
 		spin_lock_bh(&enic->rfs_h.lock);
 		cmd->rule_cnt = enic->rfs_h.max - enic->rfs_h.free;
@@ -596,9 +602,6 @@ static int enic_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd,
 		spin_lock_bh(&enic->rfs_h.lock);
 		ret = enic_grxclsrule(enic, cmd);
 		spin_unlock_bh(&enic->rfs_h.lock);
-		break;
-	case ETHTOOL_GRXFH:
-		ret = enic_get_rx_flow_hash(enic, cmd);
 		break;
 	default:
 		ret = -EOPNOTSUPP;
@@ -690,9 +693,11 @@ static const struct ethtool_ops enic_ethtool_ops = {
 	.get_coalesce = enic_get_coalesce,
 	.set_coalesce = enic_set_coalesce,
 	.get_rxnfc = enic_get_rxnfc,
+	.get_rx_ring_count = enic_get_rx_ring_count,
 	.get_rxfh_key_size = enic_get_rxfh_key_size,
 	.get_rxfh = enic_get_rxfh,
 	.set_rxfh = enic_set_rxfh,
+	.get_rxfh_fields = enic_get_rx_flow_hash,
 	.get_link_ksettings = enic_get_ksettings,
 	.get_ts_info = enic_get_ts_info,
 	.get_channels = enic_get_channels,

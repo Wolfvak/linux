@@ -94,8 +94,9 @@ struct falcon_sflash {
 	struct spi_controller *host;
 };
 
-int falcon_sflash_xfer(struct spi_device *spi, struct spi_transfer *t,
-		unsigned long flags)
+static int
+falcon_sflash_xfer(struct spi_device *spi, struct spi_transfer *t,
+		   unsigned long flags)
 {
 	struct device *dev = &spi->dev;
 	struct falcon_sflash *priv = spi_controller_get_devdata(spi->controller);
@@ -404,7 +405,6 @@ static int falcon_sflash_probe(struct platform_device *pdev)
 	host->flags = SPI_CONTROLLER_HALF_DUPLEX;
 	host->setup = falcon_sflash_setup;
 	host->transfer_one_message = falcon_sflash_xfer_one;
-	host->dev.of_node = pdev->dev.of_node;
 
 	ret = devm_spi_register_controller(&pdev->dev, host);
 	if (ret)

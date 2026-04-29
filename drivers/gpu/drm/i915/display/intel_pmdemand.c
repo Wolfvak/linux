@@ -7,13 +7,14 @@
 
 #include <drm/drm_print.h>
 
-#include "i915_reg.h"
-#include "i915_utils.h"
 #include "intel_atomic.h"
 #include "intel_bw.h"
 #include "intel_cdclk.h"
 #include "intel_de.h"
+#include "intel_display_jiffies.h"
+#include "intel_display_regs.h"
 #include "intel_display_trace.h"
+#include "intel_display_utils.h"
 #include "intel_pmdemand.h"
 #include "intel_step.h"
 #include "skl_watermark.h"
@@ -120,7 +121,7 @@ int intel_pmdemand_init(struct intel_display *display)
 {
 	struct intel_pmdemand_state *pmdemand_state;
 
-	pmdemand_state = kzalloc(sizeof(*pmdemand_state), GFP_KERNEL);
+	pmdemand_state = kzalloc_obj(*pmdemand_state);
 	if (!pmdemand_state)
 		return -ENOMEM;
 
@@ -294,40 +295,17 @@ intel_pmdemand_connector_needs_update(struct intel_atomic_state *state)
 
 static bool intel_pmdemand_needs_update(struct intel_atomic_state *state)
 {
-	struct intel_display *display = to_intel_display(state);
-	const struct intel_bw_state *new_bw_state, *old_bw_state;
-	const struct intel_cdclk_state *new_cdclk_state, *old_cdclk_state;
 	const struct intel_crtc_state *new_crtc_state, *old_crtc_state;
-	const struct intel_dbuf_state *new_dbuf_state, *old_dbuf_state;
 	struct intel_crtc *crtc;
 	int i;
 
-	new_bw_state = intel_atomic_get_new_bw_state(state);
-	old_bw_state = intel_atomic_get_old_bw_state(state);
-	if (new_bw_state && new_bw_state->qgv_point_peakbw !=
-	    old_bw_state->qgv_point_peakbw)
+	if (intel_bw_pmdemand_needs_update(state))
 		return true;
 
-	new_dbuf_state = intel_atomic_get_new_dbuf_state(state);
-	old_dbuf_state = intel_atomic_get_old_dbuf_state(state);
-	if (new_dbuf_state &&
-	    new_dbuf_state->active_pipes != old_dbuf_state->active_pipes)
+	if (intel_dbuf_pmdemand_needs_update(state))
 		return true;
 
-	if (DISPLAY_VER(display) < 30) {
-		if (new_dbuf_state &&
-		    new_dbuf_state->enabled_slices !=
-		    old_dbuf_state->enabled_slices)
-			return true;
-	}
-
-	new_cdclk_state = intel_atomic_get_new_cdclk_state(state);
-	old_cdclk_state = intel_atomic_get_old_cdclk_state(state);
-	if (new_cdclk_state &&
-	    (new_cdclk_state->actual.cdclk !=
-	     old_cdclk_state->actual.cdclk ||
-	     new_cdclk_state->actual.voltage_level !=
-	     old_cdclk_state->actual.voltage_level))
+	if (intel_cdclk_pmdemand_needs_update(state))
 		return true;
 
 	for_each_oldnew_intel_crtc_in_state(state, crtc, old_crtc_state,
@@ -362,7 +340,7 @@ int intel_pmdemand_atomic_check(struct intel_atomic_state *state)
 
 	/* firmware will calculate the qclk_gv_index, requirement is set to 0 */
 	new_pmdemand_state->params.qclk_gv_index = 0;
-	new_pmdemand_state->params.qclk_gv_bw = new_bw_state->qgv_point_peakbw;
+	new_pmdemand_state->params.qclk_gv_bw = intel_bw_qgv_point_peakbw(new_bw_state);
 
 	new_dbuf_state = intel_atomic_get_dbuf_state(state);
 	if (IS_ERR(new_dbuf_state))
@@ -370,12 +348,12 @@ int intel_pmdemand_atomic_check(struct intel_atomic_state *state)
 
 	if (DISPLAY_VER(display) < 30) {
 		new_pmdemand_state->params.active_dbufs =
-			min_t(u8, hweight8(new_dbuf_state->enabled_slices), 3);
+			min_t(u8, intel_dbuf_num_enabled_slices(new_dbuf_state), 3);
 		new_pmdemand_state->params.active_pipes =
-			min_t(u8, hweight8(new_dbuf_state->active_pipes), 3);
+			min_t(u8, intel_dbuf_num_active_pipes(new_dbuf_state), 3);
 	} else {
 		new_pmdemand_state->params.active_pipes =
-			min_t(u8, hweight8(new_dbuf_state->active_pipes), INTEL_NUM_PIPES(display));
+			min_t(u8, intel_dbuf_num_active_pipes(new_dbuf_state), INTEL_NUM_PIPES(display));
 	}
 
 	new_cdclk_state = intel_atomic_get_cdclk_state(state);
@@ -383,9 +361,9 @@ int intel_pmdemand_atomic_check(struct intel_atomic_state *state)
 		return PTR_ERR(new_cdclk_state);
 
 	new_pmdemand_state->params.voltage_index =
-		new_cdclk_state->actual.voltage_level;
+		intel_cdclk_actual_voltage_level(new_cdclk_state);
 	new_pmdemand_state->params.cdclk_freq_mhz =
-		DIV_ROUND_UP(new_cdclk_state->actual.cdclk, 1000);
+		DIV_ROUND_UP(intel_cdclk_actual(new_cdclk_state), 1000);
 
 	intel_pmdemand_update_max_ddiclk(display, state, new_pmdemand_state);
 
@@ -412,12 +390,12 @@ int intel_pmdemand_atomic_check(struct intel_atomic_state *state)
 
 static bool intel_pmdemand_check_prev_transaction(struct intel_display *display)
 {
-	return !(intel_de_wait_for_clear(display,
-					 XELPDP_INITIATE_PMDEMAND_REQUEST(1),
-					 XELPDP_PMDEMAND_REQ_ENABLE, 10) ||
-		 intel_de_wait_for_clear(display,
-					 GEN12_DCPR_STATUS_1,
-					 XELPDP_PMDEMAND_INFLIGHT_STATUS, 10));
+	return !(intel_de_wait_for_clear_ms(display,
+					    XELPDP_INITIATE_PMDEMAND_REQUEST(1),
+					    XELPDP_PMDEMAND_REQ_ENABLE, 10) ||
+		 intel_de_wait_for_clear_ms(display,
+					    GEN12_DCPR_STATUS_1,
+					    XELPDP_PMDEMAND_INFLIGHT_STATUS, 10));
 }
 
 void
@@ -484,9 +462,9 @@ static void intel_pmdemand_poll(struct intel_display *display)
 	u32 status;
 	int ret;
 
-	ret = intel_de_wait_custom(display, XELPDP_INITIATE_PMDEMAND_REQUEST(1),
-				   XELPDP_PMDEMAND_REQ_ENABLE, 0,
-				   50, timeout_ms, &status);
+	ret = intel_de_wait_ms(display, XELPDP_INITIATE_PMDEMAND_REQUEST(1),
+			       XELPDP_PMDEMAND_REQ_ENABLE, 0,
+			       timeout_ms, &status);
 
 	if (ret == -ETIMEDOUT)
 		drm_err(display->drm,

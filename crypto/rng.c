@@ -77,9 +77,8 @@ static int __maybe_unused crypto_rng_report(
 	return nla_put(skb, CRYPTOCFGA_REPORT_RNG, sizeof(rrng), &rrng);
 }
 
-static void crypto_rng_show(struct seq_file *m, struct crypto_alg *alg)
-	__maybe_unused;
-static void crypto_rng_show(struct seq_file *m, struct crypto_alg *alg)
+static void __maybe_unused crypto_rng_show(struct seq_file *m,
+					   struct crypto_alg *alg)
 {
 	seq_printf(m, "type         : rng\n");
 	seq_printf(m, "seedsize     : %u\n", seedsize(alg));
@@ -168,6 +167,11 @@ out:
 EXPORT_SYMBOL_GPL(crypto_del_default_rng);
 #endif
 
+static void rng_default_set_ent(struct crypto_rng *tfm, const u8 *data,
+				unsigned int len)
+{
+}
+
 int crypto_register_rng(struct rng_alg *alg)
 {
 	struct crypto_alg *base = &alg->base;
@@ -178,6 +182,9 @@ int crypto_register_rng(struct rng_alg *alg)
 	base->cra_type = &crypto_rng_type;
 	base->cra_flags &= ~CRYPTO_ALG_TYPE_MASK;
 	base->cra_flags |= CRYPTO_ALG_TYPE_RNG;
+
+	if (!alg->set_ent)
+		alg->set_ent = rng_default_set_ent;
 
 	return crypto_register_alg(base);
 }
@@ -195,17 +202,13 @@ int crypto_register_rngs(struct rng_alg *algs, int count)
 
 	for (i = 0; i < count; i++) {
 		ret = crypto_register_rng(algs + i);
-		if (ret)
-			goto err;
+		if (ret) {
+			crypto_unregister_rngs(algs, i);
+			return ret;
+		}
 	}
 
 	return 0;
-
-err:
-	for (--i; i >= 0; --i)
-		crypto_unregister_rng(algs + i);
-
-	return ret;
 }
 EXPORT_SYMBOL_GPL(crypto_register_rngs);
 

@@ -674,7 +674,7 @@ struct port_info {
 	struct cxgb_fcoe fcoe;
 #endif /* CONFIG_CHELSIO_T4_FCOE */
 	bool rxtstamp;  /* Enable TS */
-	struct hwtstamp_config tstamp_config;
+	struct kernel_hwtstamp_config tstamp_config;
 	bool ptp_enable;
 	struct sched_table *sched_tbl;
 	u32 eth_flags;
@@ -1316,7 +1316,7 @@ struct ch_sched_flowc {
  * (value, mask) tuples.  The associated ingress packet field matches the
  * tuple when ((field & mask) == value).  (Thus a wildcard "don't care" field
  * rule can be constructed by specifying a tuple of (0, 0).)  A filter rule
- * matches an ingress packet when all of the individual individual field
+ * matches an ingress packet when all of the individual field
  * matching rules are true.
  *
  * Partial field masks are always valid, however, while it may be easy to

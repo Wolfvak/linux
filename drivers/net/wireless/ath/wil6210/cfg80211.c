@@ -691,7 +691,7 @@ wil_cfg80211_add_iface(struct wiphy *wiphy, const char *name,
 			return ERR_PTR(-EINVAL);
 		}
 
-		p2p_wdev = kzalloc(sizeof(*p2p_wdev), GFP_KERNEL);
+		p2p_wdev = kzalloc_obj(*p2p_wdev);
 		if (!p2p_wdev)
 			return ERR_PTR(-ENOMEM);
 
@@ -1408,7 +1408,8 @@ static int wil_cfg80211_disconnect(struct wiphy *wiphy,
 	return rc;
 }
 
-static int wil_cfg80211_set_wiphy_params(struct wiphy *wiphy, u32 changed)
+static int wil_cfg80211_set_wiphy_params(struct wiphy *wiphy, int radio_idx,
+					 u32 changed)
 {
 	struct wil6210_priv *wil = wiphy_to_wil(wiphy);
 	int rc;
@@ -2393,7 +2394,7 @@ static int wil_cfg80211_probe_client(struct wiphy *wiphy,
 	if (cid < 0)
 		return -ENOLINK;
 
-	req = kzalloc(sizeof(*req), GFP_KERNEL);
+	req = kzalloc_obj(*req);
 	if (!req)
 		return -ENOMEM;
 
@@ -2707,6 +2708,7 @@ static void wil_wiphy_init(struct wiphy *wiphy)
 	wiphy->n_cipher_suites = ARRAY_SIZE(wil_cipher_suites);
 	wiphy->mgmt_stypes = wil_mgmt_stypes;
 	wiphy->features |= NL80211_FEATURE_SK_TX_STATUS;
+	wiphy->bss_param_support = WIPHY_BSS_PARAM_AP_ISOLATE;
 
 	wiphy->n_vendor_commands = ARRAY_SIZE(wil_nl80211_vendor_commands);
 	wiphy->vendor_commands = wil_nl80211_vendor_commands;

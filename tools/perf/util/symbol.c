@@ -104,12 +104,10 @@ static enum dso_binary_type binary_type_symtab[] = {
 
 #define DSO_BINARY_TYPE__SYMTAB_CNT ARRAY_SIZE(binary_type_symtab)
 
-static bool symbol_type__filter(char __symbol_type)
+static bool symbol_type__filter(char symbol_type)
 {
-	// Since 'U' == undefined and 'u' == unique global symbol, we can't use toupper there
-	char symbol_type = toupper(__symbol_type);
-	return symbol_type == 'T' || symbol_type == 'W' || symbol_type == 'D' || symbol_type == 'B' ||
-	       __symbol_type == 'u' || __symbol_type == 'l';
+	symbol_type = toupper(symbol_type);
+	return symbol_type == 'T' || symbol_type == 'W' || symbol_type == 'D' || symbol_type == 'B';
 }
 
 static int prefix_underscores_count(const char *str)
@@ -631,7 +629,7 @@ void dso__sort_by_name(struct dso *dso)
 {
 	mutex_lock(dso__lock(dso));
 	if (!dso__sorted_by_name(dso)) {
-		size_t len;
+		size_t len = 0;
 
 		dso__set_symbol_names(dso, symbols__sort_by_name(dso__symbols(dso), &len));
 		if (dso__symbol_names(dso)) {
@@ -946,7 +944,8 @@ static int maps__split_kallsyms(struct maps *kmaps, struct dso *dso, u64 delta,
 				pos->end -= delta;
 			}
 
-			if (count == 0) {
+			if (map__start(initial_map) <= (pos->start + delta) &&
+			    (pos->start + delta) < map__end(initial_map)) {
 				map__zput(curr_map);
 				curr_map = map__get(initial_map);
 				goto add_symbol;
@@ -955,11 +954,11 @@ static int maps__split_kallsyms(struct maps *kmaps, struct dso *dso, u64 delta,
 			if (dso__kernel(dso) == DSO_SPACE__KERNEL_GUEST)
 				snprintf(dso_name, sizeof(dso_name),
 					"[guest.kernel].%d",
-					kernel_range++);
+					kernel_range);
 			else
 				snprintf(dso_name, sizeof(dso_name),
 					"[kernel].%d",
-					kernel_range++);
+					kernel_range);
 
 			ndso = dso__new(dso_name);
 			map__zput(curr_map);
@@ -967,6 +966,7 @@ static int maps__split_kallsyms(struct maps *kmaps, struct dso *dso, u64 delta,
 				return -1;
 
 			dso__set_kernel(ndso, dso__kernel(dso));
+			dso__set_loaded(ndso);
 
 			curr_map = map__new2(pos->start, ndso);
 			if (curr_map == NULL) {
@@ -980,6 +980,7 @@ static int maps__split_kallsyms(struct maps *kmaps, struct dso *dso, u64 delta,
 				dso__put(ndso);
 				return -1;
 			}
+			dso__put(ndso);
 			++kernel_range;
 		} else if (delta) {
 			/* Kernel was relocated at boot time */
@@ -1422,6 +1423,7 @@ static int dso__load_kcore(struct dso *dso, struct map *map,
 				goto out_err;
 			}
 		}
+		map__zput(new_node->map);
 		free(new_node);
 	}
 
@@ -1583,137 +1585,6 @@ out_failure:
 	return -1;
 }
 
-#ifdef HAVE_LIBBFD_SUPPORT
-#define PACKAGE 'perf'
-#include <bfd.h>
-
-static int bfd_symbols__cmpvalue(const void *a, const void *b)
-{
-	const asymbol *as = *(const asymbol **)a, *bs = *(const asymbol **)b;
-
-	if (bfd_asymbol_value(as) != bfd_asymbol_value(bs))
-		return bfd_asymbol_value(as) - bfd_asymbol_value(bs);
-
-	return bfd_asymbol_name(as)[0] - bfd_asymbol_name(bs)[0];
-}
-
-static int bfd2elf_binding(asymbol *symbol)
-{
-	if (symbol->flags & BSF_WEAK)
-		return STB_WEAK;
-	if (symbol->flags & BSF_GLOBAL)
-		return STB_GLOBAL;
-	if (symbol->flags & BSF_LOCAL)
-		return STB_LOCAL;
-	return -1;
-}
-
-int dso__load_bfd_symbols(struct dso *dso, const char *debugfile)
-{
-	int err = -1;
-	long symbols_size, symbols_count, i;
-	asection *section;
-	asymbol **symbols, *sym;
-	struct symbol *symbol;
-	bfd *abfd;
-	u64 start, len;
-
-	abfd = bfd_openr(debugfile, NULL);
-	if (!abfd)
-		return -1;
-
-	if (!bfd_check_format(abfd, bfd_object)) {
-		pr_debug2("%s: cannot read %s bfd file.\n", __func__,
-			  dso__long_name(dso));
-		goto out_close;
-	}
-
-	if (bfd_get_flavour(abfd) == bfd_target_elf_flavour)
-		goto out_close;
-
-	symbols_size = bfd_get_symtab_upper_bound(abfd);
-	if (symbols_size == 0) {
-		bfd_close(abfd);
-		return 0;
-	}
-
-	if (symbols_size < 0)
-		goto out_close;
-
-	symbols = malloc(symbols_size);
-	if (!symbols)
-		goto out_close;
-
-	symbols_count = bfd_canonicalize_symtab(abfd, symbols);
-	if (symbols_count < 0)
-		goto out_free;
-
-	section = bfd_get_section_by_name(abfd, ".text");
-	if (section) {
-		for (i = 0; i < symbols_count; ++i) {
-			if (!strcmp(bfd_asymbol_name(symbols[i]), "__ImageBase") ||
-			    !strcmp(bfd_asymbol_name(symbols[i]), "__image_base__"))
-				break;
-		}
-		if (i < symbols_count) {
-			/* PE symbols can only have 4 bytes, so use .text high bits */
-			u64 text_offset = (section->vma - (u32)section->vma)
-				+ (u32)bfd_asymbol_value(symbols[i]);
-			dso__set_text_offset(dso, text_offset);
-			dso__set_text_end(dso, (section->vma - text_offset) + section->size);
-		} else {
-			dso__set_text_offset(dso, section->vma - section->filepos);
-			dso__set_text_end(dso, section->filepos + section->size);
-		}
-	}
-
-	qsort(symbols, symbols_count, sizeof(asymbol *), bfd_symbols__cmpvalue);
-
-#ifdef bfd_get_section
-#define bfd_asymbol_section bfd_get_section
-#endif
-	for (i = 0; i < symbols_count; ++i) {
-		sym = symbols[i];
-		section = bfd_asymbol_section(sym);
-		if (bfd2elf_binding(sym) < 0)
-			continue;
-
-		while (i + 1 < symbols_count &&
-		       bfd_asymbol_section(symbols[i + 1]) == section &&
-		       bfd2elf_binding(symbols[i + 1]) < 0)
-			i++;
-
-		if (i + 1 < symbols_count &&
-		    bfd_asymbol_section(symbols[i + 1]) == section)
-			len = symbols[i + 1]->value - sym->value;
-		else
-			len = section->size - sym->value;
-
-		start = bfd_asymbol_value(sym) - dso__text_offset(dso);
-		symbol = symbol__new(start, len, bfd2elf_binding(sym), STT_FUNC,
-				     bfd_asymbol_name(sym));
-		if (!symbol)
-			goto out_free;
-
-		symbols__insert(dso__symbols(dso), symbol);
-	}
-#ifdef bfd_get_section
-#undef bfd_asymbol_section
-#endif
-
-	symbols__fixup_end(dso__symbols(dso), false);
-	symbols__fixup_duplicate(dso__symbols(dso));
-	dso__set_adjust_symbols(dso, true);
-
-	err = 0;
-out_free:
-	free(symbols);
-out_close:
-	bfd_close(abfd);
-	return err;
-}
-#endif
-
 static bool dso__is_compatible_symtab_type(struct dso *dso, bool kmod,
 					   enum dso_binary_type type)
 {
@@ -1812,7 +1683,6 @@ int dso__load(struct dso *dso, struct map *map)
 	struct symsrc *syms_ss = NULL, *runtime_ss = NULL;
 	bool kmod;
 	bool perfmap;
-	struct build_id bid;
 	struct nscookie nsc;
 	char newmapname[PATH_MAX];
 	const char *map_path = dso__long_name(dso);
@@ -1869,10 +1739,11 @@ int dso__load(struct dso *dso, struct map *map)
 
 	/*
 	 * Read the build id if possible. This is required for
-	 * DSO_BINARY_TYPE__BUILDID_DEBUGINFO to work
+	 * DSO_BINARY_TYPE__BUILDID_DEBUGINFO to work.
 	 */
-	if (!dso__has_build_id(dso) &&
-	    is_regular_file(dso__long_name(dso))) {
+	if (!dso__has_build_id(dso)) {
+		struct build_id bid = { .size = 0, };
+
 		__symbol__join_symfs(name, PATH_MAX, dso__long_name(dso));
 		if (filename__read_build_id(name, &bid) > 0)
 			dso__set_build_id(dso, &bid);
@@ -2121,10 +1992,11 @@ static bool filename__readable(const char *file)
 
 static char *dso__find_kallsyms(struct dso *dso, struct map *map)
 {
-	struct build_id bid;
+	struct build_id bid = { .size = 0, };
 	char sbuild_id[SBUILD_ID_SIZE];
 	bool is_host = false;
 	char path[PATH_MAX];
+	struct maps *kmaps = map__kmaps(map);
 
 	if (!dso__has_build_id(dso)) {
 		/*
@@ -2151,7 +2023,7 @@ static char *dso__find_kallsyms(struct dso *dso, struct map *map)
 			goto proc_kallsyms;
 	}
 
-	build_id__sprintf(dso__bid(dso), sbuild_id);
+	build_id__snprintf(dso__bid(dso), sbuild_id, sizeof(sbuild_id));
 
 	/* Find kallsyms in build-id cache with kcore */
 	scnprintf(path, sizeof(path), "%s/%s/%s",
@@ -2161,8 +2033,13 @@ static char *dso__find_kallsyms(struct dso *dso, struct map *map)
 		return strdup(path);
 
 	/* Use current /proc/kallsyms if possible */
-	if (is_host) {
 proc_kallsyms:
+	if (kmaps) {
+		struct machine *machine = maps__machine(kmaps);
+
+		scnprintf(path, sizeof(path), "%s/proc/kallsyms", machine->root_dir);
+		return strdup(path);
+	} else if (is_host) {
 		return strdup("/proc/kallsyms");
 	}
 

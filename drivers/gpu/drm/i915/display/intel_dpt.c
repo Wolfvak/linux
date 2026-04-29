@@ -3,12 +3,15 @@
  * Copyright © 2021 Intel Corporation
  */
 
+#include <drm/drm_print.h>
+
 #include "gem/i915_gem_domain.h"
 #include "gem/i915_gem_internal.h"
 #include "gem/i915_gem_lmem.h"
 #include "gt/gen8_ppgtt.h"
 
 #include "i915_drv.h"
+#include "intel_display_core.h"
 #include "intel_display_rpm.h"
 #include "intel_display_types.h"
 #include "intel_dpt.h"
@@ -31,8 +34,6 @@ i915_vm_to_dpt(struct i915_address_space *vm)
 	drm_WARN_ON(&vm->i915->drm, !i915_is_dpt(vm));
 	return container_of(vm, struct i915_dpt, vm);
 }
-
-#define dpt_total_entries(dpt) ((dpt)->vm.total >> PAGE_SHIFT)
 
 static void gen8_set_pte(void __iomem *addr, gen8_pte_t pte)
 {
@@ -126,7 +127,7 @@ struct i915_vma *intel_dpt_pin_to_ggtt(struct i915_address_space *vm,
 				       unsigned int alignment)
 {
 	struct drm_i915_private *i915 = vm->i915;
-	struct intel_display *display = &i915->display;
+	struct intel_display *display = i915->display;
 	struct i915_dpt *dpt = i915_vm_to_dpt(vm);
 	struct ref_tracker *wakeref;
 	struct i915_vma *vma;
@@ -279,7 +280,7 @@ intel_dpt_create(struct intel_framebuffer *fb)
 		return ERR_PTR(ret);
 	}
 
-	dpt = kzalloc(sizeof(*dpt), GFP_KERNEL);
+	dpt = kzalloc_obj(*dpt);
 	if (!dpt) {
 		i915_gem_object_put(dpt_obj);
 		return ERR_PTR(-ENOMEM);
@@ -321,5 +322,5 @@ void intel_dpt_destroy(struct i915_address_space *vm)
 
 u64 intel_dpt_offset(struct i915_vma *dpt_vma)
 {
-	return dpt_vma->node.start;
+	return i915_vma_offset(dpt_vma);
 }

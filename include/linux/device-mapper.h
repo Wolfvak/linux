@@ -156,7 +156,7 @@ typedef int (*dm_busy_fn) (struct dm_target *ti);
  */
 typedef long (*dm_dax_direct_access_fn) (struct dm_target *ti, pgoff_t pgoff,
 		long nr_pages, enum dax_access_mode node, void **kaddr,
-		pfn_t *pfn);
+		unsigned long *pfn);
 typedef int (*dm_dax_zero_page_range_fn)(struct dm_target *ti, pgoff_t pgoff,
 		size_t nr_pages);
 
@@ -538,11 +538,17 @@ void dm_submit_bio_remap(struct bio *clone, struct bio *tgt_clone);
 #ifdef CONFIG_BLK_DEV_ZONED
 struct dm_report_zones_args {
 	struct dm_target *tgt;
+	struct gendisk *disk;
 	sector_t next_sector;
 
-	void *orig_data;
-	report_zones_cb orig_cb;
 	unsigned int zone_idx;
+
+	/* for block layer ->report_zones */
+	struct blk_report_zones_args *rep_args;
+
+	/* for internal users */
+	report_zones_cb cb;
+	void *data;
 
 	/* must be filled by ->report_zones before calling dm_report_zones_cb */
 	sector_t start;

@@ -7,6 +7,7 @@
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/fs.h>
+#include <linux/hex.h>
 #include <linux/uaccess.h>
 #include <linux/string.h>
 #include <linux/pci.h>
@@ -655,8 +656,8 @@ static const struct bin_attribute pch_bin_attr = {
 		.mode = S_IRUGO | S_IWUSR,
 	},
 	.size = PCH_PHUB_OROM_SIZE + 1,
-	.read_new = pch_phub_bin_read,
-	.write_new = pch_phub_bin_write,
+	.read = pch_phub_bin_read,
+	.write = pch_phub_bin_write,
 };
 
 static int pch_phub_probe(struct pci_dev *pdev,
@@ -665,7 +666,7 @@ static int pch_phub_probe(struct pci_dev *pdev,
 	int ret;
 	struct pch_phub_reg *chip;
 
-	chip = kzalloc(sizeof(struct pch_phub_reg), GFP_KERNEL);
+	chip = kzalloc_obj(struct pch_phub_reg);
 	if (chip == NULL)
 		return -ENOMEM;
 

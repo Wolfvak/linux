@@ -98,13 +98,16 @@ struct vma_merge_struct {
 	unsigned long end;
 	pgoff_t pgoff;
 
-	unsigned long flags;
+	vm_flags_t vm_flags;
 	struct file *file;
 	struct anon_vma *anon_vma;
 	struct mempolicy *policy;
 	struct vm_userfaultfd_ctx uffd_ctx;
 	struct anon_vma_name *anon_name;
 	enum vma_merge_state state;
+
+	/* If copied from (i.e. mremap()'d) the VMA from which we are copying. */
+	struct vm_area_struct *copied_from;
 
 	/* Flags which callers can use to modify merge behaviour: */
 
@@ -145,12 +148,78 @@ struct vma_merge_struct {
 	 */
 	bool __remove_middle :1;
 	/*
-	 * Internal flag used during the merge operationr to indicate we will
+	 * Internal flag used during the merge operation to indicate we will
 	 * remove vmg->next.
 	 */
 	bool __remove_next :1;
 
 };
+
+struct unmap_desc {
+	struct  ma_state *mas;        /* the maple state point to the first vma */
+	struct vm_area_struct *first; /* The first vma */
+	unsigned long pg_start;       /* The first pagetable address to free (floor) */
+	unsigned long pg_end;         /* The last pagetable address to free (ceiling) */
+	unsigned long vma_start;      /* The min vma address */
+	unsigned long vma_end;        /* The max vma address */
+	unsigned long tree_end;       /* Maximum for the vma tree search */
+	unsigned long tree_reset;     /* Where to reset the vma tree walk */
+	bool mm_wr_locked;            /* If the mmap write lock is held */
+};
+
+/*
+ * unmap_all_init() - Initialize unmap_desc to remove all vmas, point the
+ * pg_start and pg_end to a safe location.
+ */
+static inline void unmap_all_init(struct unmap_desc *unmap,
+		struct vma_iterator *vmi, struct vm_area_struct *vma)
+{
+	unmap->mas = &vmi->mas;
+	unmap->first = vma;
+	unmap->pg_start = FIRST_USER_ADDRESS;
+	unmap->pg_end = USER_PGTABLES_CEILING;
+	unmap->vma_start = 0;
+	unmap->vma_end = ULONG_MAX;
+	unmap->tree_end = ULONG_MAX;
+	unmap->tree_reset = vma->vm_end;
+	unmap->mm_wr_locked = false;
+}
+
+/*
+ * unmap_pgtable_init() - Initialize unmap_desc to remove all page tables within
+ * the user range.
+ *
+ * ARM can have mappings outside of vmas.
+ * See: e2cdef8c847b4 ("[PATCH] freepgt: free_pgtables from FIRST_USER_ADDRESS")
+ *
+ * ARM LPAE uses page table mappings beyond the USER_PGTABLES_CEILING
+ * See: CONFIG_ARM_LPAE in arch/arm/include/asm/pgtable.h
+ */
+static inline void unmap_pgtable_init(struct unmap_desc *unmap,
+				      struct vma_iterator *vmi)
+{
+	vma_iter_set(vmi, unmap->tree_reset);
+	unmap->vma_start = FIRST_USER_ADDRESS;
+	unmap->vma_end = USER_PGTABLES_CEILING;
+	unmap->tree_end = USER_PGTABLES_CEILING;
+}
+
+#define UNMAP_STATE(name, _vmi, _vma, _vma_start, _vma_end, _prev, _next)      \
+	struct unmap_desc name = {                                             \
+		.mas = &(_vmi)->mas,                                           \
+		.first = _vma,                                                 \
+		.pg_start = _prev ? ((struct vm_area_struct *)_prev)->vm_end : \
+			FIRST_USER_ADDRESS,                                    \
+		.pg_end = _next ? ((struct vm_area_struct *)_next)->vm_start : \
+			USER_PGTABLES_CEILING,                                 \
+		.vma_start = _vma_start,                                       \
+		.vma_end = _vma_end,                                           \
+		.tree_end = _next ?                                            \
+			((struct vm_area_struct *)_next)->vm_start :           \
+			USER_PGTABLES_CEILING,                                 \
+		.tree_reset = _vma->vm_end,                                    \
+		.mm_wr_locked = true,                                          \
+	}
 
 static inline bool vmg_nomem(struct vma_merge_struct *vmg)
 {
@@ -164,13 +233,13 @@ static inline pgoff_t vma_pgoff_offset(struct vm_area_struct *vma,
 	return vma->vm_pgoff + PHYS_PFN(addr - vma->vm_start);
 }
 
-#define VMG_STATE(name, mm_, vmi_, start_, end_, flags_, pgoff_)	\
+#define VMG_STATE(name, mm_, vmi_, start_, end_, vm_flags_, pgoff_)	\
 	struct vma_merge_struct name = {				\
 		.mm = mm_,						\
 		.vmi = vmi_,						\
 		.start = start_,					\
 		.end = end_,						\
-		.flags = flags_,					\
+		.vm_flags = vm_flags_,					\
 		.pgoff = pgoff_,					\
 		.state = VMA_MERGE_START,				\
 	}
@@ -184,7 +253,7 @@ static inline pgoff_t vma_pgoff_offset(struct vm_area_struct *vma,
 		.next = NULL,					\
 		.start = start_,				\
 		.end = end_,					\
-		.flags = vma_->vm_flags,			\
+		.vm_flags = vma_->vm_flags,			\
 		.pgoff = vma_pgoff_offset(vma_, start_),	\
 		.file = vma_->vm_file,				\
 		.anon_vma = vma_->anon_vma,			\
@@ -222,31 +291,11 @@ static inline int vma_iter_store_gfp(struct vma_iterator *vmi,
 	return 0;
 }
 
-
 /*
- * Temporary helper functions for file systems which wrap an invocation of
+ * Temporary helper function for stacked mmap handlers which specify
  * f_op->mmap() but which might have an underlying file system which implements
  * f_op->mmap_prepare().
  */
-
-static inline struct vm_area_desc *vma_to_desc(struct vm_area_struct *vma,
-		struct vm_area_desc *desc)
-{
-	desc->mm = vma->vm_mm;
-	desc->start = vma->vm_start;
-	desc->end = vma->vm_end;
-
-	desc->pgoff = vma->vm_pgoff;
-	desc->file = vma->vm_file;
-	desc->vm_flags = vma->vm_flags;
-	desc->page_prot = vma->vm_page_prot;
-
-	desc->vm_ops = NULL;
-	desc->private_data = NULL;
-
-	return desc;
-}
-
 static inline void set_vma_from_desc(struct vm_area_struct *vma,
 		struct vm_area_desc *desc)
 {
@@ -258,10 +307,9 @@ static inline void set_vma_from_desc(struct vm_area_struct *vma,
 
 	/* Mutable fields. Populated with initial state. */
 	vma->vm_pgoff = desc->pgoff;
-	if (vma->vm_file != desc->file)
-		vma_set_file(vma, desc->file);
-	if (vma->vm_flags != desc->vm_flags)
-		vm_flags_set(vma, desc->vm_flags);
+	if (desc->vm_file != vma->vm_file)
+		vma_set_file(vma, desc->vm_file);
+	vma->flags = desc->vma_flags;
 	vma->vm_page_prot = desc->page_prot;
 
 	/* User-defined fields. */
@@ -279,52 +327,115 @@ int do_vmi_munmap(struct vma_iterator *vmi, struct mm_struct *mm,
 		  bool unlock);
 
 void remove_vma(struct vm_area_struct *vma);
+void unmap_region(struct unmap_desc *unmap);
 
-void unmap_region(struct ma_state *mas, struct vm_area_struct *vma,
-		struct vm_area_struct *prev, struct vm_area_struct *next);
-
-/* We are about to modify the VMA's flags. */
-__must_check struct vm_area_struct
-*vma_modify_flags(struct vma_iterator *vmi,
+/**
+ * vma_modify_flags() - Perform any necessary split/merge in preparation for
+ * setting VMA flags to *@vm_flags in the range @start to @end contained within
+ * @vma.
+ * @vmi: Valid VMA iterator positioned at @vma.
+ * @prev: The VMA immediately prior to @vma or NULL if @vma is the first.
+ * @vma: The VMA containing the range @start to @end to be updated.
+ * @start: The start of the range to update. May be offset within @vma.
+ * @end: The exclusive end of the range to update, may be offset within @vma.
+ * @vm_flags_ptr: A pointer to the VMA flags that the @start to @end range is
+ * about to be set to. On merge, this will be updated to include sticky flags.
+ *
+ * IMPORTANT: The actual modification being requested here is NOT applied,
+ * rather the VMA is perhaps split, perhaps merged to accommodate the change,
+ * and the caller is expected to perform the actual modification.
+ *
+ * In order to account for sticky VMA flags, the @vm_flags_ptr parameter points
+ * to the requested flags which are then updated so the caller, should they
+ * overwrite any existing flags, correctly retains these.
+ *
+ * Returns: A VMA which contains the range @start to @end ready to have its
+ * flags altered to *@vm_flags.
+ */
+__must_check struct vm_area_struct *vma_modify_flags(struct vma_iterator *vmi,
 		struct vm_area_struct *prev, struct vm_area_struct *vma,
 		unsigned long start, unsigned long end,
-		unsigned long new_flags);
+		vm_flags_t *vm_flags_ptr);
 
-/* We are about to modify the VMA's flags and/or anon_name. */
-__must_check struct vm_area_struct
-*vma_modify_flags_name(struct vma_iterator *vmi,
-		       struct vm_area_struct *prev,
-		       struct vm_area_struct *vma,
-		       unsigned long start,
-		       unsigned long end,
-		       unsigned long new_flags,
-		       struct anon_vma_name *new_name);
+/**
+ * vma_modify_name() - Perform any necessary split/merge in preparation for
+ * setting anonymous VMA name to @new_name in the range @start to @end contained
+ * within @vma.
+ * @vmi: Valid VMA iterator positioned at @vma.
+ * @prev: The VMA immediately prior to @vma or NULL if @vma is the first.
+ * @vma: The VMA containing the range @start to @end to be updated.
+ * @start: The start of the range to update. May be offset within @vma.
+ * @end: The exclusive end of the range to update, may be offset within @vma.
+ * @new_name: The anonymous VMA name that the @start to @end range is about to
+ * be set to.
+ *
+ * IMPORTANT: The actual modification being requested here is NOT applied,
+ * rather the VMA is perhaps split, perhaps merged to accommodate the change,
+ * and the caller is expected to perform the actual modification.
+ *
+ * Returns: A VMA which contains the range @start to @end ready to have its
+ * anonymous VMA name changed to @new_name.
+ */
+__must_check struct vm_area_struct *vma_modify_name(struct vma_iterator *vmi,
+		struct vm_area_struct *prev, struct vm_area_struct *vma,
+		unsigned long start, unsigned long end,
+		struct anon_vma_name *new_name);
 
-/* We are about to modify the VMA's memory policy. */
-__must_check struct vm_area_struct
-*vma_modify_policy(struct vma_iterator *vmi,
-		   struct vm_area_struct *prev,
-		   struct vm_area_struct *vma,
+/**
+ * vma_modify_policy() - Perform any necessary split/merge in preparation for
+ * setting NUMA policy to @new_pol in the range @start to @end contained
+ * within @vma.
+ * @vmi: Valid VMA iterator positioned at @vma.
+ * @prev: The VMA immediately prior to @vma or NULL if @vma is the first.
+ * @vma: The VMA containing the range @start to @end to be updated.
+ * @start: The start of the range to update. May be offset within @vma.
+ * @end: The exclusive end of the range to update, may be offset within @vma.
+ * @new_pol: The NUMA policy that the @start to @end range is about to be set
+ * to.
+ *
+ * IMPORTANT: The actual modification being requested here is NOT applied,
+ * rather the VMA is perhaps split, perhaps merged to accommodate the change,
+ * and the caller is expected to perform the actual modification.
+ *
+ * Returns: A VMA which contains the range @start to @end ready to have its
+ * NUMA policy changed to @new_pol.
+ */
+__must_check struct vm_area_struct *vma_modify_policy(struct vma_iterator *vmi,
+		   struct vm_area_struct *prev, struct vm_area_struct *vma,
 		   unsigned long start, unsigned long end,
 		   struct mempolicy *new_pol);
 
-/* We are about to modify the VMA's flags and/or uffd context. */
-__must_check struct vm_area_struct
-*vma_modify_flags_uffd(struct vma_iterator *vmi,
-		       struct vm_area_struct *prev,
-		       struct vm_area_struct *vma,
-		       unsigned long start, unsigned long end,
-		       unsigned long new_flags,
-		       struct vm_userfaultfd_ctx new_ctx,
-		       bool give_up_on_oom);
+/**
+ * vma_modify_flags_uffd() - Perform any necessary split/merge in preparation for
+ * setting VMA flags to @vm_flags and UFFD context to @new_ctx in the range
+ * @start to @end contained within @vma.
+ * @vmi: Valid VMA iterator positioned at @vma.
+ * @prev: The VMA immediately prior to @vma or NULL if @vma is the first.
+ * @vma: The VMA containing the range @start to @end to be updated.
+ * @start: The start of the range to update. May be offset within @vma.
+ * @end: The exclusive end of the range to update, may be offset within @vma.
+ * @vm_flags: The VMA flags that the @start to @end range is about to be set to.
+ * @new_ctx: The userfaultfd context that the @start to @end range is about to
+ * be set to.
+ * @give_up_on_oom: If an out of memory condition occurs on merge, simply give
+ * up on it and treat the merge as best-effort.
+ *
+ * IMPORTANT: The actual modification being requested here is NOT applied,
+ * rather the VMA is perhaps split, perhaps merged to accommodate the change,
+ * and the caller is expected to perform the actual modification.
+ *
+ * Returns: A VMA which contains the range @start to @end ready to have its VMA
+ * flags changed to @vm_flags and its userfaultfd context changed to @new_ctx.
+ */
+__must_check struct vm_area_struct *vma_modify_flags_uffd(struct vma_iterator *vmi,
+		struct vm_area_struct *prev, struct vm_area_struct *vma,
+		unsigned long start, unsigned long end, vm_flags_t vm_flags,
+		struct vm_userfaultfd_ctx new_ctx, bool give_up_on_oom);
 
-__must_check struct vm_area_struct
-*vma_merge_new_range(struct vma_merge_struct *vmg);
+__must_check struct vm_area_struct *vma_merge_new_range(struct vma_merge_struct *vmg);
 
-__must_check struct vm_area_struct
-*vma_merge_extend(struct vma_iterator *vmi,
-		  struct vm_area_struct *vma,
-		  unsigned long delta);
+__must_check struct vm_area_struct *vma_merge_extend(struct vma_iterator *vmi,
+		  struct vm_area_struct *vma, unsigned long delta);
 
 void unlink_file_vma_batch_init(struct unlink_vma_file_batch *vb);
 
@@ -332,12 +443,6 @@ void unlink_file_vma_batch_final(struct unlink_vma_file_batch *vb);
 
 void unlink_file_vma_batch_add(struct unlink_vma_file_batch *vb,
 			       struct vm_area_struct *vma);
-
-void unlink_file_vma(struct vm_area_struct *vma);
-
-void vma_link_file(struct vm_area_struct *vma);
-
-int vma_link(struct mm_struct *mm, struct vm_area_struct *vma);
 
 struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
 	unsigned long addr, unsigned long len, pgoff_t pgoff,
@@ -375,7 +480,7 @@ static inline bool vma_wants_manual_pte_write_upgrade(struct vm_area_struct *vma
 }
 
 #ifdef CONFIG_MMU
-static inline pgprot_t vm_pgprot_modify(pgprot_t oldprot, unsigned long vm_flags)
+static inline pgprot_t vm_pgprot_modify(pgprot_t oldprot, vm_flags_t vm_flags)
 {
 	return pgprot_modify(oldprot, vm_get_page_prot(vm_flags));
 }
@@ -519,12 +624,6 @@ static inline unsigned long vma_iter_end(struct vma_iterator *vmi)
 	return vmi->mas.last + 1;
 }
 
-static inline int vma_iter_bulk_alloc(struct vma_iterator *vmi,
-				      unsigned long count)
-{
-	return mas_expected_entries(&vmi->mas, count);
-}
-
 static inline
 struct vm_area_struct *vma_iter_prev_range(struct vma_iterator *vmi)
 {
@@ -560,38 +659,15 @@ struct vm_area_struct *vma_iter_next_rewind(struct vma_iterator *vmi,
 }
 
 #ifdef CONFIG_64BIT
-
 static inline bool vma_is_sealed(struct vm_area_struct *vma)
 {
 	return (vma->vm_flags & VM_SEALED);
 }
-
-/*
- * check if a vma is sealed for modification.
- * return true, if modification is allowed.
- */
-static inline bool can_modify_vma(struct vm_area_struct *vma)
-{
-	if (unlikely(vma_is_sealed(vma)))
-		return false;
-
-	return true;
-}
-
-bool can_modify_vma_madv(struct vm_area_struct *vma, int behavior);
-
 #else
-
-static inline bool can_modify_vma(struct vm_area_struct *vma)
+static inline bool vma_is_sealed(struct vm_area_struct *vma)
 {
-	return true;
+	return false;
 }
-
-static inline bool can_modify_vma_madv(struct vm_area_struct *vma, int behavior)
-{
-	return true;
-}
-
 #endif
 
 #if defined(CONFIG_STACK_GROWSUP)

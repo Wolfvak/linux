@@ -2701,7 +2701,7 @@ static struct nilfs_sc_info *nilfs_segctor_new(struct super_block *sb,
 	struct the_nilfs *nilfs = sb->s_fs_info;
 	struct nilfs_sc_info *sci;
 
-	sci = kzalloc(sizeof(*sci), GFP_KERNEL);
+	sci = kzalloc_obj(*sci);
 	if (!sci)
 		return NULL;
 
@@ -2768,7 +2768,12 @@ static void nilfs_segctor_destroy(struct nilfs_sc_info *sci)
 
 	if (sci->sc_task) {
 		wake_up(&sci->sc_wait_daemon);
-		kthread_stop(sci->sc_task);
+		if (kthread_stop(sci->sc_task)) {
+			spin_lock(&sci->sc_state_lock);
+			sci->sc_task = NULL;
+			timer_shutdown_sync(&sci->sc_timer);
+			spin_unlock(&sci->sc_state_lock);
+		}
 	}
 
 	spin_lock(&sci->sc_state_lock);

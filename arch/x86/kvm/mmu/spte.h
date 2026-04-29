@@ -246,6 +246,16 @@ static inline int spte_index(u64 *sptep)
  */
 extern u64 __read_mostly shadow_nonpresent_or_rsvd_lower_gfn_mask;
 
+static inline hpa_t kvm_mmu_get_dummy_root(void)
+{
+	return my_zero_pfn(0) << PAGE_SHIFT;
+}
+
+static inline bool kvm_mmu_is_dummy_root(hpa_t shadow_page)
+{
+	return is_zero_pfn(shadow_page >> PAGE_SHIFT);
+}
+
 static inline struct kvm_mmu_page *to_shadow_page(hpa_t shadow_page)
 {
 	struct page *page = pfn_to_page((shadow_page) >> PAGE_SHIFT);
@@ -278,6 +288,16 @@ static inline struct kvm_mmu_page *root_to_sp(hpa_t root)
 static inline bool is_mirror_sptep(tdp_ptep_t sptep)
 {
 	return is_mirror_sp(sptep_to_sp(rcu_dereference(sptep)));
+}
+
+static inline bool kvm_vcpu_can_access_host_mmio(struct kvm_vcpu *vcpu)
+{
+	struct kvm_mmu_page *root = root_to_sp(vcpu->arch.mmu->root.hpa);
+
+	if (root)
+		return READ_ONCE(root->has_mapped_host_mmio);
+
+	return READ_ONCE(vcpu->kvm->arch.has_mapped_host_mmio);
 }
 
 static inline bool is_mmio_spte(struct kvm *kvm, u64 spte)

@@ -250,22 +250,21 @@ static void mes_add_event(struct mock_event_store *mes,
  * Vary the number of events returned to simulate events occuring while the
  * logs are being read.
  */
-static int ret_limit = 0;
+static atomic_t event_counter = ATOMIC_INIT(0);
 
 static int mock_get_event(struct device *dev, struct cxl_mbox_cmd *cmd)
 {
 	struct cxl_get_event_payload *pl;
 	struct mock_event_log *log;
-	u16 nr_overflow;
+	int ret_limit;
 	u8 log_type;
 	int i;
 
 	if (cmd->size_in != sizeof(log_type))
 		return -EINVAL;
 
-	ret_limit = (ret_limit + 1) % CXL_TEST_EVENT_RET_MAX;
-	if (!ret_limit)
-		ret_limit = 1;
+	/* Vary return limit from 1 to CXL_TEST_EVENT_RET_MAX */
+	ret_limit = (atomic_inc_return(&event_counter) % CXL_TEST_EVENT_RET_MAX) + 1;
 
 	if (cmd->size_out < struct_size(pl, records, ret_limit))
 		return -EINVAL;
@@ -299,7 +298,7 @@ static int mock_get_event(struct device *dev, struct cxl_mbox_cmd *cmd)
 		u64 ns;
 
 		pl->flags |= CXL_GET_EVENT_FLAG_OVERFLOW;
-		pl->overflow_err_count = cpu_to_le16(nr_overflow);
+		pl->overflow_err_count = cpu_to_le16(log->nr_overflow);
 		ns = ktime_get_real_ns();
 		ns -= 5000000000; /* 5s ago */
 		pl->first_overflow_timestamp = cpu_to_le64(ns);
@@ -1768,7 +1767,7 @@ static int cxl_mock_mem_probe(struct platform_device *pdev)
 
 	cxl_mock_add_event_logs(&mdata->mes);
 
-	cxlmd = devm_cxl_add_memdev(&pdev->dev, cxlds);
+	cxlmd = devm_cxl_add_memdev(cxlds, NULL);
 	if (IS_ERR(cxlmd))
 		return PTR_ERR(cxlmd);
 
@@ -1828,27 +1827,10 @@ static ssize_t fw_buf_checksum_show(struct device *dev,
 {
 	struct cxl_mockmem_data *mdata = dev_get_drvdata(dev);
 	u8 hash[SHA256_DIGEST_SIZE];
-	unsigned char *hstr, *hptr;
-	struct sha256_state sctx;
-	ssize_t written = 0;
-	int i;
 
-	sha256_init(&sctx);
-	sha256_update(&sctx, mdata->fw, mdata->fw_size);
-	sha256_final(&sctx, hash);
+	sha256(mdata->fw, mdata->fw_size, hash);
 
-	hstr = kzalloc((SHA256_DIGEST_SIZE * 2) + 1, GFP_KERNEL);
-	if (!hstr)
-		return -ENOMEM;
-
-	hptr = hstr;
-	for (i = 0; i < SHA256_DIGEST_SIZE; i++)
-		hptr += sprintf(hptr, "%02x", hash[i]);
-
-	written = sysfs_emit(buf, "%s\n", hstr);
-
-	kfree(hstr);
-	return written;
+	return sysfs_emit(buf, "%*phN\n", SHA256_DIGEST_SIZE, hash);
 }
 
 static DEVICE_ATTR_RO(fw_buf_checksum);

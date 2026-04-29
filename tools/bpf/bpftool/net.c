@@ -156,7 +156,7 @@ static int netlink_recv(int sock, __u32 nl_pid, __u32 seq,
 	bool multipart = true;
 	struct nlmsgerr *err;
 	struct nlmsghdr *nh;
-	char buf[4096];
+	char buf[8192];
 	int len, ret;
 
 	while (multipart) {
@@ -201,6 +201,9 @@ static int netlink_recv(int sock, __u32 nl_pid, __u32 seq,
 					return ret;
 			}
 		}
+
+		if (len)
+			p_err("Invalid message or trailing data in Netlink response: %d bytes left", len);
 	}
 	ret = 0;
 done:
@@ -366,17 +369,18 @@ static int dump_link_nlmsg(void *cookie, void *msg, struct nlattr **tb)
 {
 	struct bpf_netdev_t *netinfo = cookie;
 	struct ifinfomsg *ifinfo = msg;
+	struct ip_devname_ifindex *tmp;
 
 	if (netinfo->filter_idx > 0 && netinfo->filter_idx != ifinfo->ifi_index)
 		return 0;
 
 	if (netinfo->used_len == netinfo->array_len) {
-		netinfo->devices = realloc(netinfo->devices,
-			(netinfo->array_len + 16) *
-			sizeof(struct ip_devname_ifindex));
-		if (!netinfo->devices)
+		tmp = realloc(netinfo->devices,
+			(netinfo->array_len + 16) * sizeof(struct ip_devname_ifindex));
+		if (!tmp)
 			return -ENOMEM;
 
+		netinfo->devices = tmp;
 		netinfo->array_len += 16;
 	}
 	netinfo->devices[netinfo->used_len].ifindex = ifinfo->ifi_index;
@@ -395,6 +399,7 @@ static int dump_class_qdisc_nlmsg(void *cookie, void *msg, struct nlattr **tb)
 {
 	struct bpf_tcinfo_t *tcinfo = cookie;
 	struct tcmsg *info = msg;
+	struct tc_kind_handle *tmp;
 
 	if (tcinfo->is_qdisc) {
 		/* skip clsact qdisc */
@@ -406,11 +411,12 @@ static int dump_class_qdisc_nlmsg(void *cookie, void *msg, struct nlattr **tb)
 	}
 
 	if (tcinfo->used_len == tcinfo->array_len) {
-		tcinfo->handle_array = realloc(tcinfo->handle_array,
+		tmp = realloc(tcinfo->handle_array,
 			(tcinfo->array_len + 16) * sizeof(struct tc_kind_handle));
-		if (!tcinfo->handle_array)
+		if (!tmp)
 			return -ENOMEM;
 
+		tcinfo->handle_array = tmp;
 		tcinfo->array_len += 16;
 	}
 	tcinfo->handle_array[tcinfo->used_len].handle = info->tcm_handle;
@@ -663,10 +669,16 @@ static int get_tcx_type(enum net_attach_type attach_type)
 	}
 }
 
-static int do_attach_tcx(int progfd, enum net_attach_type attach_type, int ifindex)
+static int do_attach_tcx(int progfd, enum net_attach_type attach_type, int ifindex, bool prepend)
 {
 	int type = get_tcx_type(attach_type);
 
+	if (prepend) {
+		LIBBPF_OPTS(bpf_prog_attach_opts, opts,
+			.flags = BPF_F_BEFORE
+		);
+		return bpf_prog_attach_opts(progfd, ifindex, type, &opts);
+	}
 	return bpf_prog_attach(progfd, ifindex, type, 0);
 }
 
@@ -682,6 +694,7 @@ static int do_attach(int argc, char **argv)
 	enum net_attach_type attach_type;
 	int progfd, ifindex, err = 0;
 	bool overwrite = false;
+	bool prepend = false;
 
 	/* parse attach args */
 	if (!REQ_ARGS(5))
@@ -706,9 +719,25 @@ static int do_attach(int argc, char **argv)
 
 	if (argc) {
 		if (is_prefix(*argv, "overwrite")) {
+			if (attach_type != NET_ATTACH_TYPE_XDP &&
+			    attach_type != NET_ATTACH_TYPE_XDP_GENERIC &&
+			    attach_type != NET_ATTACH_TYPE_XDP_DRIVER &&
+			    attach_type != NET_ATTACH_TYPE_XDP_OFFLOAD) {
+				p_err("'overwrite' is only supported for xdp types");
+				err = -EINVAL;
+				goto cleanup;
+			}
 			overwrite = true;
+		} else if (is_prefix(*argv, "prepend")) {
+			if (attach_type != NET_ATTACH_TYPE_TCX_INGRESS &&
+			    attach_type != NET_ATTACH_TYPE_TCX_EGRESS) {
+				p_err("'prepend' is only supported for tcx_ingress/tcx_egress");
+				err = -EINVAL;
+				goto cleanup;
+			}
+			prepend = true;
 		} else {
-			p_err("expected 'overwrite', got: '%s'?", *argv);
+			p_err("expected 'overwrite' or 'prepend', got: '%s'?", *argv);
 			err = -EINVAL;
 			goto cleanup;
 		}
@@ -725,7 +754,7 @@ static int do_attach(int argc, char **argv)
 	/* attach tcx prog */
 	case NET_ATTACH_TYPE_TCX_INGRESS:
 	case NET_ATTACH_TYPE_TCX_EGRESS:
-		err = do_attach_tcx(progfd, attach_type, ifindex);
+		err = do_attach_tcx(progfd, attach_type, ifindex, prepend);
 		break;
 	default:
 		break;
@@ -982,7 +1011,7 @@ static int do_help(int argc, char **argv)
 
 	fprintf(stderr,
 		"Usage: %1$s %2$s { show | list } [dev <devname>]\n"
-		"       %1$s %2$s attach ATTACH_TYPE PROG dev <devname> [ overwrite ]\n"
+		"       %1$s %2$s attach ATTACH_TYPE PROG dev <devname> [ overwrite | prepend ]\n"
 		"       %1$s %2$s detach ATTACH_TYPE dev <devname>\n"
 		"       %1$s %2$s help\n"
 		"\n"

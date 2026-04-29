@@ -42,7 +42,7 @@ static const struct bin_attribute *const savu_bin_attrs[] = {
 };
 
 static const struct attribute_group savu_group = {
-	.bin_attrs_new = savu_bin_attrs,
+	.bin_attrs = savu_bin_attrs,
 };
 
 static const struct attribute_group *savu_groups[] = {
@@ -68,7 +68,7 @@ static int savu_init_specials(struct hid_device *hdev)
 		return 0;
 	}
 
-	savu = kzalloc(sizeof(*savu), GFP_KERNEL);
+	savu = kzalloc_obj(*savu);
 	if (!savu) {
 		hid_err(hdev, "can't alloc device descriptor\n");
 		return -ENOMEM;

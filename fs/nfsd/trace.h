@@ -91,6 +91,41 @@ DEFINE_EVENT(nfsd_xdr_err_class, nfsd_##name##_err, \
 DEFINE_NFSD_XDR_ERR_EVENT(garbage_args);
 DEFINE_NFSD_XDR_ERR_EVENT(cant_encode);
 
+DECLARE_EVENT_CLASS(nfsd_dynthread_class,
+	TP_PROTO(
+		const struct net *net,
+		const struct svc_pool *pool
+	),
+	TP_ARGS(net, pool),
+	TP_STRUCT__entry(
+		__field(unsigned int, netns_ino)
+		__field(unsigned int, pool_id)
+		__field(unsigned int, nrthreads)
+		__field(unsigned int, nrthrmin)
+		__field(unsigned int, nrthrmax)
+	),
+	TP_fast_assign(
+		__entry->netns_ino = net->ns.inum;
+		__entry->pool_id = pool->sp_id;
+		__entry->nrthreads = pool->sp_nrthreads;
+		__entry->nrthrmin = pool->sp_nrthrmin;
+		__entry->nrthrmax = pool->sp_nrthrmax;
+	),
+	TP_printk("pool=%u nrthreads=%u nrthrmin=%u nrthrmax=%u",
+		__entry->pool_id, __entry->nrthreads,
+		__entry->nrthrmin, __entry->nrthrmax
+	)
+);
+
+#define DEFINE_NFSD_DYNTHREAD_EVENT(name) \
+DEFINE_EVENT(nfsd_dynthread_class, nfsd_dynthread_##name, \
+	TP_PROTO(const struct net *net, const struct svc_pool *pool), \
+	TP_ARGS(net, pool))
+
+DEFINE_NFSD_DYNTHREAD_EVENT(start);
+DEFINE_NFSD_DYNTHREAD_EVENT(kill);
+DEFINE_NFSD_DYNTHREAD_EVENT(trylock_fail);
+
 #define show_nfsd_may_flags(x)						\
 	__print_flags(x, "|",						\
 		{ NFSD_MAY_EXEC,		"EXEC" },		\
@@ -344,7 +379,7 @@ TRACE_EVENT(nfsd_exp_find_key,
 		 int status),
 	TP_ARGS(key, status),
 	TP_STRUCT__entry(
-		__field(int, fsidtype)
+		__field(u8, fsidtype)
 		__array(u32, fsid, 6)
 		__string(auth_domain, key->ek_client->name)
 		__field(int, status)
@@ -367,7 +402,7 @@ TRACE_EVENT(nfsd_expkey_update,
 	TP_PROTO(const struct svc_expkey *key, const char *exp_path),
 	TP_ARGS(key, exp_path),
 	TP_STRUCT__entry(
-		__field(int, fsidtype)
+		__field(u8, fsidtype)
 		__array(u32, fsid, 6)
 		__string(auth_domain, key->ek_client->name)
 		__string(path, exp_path)
@@ -464,10 +499,13 @@ DEFINE_EVENT(nfsd_io_class, nfsd_##name,	\
 DEFINE_NFSD_IO_EVENT(read_start);
 DEFINE_NFSD_IO_EVENT(read_splice);
 DEFINE_NFSD_IO_EVENT(read_vector);
+DEFINE_NFSD_IO_EVENT(read_direct);
 DEFINE_NFSD_IO_EVENT(read_io_done);
 DEFINE_NFSD_IO_EVENT(read_done);
 DEFINE_NFSD_IO_EVENT(write_start);
 DEFINE_NFSD_IO_EVENT(write_opened);
+DEFINE_NFSD_IO_EVENT(write_direct);
+DEFINE_NFSD_IO_EVENT(write_vector);
 DEFINE_NFSD_IO_EVENT(write_io_done);
 DEFINE_NFSD_IO_EVENT(write_done);
 DEFINE_NFSD_IO_EVENT(commit_start);
@@ -1108,7 +1146,6 @@ DEFINE_NFSD_FILE_EVENT(nfsd_file_free);
 DEFINE_NFSD_FILE_EVENT(nfsd_file_unhash);
 DEFINE_NFSD_FILE_EVENT(nfsd_file_put);
 DEFINE_NFSD_FILE_EVENT(nfsd_file_closing);
-DEFINE_NFSD_FILE_EVENT(nfsd_file_unhash_and_queue);
 
 TRACE_EVENT(nfsd_file_alloc,
 	TP_PROTO(
@@ -1131,6 +1168,33 @@ TRACE_EVENT(nfsd_file_alloc,
 		__entry->nf_inode, __entry->nf_ref,
 		show_nf_flags(__entry->nf_flags),
 		show_nfsd_may_flags(__entry->nf_may)
+	)
+);
+
+TRACE_EVENT(nfsd_file_get_dio_attrs,
+	TP_PROTO(
+		const struct inode *inode,
+		const struct kstat *stat
+	),
+	TP_ARGS(inode, stat),
+	TP_STRUCT__entry(
+		__field(const void *, inode)
+		__field(unsigned long, mask)
+		__field(u32, mem_align)
+		__field(u32, offset_align)
+		__field(u32, read_offset_align)
+	),
+	TP_fast_assign(
+		__entry->inode = inode;
+		__entry->mask = stat->result_mask;
+		__entry->mem_align = stat->dio_mem_align;
+		__entry->offset_align = stat->dio_offset_align;
+		__entry->read_offset_align = stat->dio_read_offset_align;
+	),
+	TP_printk("inode=%p flags=%s mem_align=%u offset_align=%u read_offset_align=%u",
+		__entry->inode, show_statx_mask(__entry->mask),
+		__entry->mem_align, __entry->offset_align,
+		__entry->read_offset_align
 	)
 );
 
@@ -1344,9 +1408,7 @@ DEFINE_EVENT(nfsd_file_gc_class, name,					\
 	TP_ARGS(nf))
 
 DEFINE_NFSD_FILE_GC_EVENT(nfsd_file_lru_add);
-DEFINE_NFSD_FILE_GC_EVENT(nfsd_file_lru_add_disposed);
 DEFINE_NFSD_FILE_GC_EVENT(nfsd_file_lru_del);
-DEFINE_NFSD_FILE_GC_EVENT(nfsd_file_lru_del_disposed);
 DEFINE_NFSD_FILE_GC_EVENT(nfsd_file_gc_in_use);
 DEFINE_NFSD_FILE_GC_EVENT(nfsd_file_gc_writeback);
 DEFINE_NFSD_FILE_GC_EVENT(nfsd_file_gc_referenced);
@@ -1380,7 +1442,6 @@ DEFINE_EVENT(nfsd_file_lruwalk_class, name,				\
 	TP_ARGS(removed, remaining))
 
 DEFINE_NFSD_FILE_LRUWALK_EVENT(nfsd_file_gc_removed);
-DEFINE_NFSD_FILE_LRUWALK_EVENT(nfsd_file_gc_recent);
 DEFINE_NFSD_FILE_LRUWALK_EVENT(nfsd_file_shrinker_removed);
 
 TRACE_EVENT(nfsd_file_close,
@@ -2103,22 +2164,22 @@ TRACE_EVENT(nfsd_ctl_maxblksize,
 	)
 );
 
-TRACE_EVENT(nfsd_ctl_maxconn,
+TRACE_EVENT(nfsd_ctl_minthreads,
 	TP_PROTO(
 		const struct net *net,
-		int maxconn
+		int minthreads
 	),
-	TP_ARGS(net, maxconn),
+	TP_ARGS(net, minthreads),
 	TP_STRUCT__entry(
 		__field(unsigned int, netns_ino)
-		__field(int, maxconn)
+		__field(int, minthreads)
 	),
 	TP_fast_assign(
 		__entry->netns_ino = net->ns.inum;
-		__entry->maxconn = maxconn;
+		__entry->minthreads = minthreads
 	),
-	TP_printk("maxconn=%d",
-		__entry->maxconn
+	TP_printk("minthreads=%d",
+		__entry->minthreads
 	)
 );
 
@@ -2609,6 +2670,44 @@ DEFINE_EVENT(nfsd_vfs_getattr_class, __name,		\
 DEFINE_NFSD_VFS_GETATTR_EVENT(nfsd_vfs_getattr);
 DEFINE_NFSD_VFS_GETATTR_EVENT(nfsd_vfs_statfs);
 
+DECLARE_EVENT_CLASS(nfsd_pnfs_class,
+	TP_PROTO(
+		const struct nfs4_client *clp,
+		const char *dev,
+		int error
+	),
+	TP_ARGS(clp, dev, error),
+	TP_STRUCT__entry(
+		__sockaddr(addr, sizeof(struct sockaddr_in6))
+		__field(unsigned int, netns_ino)
+		__string(dev, dev)
+		__field(int, error)
+	),
+	TP_fast_assign(
+		__assign_sockaddr(addr, &clp->cl_addr,
+				sizeof(struct sockaddr_in6));
+		__entry->netns_ino = clp->net->ns.inum;
+		__assign_str(dev);
+		__entry->error = error;
+	),
+	TP_printk("client=%pISpc nn=%d dev=%s error=%d",
+		__get_sockaddr(addr),
+		__entry->netns_ino,
+		__get_str(dev),
+		__entry->error
+	)
+);
+
+#define DEFINE_NFSD_PNFS_ERR_EVENT(name)		\
+DEFINE_EVENT(nfsd_pnfs_class, nfsd_pnfs_##name,	\
+	TP_PROTO(					\
+		const struct nfs4_client *clp,		\
+		const char *dev,				\
+		int error				\
+	),						\
+	TP_ARGS(clp, dev, error))
+
+DEFINE_NFSD_PNFS_ERR_EVENT(fence);
 #endif /* _NFSD_TRACE_H */
 
 #undef TRACE_INCLUDE_PATH

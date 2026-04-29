@@ -13,11 +13,12 @@
 #include <linux/types.h>
 
 #include "xe_exec_queue_types.h"
+#include "xe_exec_queue.h"
 #include "xe_gpu_scheduler_types.h"
-#include "xe_gt_tlb_invalidation_types.h"
 #include "xe_gt_types.h"
 #include "xe_guc_exec_queue_types.h"
 #include "xe_sched_job.h"
+#include "xe_tlb_inval_types.h"
 #include "xe_vm.h"
 
 #define __dev_name_xe(xe)	dev_name((xe)->drm.dev)
@@ -25,13 +26,13 @@
 #define __dev_name_gt(gt)	__dev_name_xe(gt_to_xe((gt)))
 #define __dev_name_eq(q)	__dev_name_gt((q)->gt)
 
-DECLARE_EVENT_CLASS(xe_gt_tlb_invalidation_fence,
-		    TP_PROTO(struct xe_device *xe, struct xe_gt_tlb_invalidation_fence *fence),
+DECLARE_EVENT_CLASS(xe_tlb_inval_fence,
+		    TP_PROTO(struct xe_device *xe, struct xe_tlb_inval_fence *fence),
 		    TP_ARGS(xe, fence),
 
 		    TP_STRUCT__entry(
 			     __string(dev, __dev_name_xe(xe))
-			     __field(struct xe_gt_tlb_invalidation_fence *, fence)
+			     __field(struct xe_tlb_inval_fence *, fence)
 			     __field(int, seqno)
 			     ),
 
@@ -45,39 +46,23 @@ DECLARE_EVENT_CLASS(xe_gt_tlb_invalidation_fence,
 			      __get_str(dev), __entry->fence, __entry->seqno)
 );
 
-DEFINE_EVENT(xe_gt_tlb_invalidation_fence, xe_gt_tlb_invalidation_fence_create,
-	     TP_PROTO(struct xe_device *xe, struct xe_gt_tlb_invalidation_fence *fence),
+DEFINE_EVENT(xe_tlb_inval_fence, xe_tlb_inval_fence_send,
+	     TP_PROTO(struct xe_device *xe, struct xe_tlb_inval_fence *fence),
 	     TP_ARGS(xe, fence)
 );
 
-DEFINE_EVENT(xe_gt_tlb_invalidation_fence,
-	     xe_gt_tlb_invalidation_fence_work_func,
-	     TP_PROTO(struct xe_device *xe, struct xe_gt_tlb_invalidation_fence *fence),
+DEFINE_EVENT(xe_tlb_inval_fence, xe_tlb_inval_fence_recv,
+	     TP_PROTO(struct xe_device *xe, struct xe_tlb_inval_fence *fence),
 	     TP_ARGS(xe, fence)
 );
 
-DEFINE_EVENT(xe_gt_tlb_invalidation_fence, xe_gt_tlb_invalidation_fence_cb,
-	     TP_PROTO(struct xe_device *xe, struct xe_gt_tlb_invalidation_fence *fence),
+DEFINE_EVENT(xe_tlb_inval_fence, xe_tlb_inval_fence_signal,
+	     TP_PROTO(struct xe_device *xe, struct xe_tlb_inval_fence *fence),
 	     TP_ARGS(xe, fence)
 );
 
-DEFINE_EVENT(xe_gt_tlb_invalidation_fence, xe_gt_tlb_invalidation_fence_send,
-	     TP_PROTO(struct xe_device *xe, struct xe_gt_tlb_invalidation_fence *fence),
-	     TP_ARGS(xe, fence)
-);
-
-DEFINE_EVENT(xe_gt_tlb_invalidation_fence, xe_gt_tlb_invalidation_fence_recv,
-	     TP_PROTO(struct xe_device *xe, struct xe_gt_tlb_invalidation_fence *fence),
-	     TP_ARGS(xe, fence)
-);
-
-DEFINE_EVENT(xe_gt_tlb_invalidation_fence, xe_gt_tlb_invalidation_fence_signal,
-	     TP_PROTO(struct xe_device *xe, struct xe_gt_tlb_invalidation_fence *fence),
-	     TP_ARGS(xe, fence)
-);
-
-DEFINE_EVENT(xe_gt_tlb_invalidation_fence, xe_gt_tlb_invalidation_fence_timeout,
-	     TP_PROTO(struct xe_device *xe, struct xe_gt_tlb_invalidation_fence *fence),
+DEFINE_EVENT(xe_tlb_inval_fence, xe_tlb_inval_fence_timeout,
+	     TP_PROTO(struct xe_device *xe, struct xe_tlb_inval_fence *fence),
 	     TP_ARGS(xe, fence)
 );
 
@@ -113,7 +98,47 @@ DECLARE_EVENT_CLASS(xe_exec_queue,
 			      __entry->guc_state, __entry->flags)
 );
 
+DECLARE_EVENT_CLASS(xe_exec_queue_multi_queue,
+		    TP_PROTO(struct xe_exec_queue *q),
+		    TP_ARGS(q),
+
+		    TP_STRUCT__entry(
+			     __string(dev, __dev_name_eq(q))
+			     __field(enum xe_engine_class, class)
+			     __field(u32, logical_mask)
+			     __field(u8, gt_id)
+			     __field(u16, width)
+			     __field(u32, guc_id)
+			     __field(u32, guc_state)
+			     __field(u32, flags)
+			     __field(u32, primary)
+			     ),
+
+		    TP_fast_assign(
+			   __assign_str(dev);
+			   __entry->class = q->class;
+			   __entry->logical_mask = q->logical_mask;
+			   __entry->gt_id = q->gt->info.id;
+			   __entry->width = q->width;
+			   __entry->guc_id = q->guc->id;
+			   __entry->guc_state = atomic_read(&q->guc->state);
+			   __entry->flags = q->flags;
+			   __entry->primary = xe_exec_queue_multi_queue_primary(q)->guc->id;
+			   ),
+
+		    TP_printk("dev=%s, %d:0x%x, gt=%d, width=%d guc_id=%d, guc_state=0x%x, flags=0x%x, primary=%d",
+			      __get_str(dev), __entry->class, __entry->logical_mask,
+			      __entry->gt_id, __entry->width, __entry->guc_id,
+			      __entry->guc_state, __entry->flags,
+			      __entry->primary)
+);
+
 DEFINE_EVENT(xe_exec_queue, xe_exec_queue_create,
+	     TP_PROTO(struct xe_exec_queue *q),
+	     TP_ARGS(q)
+);
+
+DEFINE_EVENT(xe_exec_queue_multi_queue, xe_exec_queue_create_multi_queue,
 	     TP_PROTO(struct xe_exec_queue *q),
 	     TP_ARGS(q)
 );
@@ -188,17 +213,17 @@ DEFINE_EVENT(xe_exec_queue, xe_exec_queue_memory_cat_error,
 	     TP_ARGS(q)
 );
 
+DEFINE_EVENT(xe_exec_queue, xe_exec_queue_cgp_context_error,
+	     TP_PROTO(struct xe_exec_queue *q),
+	     TP_ARGS(q)
+);
+
 DEFINE_EVENT(xe_exec_queue, xe_exec_queue_stop,
 	     TP_PROTO(struct xe_exec_queue *q),
 	     TP_ARGS(q)
 );
 
 DEFINE_EVENT(xe_exec_queue, xe_exec_queue_resubmit,
-	     TP_PROTO(struct xe_exec_queue *q),
-	     TP_ARGS(q)
-);
-
-DEFINE_EVENT(xe_exec_queue, xe_exec_queue_lr_cleanup,
 	     TP_PROTO(struct xe_exec_queue *q),
 	     TP_ARGS(q)
 );
@@ -455,6 +480,29 @@ TRACE_EVENT(xe_eu_stall_data_read,
 		      __entry->slice, __entry->subslice,
 		      __entry->read_ptr, __entry->write_ptr,
 		      __entry->read_size, __entry->total_size)
+);
+
+TRACE_EVENT(xe_exec_queue_reach_max_job_count,
+	    TP_PROTO(struct xe_exec_queue *q, int max_cnt),
+	    TP_ARGS(q, max_cnt),
+
+	    TP_STRUCT__entry(__string(dev, __dev_name_eq(q))
+			     __field(enum xe_engine_class, class)
+			     __field(u32, logical_mask)
+			     __field(u16, guc_id)
+			     __field(int, max_cnt)
+			     ),
+
+	    TP_fast_assign(__assign_str(dev);
+			   __entry->class = q->class;
+			   __entry->logical_mask = q->logical_mask;
+			   __entry->guc_id = q->guc->id;
+			   __entry->max_cnt = max_cnt;
+			   ),
+
+	    TP_printk("dev=%s, job count exceeded the maximum limit (%d) per exec queue. engine_class=0x%x, logical_mask=0x%x, guc_id=%d",
+		      __get_str(dev), __entry->max_cnt,
+		      __entry->class, __entry->logical_mask, __entry->guc_id)
 );
 
 #endif

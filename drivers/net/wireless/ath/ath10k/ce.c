@@ -4,8 +4,10 @@
  * Copyright (c) 2011-2017 Qualcomm Atheros, Inc.
  * Copyright (c) 2018 The Linux Foundation. All rights reserved.
  * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
+#include <linux/export.h>
 #include "hif.h"
 #include "ce.h"
 #include "debug.h"
@@ -1459,8 +1461,7 @@ ath10k_ce_alloc_src_ring(struct ath10k *ar, unsigned int ce_id,
 
 	nentries = roundup_pow_of_two(nentries);
 
-	src_ring = kzalloc(struct_size(src_ring, per_transfer_context,
-				       nentries), GFP_KERNEL);
+	src_ring = kzalloc_flex(*src_ring, per_transfer_context, nentries);
 	if (src_ring == NULL)
 		return ERR_PTR(-ENOMEM);
 
@@ -1517,8 +1518,7 @@ ath10k_ce_alloc_src_ring_64(struct ath10k *ar, unsigned int ce_id,
 
 	nentries = roundup_pow_of_two(nentries);
 
-	src_ring = kzalloc(struct_size(src_ring, per_transfer_context,
-				       nentries), GFP_KERNEL);
+	src_ring = kzalloc_flex(*src_ring, per_transfer_context, nentries);
 	if (!src_ring)
 		return ERR_PTR(-ENOMEM);
 
@@ -1573,8 +1573,7 @@ ath10k_ce_alloc_dest_ring(struct ath10k *ar, unsigned int ce_id,
 
 	nentries = roundup_pow_of_two(attr->dest_nentries);
 
-	dest_ring = kzalloc(struct_size(dest_ring, per_transfer_context,
-					nentries), GFP_KERNEL);
+	dest_ring = kzalloc_flex(*dest_ring, per_transfer_context, nentries);
 	if (dest_ring == NULL)
 		return ERR_PTR(-ENOMEM);
 
@@ -1617,8 +1616,7 @@ ath10k_ce_alloc_dest_ring_64(struct ath10k *ar, unsigned int ce_id,
 
 	nentries = roundup_pow_of_two(attr->dest_nentries);
 
-	dest_ring = kzalloc(struct_size(dest_ring, per_transfer_context,
-					nentries), GFP_KERNEL);
+	dest_ring = kzalloc_flex(*dest_ring, per_transfer_context, nentries);
 	if (!dest_ring)
 		return ERR_PTR(-ENOMEM);
 
@@ -1725,8 +1723,8 @@ static void _ath10k_ce_free_pipe(struct ath10k *ar, int ce_id)
 				  (ce_state->src_ring->nentries *
 				   sizeof(struct ce_desc) +
 				   CE_DESC_RING_ALIGN),
-				  ce_state->src_ring->base_addr_owner_space,
-				  ce_state->src_ring->base_addr_ce_space);
+				  ce_state->src_ring->base_addr_owner_space_unaligned,
+				  ce_state->src_ring->base_addr_ce_space_unaligned);
 		kfree(ce_state->src_ring);
 	}
 
@@ -1735,8 +1733,8 @@ static void _ath10k_ce_free_pipe(struct ath10k *ar, int ce_id)
 				  (ce_state->dest_ring->nentries *
 				   sizeof(struct ce_desc) +
 				   CE_DESC_RING_ALIGN),
-				  ce_state->dest_ring->base_addr_owner_space,
-				  ce_state->dest_ring->base_addr_ce_space);
+				  ce_state->dest_ring->base_addr_owner_space_unaligned,
+				  ce_state->dest_ring->base_addr_ce_space_unaligned);
 		kfree(ce_state->dest_ring);
 	}
 
@@ -1756,8 +1754,8 @@ static void _ath10k_ce_free_pipe_64(struct ath10k *ar, int ce_id)
 				  (ce_state->src_ring->nentries *
 				   sizeof(struct ce_desc_64) +
 				   CE_DESC_RING_ALIGN),
-				  ce_state->src_ring->base_addr_owner_space,
-				  ce_state->src_ring->base_addr_ce_space);
+				  ce_state->src_ring->base_addr_owner_space_unaligned,
+				  ce_state->src_ring->base_addr_ce_space_unaligned);
 		kfree(ce_state->src_ring);
 	}
 
@@ -1766,8 +1764,8 @@ static void _ath10k_ce_free_pipe_64(struct ath10k *ar, int ce_id)
 				  (ce_state->dest_ring->nentries *
 				   sizeof(struct ce_desc_64) +
 				   CE_DESC_RING_ALIGN),
-				  ce_state->dest_ring->base_addr_owner_space,
-				  ce_state->dest_ring->base_addr_ce_space);
+				  ce_state->dest_ring->base_addr_owner_space_unaligned,
+				  ce_state->dest_ring->base_addr_ce_space_unaligned);
 		kfree(ce_state->dest_ring);
 	}
 

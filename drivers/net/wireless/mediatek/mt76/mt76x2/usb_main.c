@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: ISC
+// SPDX-License-Identifier: BSD-3-Clause-Clear
 /*
  * Copyright (C) 2018 Lorenzo Bianconi <lorenzo.bianconi83@gmail.com>
  */
@@ -50,7 +50,7 @@ int mt76x2u_set_channel(struct mt76_phy *mphy)
 }
 
 static int
-mt76x2u_config(struct ieee80211_hw *hw, u32 changed)
+mt76x2u_config(struct ieee80211_hw *hw, int radio_idx, u32 changed)
 {
 	struct mt76x02_dev *dev = hw->priv;
 	int err = 0;

@@ -86,11 +86,11 @@ void hubp401_program_3dlut_fl_width(struct hubp *hubp, enum hubp_3dlut_fl_width 
 	REG_UPDATE(HUBP_3DLUT_CONTROL, HUBP_3DLUT_WIDTH, width);
 }
 
-void hubp401_program_3dlut_fl_tmz_protected(struct hubp *hubp, bool protection_enabled)
+void hubp401_program_3dlut_fl_tmz_protected(struct hubp *hubp, uint8_t protection_bits)
 {
 	struct dcn20_hubp *hubp2 = TO_DCN20_HUBP(hubp);
 
-	REG_UPDATE(HUBP_3DLUT_CONTROL, HUBP_3DLUT_TMZ, protection_enabled ? 1 : 0);
+	REG_UPDATE(HUBP_3DLUT_CONTROL, HUBP_3DLUT_TMZ, protection_bits);
 }
 
 void hubp401_program_3dlut_fl_crossbar(struct hubp *hubp,
@@ -125,6 +125,43 @@ void hubp401_program_3dlut_fl_format(struct hubp *hubp, enum hubp_3dlut_fl_forma
 	struct dcn20_hubp *hubp2 = TO_DCN20_HUBP(hubp);
 
 	REG_UPDATE(_3DLUT_FL_CONFIG, HUBP0_3DLUT_FL_FORMAT, format);
+}
+
+void hubp401_program_3dlut_fl_config(
+	struct hubp *hubp,
+	struct hubp_fl_3dlut_config *cfg)
+{
+	struct dcn20_hubp *hubp2 = TO_DCN20_HUBP(hubp);
+
+	uint32_t mpc_width = {(cfg->width == 17) ? 0 : 1};
+	uint32_t width = {cfg->width};
+
+	if (cfg->layout == DC_CM2_GPU_MEM_LAYOUT_1D_PACKED_LINEAR)
+		width = (cfg->width == 17) ? 4916 : 35940;
+
+	REG_UPDATE_2(_3DLUT_FL_CONFIG,
+		HUBP0_3DLUT_FL_MODE, cfg->mode,
+		HUBP0_3DLUT_FL_FORMAT, cfg->format);
+
+	REG_UPDATE_2(_3DLUT_FL_BIAS_SCALE,
+		HUBP0_3DLUT_FL_BIAS, cfg->bias,
+		HUBP0_3DLUT_FL_SCALE, cfg->scale);
+
+	REG_UPDATE(HUBP_3DLUT_ADDRESS_HIGH,
+		HUBP_3DLUT_ADDRESS_HIGH, cfg->address.lut3d.addr.high_part);
+	REG_UPDATE(HUBP_3DLUT_ADDRESS_LOW,
+		HUBP_3DLUT_ADDRESS_LOW, cfg->address.lut3d.addr.low_part);
+
+	//cross bar
+	REG_UPDATE_8(HUBP_3DLUT_CONTROL,
+		HUBP_3DLUT_MPC_WIDTH, mpc_width,
+		HUBP_3DLUT_WIDTH, width,
+		HUBP_3DLUT_CROSSBAR_SELECT_CR_R, cfg->crossbar_bit_slice_cr_r,
+		HUBP_3DLUT_CROSSBAR_SELECT_Y_G, cfg->crossbar_bit_slice_y_g,
+		HUBP_3DLUT_CROSSBAR_SELECT_CB_B, cfg->crossbar_bit_slice_cb_b,
+		HUBP_3DLUT_ADDRESSING_MODE, cfg->addr_mode,
+		HUBP_3DLUT_TMZ, cfg->protection_bits,
+		HUBP_3DLUT_ENABLE, cfg->enabled ? 1 : 0);
 }
 
 void hubp401_update_mall_sel(struct hubp *hubp, uint32_t mall_sel, bool c_cursor)
@@ -696,10 +733,8 @@ void hubp401_cursor_set_position(
 	const struct dc_cursor_mi_param *param)
 {
 	struct dcn20_hubp *hubp2 = TO_DCN20_HUBP(hubp);
-	int x_pos = pos->x - param->recout.x;
-	int y_pos = pos->y - param->recout.y;
-	int rec_x_offset = x_pos - pos->x_hotspot;
-	int rec_y_offset = y_pos - pos->y_hotspot;
+	int rec_x_offset = pos->x - pos->x_hotspot;
+	int rec_y_offset = pos->y - pos->y_hotspot;
 	int dst_x_offset;
 	int x_pos_viewport = 0;
 	int x_hot_viewport = 0;
@@ -711,10 +746,10 @@ void hubp401_cursor_set_position(
 	 * within preceeding ODM slices.
 	 */
 	if (param->recout.width) {
-		x_pos_viewport = x_pos * param->viewport.width / param->recout.width;
+		x_pos_viewport = pos->x * param->viewport.width / param->recout.width;
 		x_hot_viewport = pos->x_hotspot * param->viewport.width / param->recout.width;
 	} else {
-		ASSERT(!cur_en || x_pos == 0);
+		ASSERT(!cur_en || pos->x == 0);
 		ASSERT(!cur_en || pos->x_hotspot == 0);
 	}
 
@@ -746,21 +781,23 @@ void hubp401_cursor_set_position(
 		if (cur_en && REG_READ(CURSOR_SURFACE_ADDRESS) == 0)
 			hubp->funcs->set_cursor_attributes(hubp, &hubp->curs_attr);
 
-		REG_UPDATE(CURSOR_CONTROL,
-			CURSOR_ENABLE, cur_en);
+		if (!hubp->cursor_offload)
+			REG_UPDATE(CURSOR_CONTROL,
+				CURSOR_ENABLE, cur_en);
 	}
 
-	REG_SET_2(CURSOR_POSITION, 0,
-		CURSOR_X_POSITION, x_pos,
-		CURSOR_Y_POSITION, y_pos);
+	if (!hubp->cursor_offload) {
+		REG_SET_2(CURSOR_POSITION, 0,
+			CURSOR_X_POSITION, pos->x,
+			CURSOR_Y_POSITION, pos->y);
 
-	REG_SET_2(CURSOR_HOT_SPOT, 0,
-		CURSOR_HOT_SPOT_X, pos->x_hotspot,
-		CURSOR_HOT_SPOT_Y, pos->y_hotspot);
+		REG_SET_2(CURSOR_HOT_SPOT, 0,
+			CURSOR_HOT_SPOT_X, pos->x_hotspot,
+			CURSOR_HOT_SPOT_Y, pos->y_hotspot);
 
-	REG_SET(CURSOR_DST_OFFSET, 0,
-		CURSOR_DST_X_OFFSET, dst_x_offset);
-
+		REG_SET(CURSOR_DST_OFFSET, 0,
+			CURSOR_DST_X_OFFSET, dst_x_offset);
+	}
 	/* Cursor Position Register Config */
 	hubp->pos.cur_ctl.bits.cur_enable = cur_en;
 	hubp->pos.position.bits.x_pos = pos->x;
@@ -1033,6 +1070,8 @@ static struct hubp_funcs dcn401_hubp_funcs = {
 	.hubp_program_3dlut_fl_crossbar = hubp401_program_3dlut_fl_crossbar,
 	.hubp_get_3dlut_fl_done = hubp401_get_3dlut_fl_done,
 	.hubp_clear_tiling = hubp401_clear_tiling,
+	.hubp_program_3dlut_fl_config = hubp401_program_3dlut_fl_config,
+	.hubp_read_reg_state = hubp3_read_reg_state
 };
 
 bool hubp401_construct(

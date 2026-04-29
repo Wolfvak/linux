@@ -28,9 +28,9 @@ struct mlx5_dm *mlx5_dm_create(struct mlx5_core_dev *dev)
 	if (!(MLX5_CAP_GEN_64(dev, general_obj_types) & MLX5_GENERAL_OBJ_TYPES_CAP_SW_ICM))
 		return NULL;
 
-	dm = kzalloc(sizeof(*dm), GFP_KERNEL);
+	dm = kzalloc_obj(*dm);
 	if (!dm)
-		return ERR_PTR(-ENOMEM);
+		return NULL;
 
 	spin_lock_init(&dm->lock);
 
@@ -96,7 +96,7 @@ err_modify_hdr:
 err_steering:
 	kfree(dm);
 
-	return ERR_PTR(-ENOMEM);
+	return NULL;
 }
 
 void mlx5_dm_cleanup(struct mlx5_core_dev *dev)

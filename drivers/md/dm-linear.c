@@ -39,7 +39,7 @@ static int linear_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		return -EINVAL;
 	}
 
-	lc = kmalloc(sizeof(*lc), GFP_KERNEL);
+	lc = kmalloc_obj(*lc);
 	if (lc == NULL) {
 		ti->error = "Cannot allocate linear context";
 		return -ENOMEM;
@@ -170,7 +170,7 @@ static struct dax_device *linear_dax_pgoff(struct dm_target *ti, pgoff_t *pgoff)
 
 static long linear_dax_direct_access(struct dm_target *ti, pgoff_t pgoff,
 		long nr_pages, enum dax_access_mode mode, void **kaddr,
-		pfn_t *pfn)
+		unsigned long *pfn)
 {
 	struct dax_device *dax_dev = linear_dax_pgoff(ti, &pgoff);
 

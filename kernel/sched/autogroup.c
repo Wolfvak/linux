@@ -4,6 +4,9 @@
  * Auto-group scheduling implementation:
  */
 
+#include "autogroup.h"
+#include "sched.h"
+
 unsigned int __read_mostly sysctl_sched_autogroup_enabled = 1;
 static struct autogroup autogroup_default;
 static atomic_t autogroup_seq_nr;
@@ -25,9 +28,9 @@ static void __init sched_autogroup_sysctl_init(void)
 {
 	register_sysctl_init("kernel", sched_autogroup_sysctls);
 }
-#else
+#else /* !CONFIG_SYSCTL: */
 #define sched_autogroup_sysctl_init() do { } while (0)
-#endif
+#endif /* !CONFIG_SYSCTL */
 
 void __init autogroup_init(struct task_struct *init_task)
 {
@@ -83,7 +86,7 @@ static inline struct autogroup *autogroup_task_get(struct task_struct *p)
 
 static inline struct autogroup *autogroup_create(void)
 {
-	struct autogroup *ag = kzalloc(sizeof(*ag), GFP_KERNEL);
+	struct autogroup *ag = kzalloc_obj(*ag);
 	struct task_group *tg;
 
 	if (!ag)
@@ -108,7 +111,7 @@ static inline struct autogroup *autogroup_create(void)
 	free_rt_sched_group(tg);
 	tg->rt_se = root_task_group.rt_se;
 	tg->rt_rq = root_task_group.rt_rq;
-#endif
+#endif /* CONFIG_RT_GROUP_SCHED */
 	tg->autogroup = ag;
 
 	sched_online_group(tg, &root_task_group);
@@ -175,8 +178,8 @@ autogroup_move_group(struct task_struct *p, struct autogroup *ag)
 	 * this process can already run with task_group() == prev->tg or we can
 	 * race with cgroup code which can read autogroup = prev under rq->lock.
 	 * In the latter case for_each_thread() can not miss a migrating thread,
-	 * cpu_cgroup_attach() must not be possible after cgroup_exit() and it
-	 * can't be removed from thread list, we hold ->siglock.
+	 * cpu_cgroup_attach() must not be possible after cgroup_task_exit()
+	 * and it can't be removed from thread list, we hold ->siglock.
 	 *
 	 * If an exiting thread was already removed from thread list we rely on
 	 * sched_autogroup_exit_task().

@@ -13,8 +13,7 @@
  * Changes:
  */
 
-#define KMSG_COMPONENT "IPVS"
-#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
+#define pr_fmt(fmt) "IPVS: " fmt
 
 #include <linux/module.h>
 #include <linux/init.h>
@@ -256,7 +255,7 @@ static void est_reload_work_handler(struct work_struct *work)
 		struct ip_vs_est_kt_data *kd = ipvs->est_kt_arr[id];
 
 		/* netns clean up started, abort delayed work */
-		if (!ipvs->enable)
+		if (!READ_ONCE(ipvs->enable))
 			goto unlock;
 		if (!kd)
 			continue;
@@ -939,7 +938,7 @@ int ip_vs_stats_init_alloc(struct ip_vs_stats *s)
 
 struct ip_vs_stats *ip_vs_stats_alloc(void)
 {
-	struct ip_vs_stats *s = kzalloc(sizeof(*s), GFP_KERNEL);
+	struct ip_vs_stats *s = kzalloc_obj(*s);
 
 	if (s && ip_vs_stats_init_alloc(s) >= 0)
 		return s;
@@ -1080,7 +1079,7 @@ ip_vs_new_dest(struct ip_vs_service *svc, struct ip_vs_dest_user_kern *udest)
 			return -EINVAL;
 	}
 
-	dest = kzalloc(sizeof(struct ip_vs_dest), GFP_KERNEL);
+	dest = kzalloc_obj(struct ip_vs_dest);
 	if (dest == NULL)
 		return -ENOMEM;
 
@@ -1422,7 +1421,7 @@ ip_vs_add_service(struct netns_ipvs *ipvs, struct ip_vs_service_user_kern *u,
 		ret_hooks = ret;
 	}
 
-	svc = kzalloc(sizeof(struct ip_vs_service), GFP_KERNEL);
+	svc = kzalloc_obj(struct ip_vs_service);
 	if (svc == NULL) {
 		IP_VS_DBG(1, "%s(): no memory\n", __func__);
 		ret = -ENOMEM;
@@ -1453,7 +1452,6 @@ ip_vs_add_service(struct netns_ipvs *ipvs, struct ip_vs_service_user_kern *u,
 		ret = ip_vs_bind_scheduler(svc, sched);
 		if (ret)
 			goto out_err;
-		sched = NULL;
 	}
 
 	ret = ip_vs_start_estimator(ipvs, &svc->stats);
@@ -1483,9 +1481,9 @@ ip_vs_add_service(struct netns_ipvs *ipvs, struct ip_vs_service_user_kern *u,
 
 	*svc_p = svc;
 
-	if (!ipvs->enable) {
+	if (!READ_ONCE(ipvs->enable)) {
 		/* Now there is a service - full throttle */
-		ipvs->enable = 1;
+		WRITE_ONCE(ipvs->enable, 1);
 
 		/* Start estimation for first time */
 		ip_vs_est_reload_start(ipvs);
@@ -4440,7 +4438,7 @@ int __net_init ip_vs_control_net_init(struct netns_ipvs *ipvs)
 	INIT_DELAYED_WORK(&ipvs->est_reload_work, est_reload_work_handler);
 
 	/* procfs stats */
-	ipvs->tot_stats = kzalloc(sizeof(*ipvs->tot_stats), GFP_KERNEL);
+	ipvs->tot_stats = kzalloc_obj(*ipvs->tot_stats);
 	if (!ipvs->tot_stats)
 		goto out;
 	if (ip_vs_stats_init_alloc(&ipvs->tot_stats->s) < 0)

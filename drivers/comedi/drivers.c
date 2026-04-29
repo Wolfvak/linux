@@ -101,7 +101,7 @@ int comedi_alloc_subdevices(struct comedi_device *dev, int num_subdevices)
 	if (num_subdevices < 1)
 		return -EINVAL;
 
-	s = kcalloc(num_subdevices, sizeof(*s), GFP_KERNEL);
+	s = kzalloc_objs(*s, num_subdevices);
 	if (!s)
 		return -ENOMEM;
 	dev->subdevices = s;
@@ -158,7 +158,7 @@ static void comedi_device_detach_cleanup(struct comedi_device *dev)
 	int i;
 	struct comedi_subdevice *s;
 
-	lockdep_assert_held(&dev->attach_lock);
+	lockdep_assert_held_write(&dev->attach_lock);
 	lockdep_assert_held(&dev->mutex);
 	if (dev->subdevices) {
 		for (i = 0; i < dev->n_subdevices; i++) {
@@ -196,16 +196,23 @@ static void comedi_device_detach_cleanup(struct comedi_device *dev)
 	comedi_clear_hw_dev(dev);
 }
 
-void comedi_device_detach(struct comedi_device *dev)
+void comedi_device_detach_locked(struct comedi_device *dev)
 {
+	lockdep_assert_held_write(&dev->attach_lock);
 	lockdep_assert_held(&dev->mutex);
 	comedi_device_cancel_all(dev);
-	down_write(&dev->attach_lock);
 	dev->attached = false;
 	dev->detach_count++;
 	if (dev->driver)
 		dev->driver->detach(dev);
 	comedi_device_detach_cleanup(dev);
+}
+
+void comedi_device_detach(struct comedi_device *dev)
+{
+	lockdep_assert_held(&dev->mutex);
+	down_write(&dev->attach_lock);
+	comedi_device_detach_locked(dev);
 	up_write(&dev->attach_lock);
 }
 
@@ -434,6 +441,13 @@ unsigned int comedi_bytes_per_scan_cmd(struct comedi_subdevice *s,
 }
 EXPORT_SYMBOL_GPL(comedi_bytes_per_scan_cmd);
 
+static unsigned int _comedi_bytes_per_scan(struct comedi_subdevice *s)
+{
+	struct comedi_cmd *cmd = &s->async->cmd;
+
+	return comedi_bytes_per_scan_cmd(s, cmd);
+}
+
 /**
  * comedi_bytes_per_scan() - Get length of asynchronous command "scan" in bytes
  * @s: COMEDI subdevice.
@@ -451,9 +465,16 @@ EXPORT_SYMBOL_GPL(comedi_bytes_per_scan_cmd);
  */
 unsigned int comedi_bytes_per_scan(struct comedi_subdevice *s)
 {
-	struct comedi_cmd *cmd = &s->async->cmd;
+	unsigned int num_bytes;
 
-	return comedi_bytes_per_scan_cmd(s, cmd);
+	if (comedi_get_is_subdevice_running(s)) {
+		num_bytes = _comedi_bytes_per_scan(s);
+		comedi_put_is_subdevice_running(s);
+	} else {
+		/* Use nomimal, single sample scan length. */
+		num_bytes = comedi_samples_to_bytes(s, 1);
+	}
+	return num_bytes;
 }
 EXPORT_SYMBOL_GPL(comedi_bytes_per_scan);
 
@@ -475,6 +496,17 @@ static unsigned int __comedi_nscans_left(struct comedi_subdevice *s,
 	return nscans;
 }
 
+static unsigned int _comedi_nscans_left(struct comedi_subdevice *s,
+					unsigned int nscans)
+{
+	if (nscans == 0) {
+		unsigned int nbytes = _comedi_buf_read_n_available(s);
+
+		nscans = nbytes / _comedi_bytes_per_scan(s);
+	}
+	return __comedi_nscans_left(s, nscans);
+}
+
 /**
  * comedi_nscans_left() - Return the number of scans left in the command
  * @s: COMEDI subdevice.
@@ -492,25 +524,18 @@ static unsigned int __comedi_nscans_left(struct comedi_subdevice *s,
 unsigned int comedi_nscans_left(struct comedi_subdevice *s,
 				unsigned int nscans)
 {
-	if (nscans == 0) {
-		unsigned int nbytes = comedi_buf_read_n_available(s);
-
-		nscans = nbytes / comedi_bytes_per_scan(s);
+	if (comedi_get_is_subdevice_running(s)) {
+		nscans = _comedi_nscans_left(s, nscans);
+		comedi_put_is_subdevice_running(s);
+	} else {
+		nscans = 0;
 	}
-	return __comedi_nscans_left(s, nscans);
+	return nscans;
 }
 EXPORT_SYMBOL_GPL(comedi_nscans_left);
 
-/**
- * comedi_nsamples_left() - Return the number of samples left in the command
- * @s: COMEDI subdevice.
- * @nsamples: The expected number of samples.
- *
- * Returns the number of samples remaining to complete the command, or the
- * specified expected number of samples (@nsamples), whichever is fewer.
- */
-unsigned int comedi_nsamples_left(struct comedi_subdevice *s,
-				  unsigned int nsamples)
+static unsigned int _comedi_nsamples_left(struct comedi_subdevice *s,
+					  unsigned int nsamples)
 {
 	struct comedi_async *async = s->async;
 	struct comedi_cmd *cmd = &async->cmd;
@@ -531,24 +556,34 @@ unsigned int comedi_nsamples_left(struct comedi_subdevice *s,
 		return samples_left;
 	return nsamples;
 }
-EXPORT_SYMBOL_GPL(comedi_nsamples_left);
 
 /**
- * comedi_inc_scan_progress() - Update scan progress in asynchronous command
+ * comedi_nsamples_left() - Return the number of samples left in the command
  * @s: COMEDI subdevice.
- * @num_bytes: Amount of data in bytes to increment scan progress.
+ * @nsamples: The expected number of samples.
  *
- * Increments the scan progress by the number of bytes specified by @num_bytes.
- * If the scan progress reaches or exceeds the scan length in bytes, reduce
- * it modulo the scan length in bytes and set the "end of scan" asynchronous
- * event flag (%COMEDI_CB_EOS) to be processed later.
+ * Returns the number of samples remaining to complete the command, or the
+ * specified expected number of samples (@nsamples), whichever is fewer.
  */
-void comedi_inc_scan_progress(struct comedi_subdevice *s,
-			      unsigned int num_bytes)
+unsigned int comedi_nsamples_left(struct comedi_subdevice *s,
+				  unsigned int nsamples)
+{
+	if (comedi_get_is_subdevice_running(s)) {
+		nsamples = _comedi_nsamples_left(s, nsamples);
+		comedi_put_is_subdevice_running(s);
+	} else {
+		nsamples = 0;
+	}
+	return nsamples;
+}
+EXPORT_SYMBOL_GPL(comedi_nsamples_left);
+
+void _comedi_inc_scan_progress(struct comedi_subdevice *s,
+			       unsigned int num_bytes)
 {
 	struct comedi_async *async = s->async;
 	struct comedi_cmd *cmd = &async->cmd;
-	unsigned int scan_length = comedi_bytes_per_scan(s);
+	unsigned int scan_length = _comedi_bytes_per_scan(s);
 
 	/* track the 'cur_chan' for non-SDF_PACKED subdevices */
 	if (!(s->subdev_flags & SDF_PACKED)) {
@@ -569,7 +604,42 @@ void comedi_inc_scan_progress(struct comedi_subdevice *s,
 		async->events |= COMEDI_CB_EOS;
 	}
 }
+
+/**
+ * comedi_inc_scan_progress() - Update scan progress in asynchronous command
+ * @s: COMEDI subdevice.
+ * @num_bytes: Amount of data in bytes to increment scan progress.
+ *
+ * Increments the scan progress by the number of bytes specified by @num_bytes.
+ * If the scan progress reaches or exceeds the scan length in bytes, reduce
+ * it modulo the scan length in bytes and set the "end of scan" asynchronous
+ * event flag (%COMEDI_CB_EOS) to be processed later.
+ */
+void comedi_inc_scan_progress(struct comedi_subdevice *s,
+			      unsigned int num_bytes)
+{
+	if (comedi_get_is_subdevice_running(s)) {
+		_comedi_inc_scan_progress(s, num_bytes);
+		comedi_put_is_subdevice_running(s);
+	}
+}
 EXPORT_SYMBOL_GPL(comedi_inc_scan_progress);
+
+static unsigned int _comedi_handle_events(struct comedi_device *dev,
+					  struct comedi_subdevice *s)
+{
+	unsigned int events = s->async->events;
+
+	if (events == 0)
+		return events;
+
+	if ((events & COMEDI_CB_CANCEL_MASK) && s->cancel)
+		s->cancel(dev, s);
+
+	_comedi_event(dev, s);
+
+	return events;
+}
 
 /**
  * comedi_handle_events() - Handle events and possibly stop acquisition
@@ -590,16 +660,14 @@ EXPORT_SYMBOL_GPL(comedi_inc_scan_progress);
 unsigned int comedi_handle_events(struct comedi_device *dev,
 				  struct comedi_subdevice *s)
 {
-	unsigned int events = s->async->events;
+	unsigned int events;
 
-	if (events == 0)
-		return events;
-
-	if ((events & COMEDI_CB_CANCEL_MASK) && s->cancel)
-		s->cancel(dev, s);
-
-	comedi_event(dev, s);
-
+	if (comedi_get_is_subdevice_running(s)) {
+		events = _comedi_handle_events(dev, s);
+		comedi_put_is_subdevice_running(s);
+	} else {
+		events = 0;
+	}
 	return events;
 }
 EXPORT_SYMBOL_GPL(comedi_handle_events);
@@ -613,10 +681,8 @@ static int insn_rw_emulate_bits(struct comedi_device *dev,
 	unsigned int chan = CR_CHAN(insn->chanspec);
 	unsigned int base_chan = (chan < 32) ? 0 : chan;
 	unsigned int _data[2];
+	unsigned int i;
 	int ret;
-
-	if (insn->n == 0)
-		return 0;
 
 	memset(_data, 0, sizeof(_data));
 	memset(&_insn, 0, sizeof(_insn));
@@ -628,18 +694,21 @@ static int insn_rw_emulate_bits(struct comedi_device *dev,
 	if (insn->insn == INSN_WRITE) {
 		if (!(s->subdev_flags & SDF_WRITABLE))
 			return -EINVAL;
-		_data[0] = 1U << (chan - base_chan);		     /* mask */
-		_data[1] = data[0] ? (1U << (chan - base_chan)) : 0; /* bits */
+		_data[0] = 1U << (chan - base_chan);		/* mask */
+	}
+	for (i = 0; i < insn->n; i++) {
+		if (insn->insn == INSN_WRITE)
+			_data[1] = data[i] ? _data[0] : 0;	/* bits */
+
+		ret = s->insn_bits(dev, s, &_insn, _data);
+		if (ret < 0)
+			return ret;
+
+		if (insn->insn == INSN_READ)
+			data[i] = (_data[1] >> (chan - base_chan)) & 1;
 	}
 
-	ret = s->insn_bits(dev, s, &_insn, _data);
-	if (ret < 0)
-		return ret;
-
-	if (insn->insn == INSN_READ)
-		data[0] = (_data[1] >> (chan - base_chan)) & 1;
-
-	return 1;
+	return insn->n;
 }
 
 static int __comedi_device_postconfig_async(struct comedi_device *dev,
@@ -664,11 +733,12 @@ static int __comedi_device_postconfig_async(struct comedi_device *dev,
 		dev_warn(dev->class_dev,
 			 "async subdevices should have a cancel() function\n");
 
-	async = kzalloc(sizeof(*async), GFP_KERNEL);
+	async = kzalloc_obj(*async);
 	if (!async)
 		return -ENOMEM;
 
 	init_waitqueue_head(&async->wait_head);
+	init_completion(&async->run_complete);
 	s->async = async;
 
 	async->max_bufsize = comedi_default_buf_maxsize_kb * 1024;
@@ -992,6 +1062,14 @@ int comedi_device_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 		module_put(driv->module);
 		ret = -EIO;
 		goto out;
+	}
+	if (IS_ENABLED(CONFIG_LOCKDEP)) {
+		/*
+		 * dev->spinlock is for private use by the attached low-level
+		 * driver.  Reinitialize it to stop lock-dependency tracking
+		 * between attachments to different low-level drivers.
+		 */
+		spin_lock_init(&dev->spinlock);
 	}
 	dev->driver = driv;
 	dev->board_name = dev->board_ptr ? *(const char **)dev->board_ptr

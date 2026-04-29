@@ -23,6 +23,9 @@
  *
  */
 
+#include <linux/log2.h>
+#include <linux/math.h>
+
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_edid.h>
@@ -30,8 +33,6 @@
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 
-#include "i915_reg.h"
-#include "i915_utils.h"
 #include "intel_atomic.h"
 #include "intel_audio.h"
 #include "intel_connector.h"
@@ -39,7 +40,9 @@
 #include "intel_ddi.h"
 #include "intel_de.h"
 #include "intel_display_driver.h"
+#include "intel_display_regs.h"
 #include "intel_display_types.h"
+#include "intel_display_utils.h"
 #include "intel_dp.h"
 #include "intel_dp_hdcp.h"
 #include "intel_dp_link_training.h"
@@ -135,6 +138,7 @@ static bool intel_dp_mst_inc_active_streams(struct intel_dp *intel_dp)
 	return intel_dp->mst.active_streams++ == 0;
 }
 
+/* TODO: return a bpp_x16 value */
 static int intel_dp_mst_max_dpt_bpp(const struct intel_crtc_state *crtc_state,
 				    bool dsc)
 {
@@ -176,26 +180,16 @@ static int intel_dp_mst_bw_overhead(const struct intel_crtc_state *crtc_state,
 	const struct drm_display_mode *adjusted_mode =
 		&crtc_state->hw.adjusted_mode;
 	unsigned long flags = DRM_DP_BW_OVERHEAD_MST;
-	int overhead;
 
-	flags |= intel_dp_is_uhbr(crtc_state) ? DRM_DP_BW_OVERHEAD_UHBR : 0;
 	flags |= ssc ? DRM_DP_BW_OVERHEAD_SSC_REF_CLK : 0;
 	flags |= crtc_state->fec_enable ? DRM_DP_BW_OVERHEAD_FEC : 0;
 
-	if (dsc_slice_count)
-		flags |= DRM_DP_BW_OVERHEAD_DSC;
-
-	overhead = drm_dp_bw_overhead(crtc_state->lane_count,
-				      adjusted_mode->hdisplay,
-				      dsc_slice_count,
-				      bpp_x16,
-				      flags);
-
-	/*
-	 * TODO: clarify whether a minimum required by the fixed FEC overhead
-	 * in the bspec audio programming sequence is required here.
-	 */
-	return max(overhead, intel_dp_bw_fec_overhead(crtc_state->fec_enable));
+	return intel_dp_link_bw_overhead(crtc_state->port_clock,
+					 crtc_state->lane_count,
+					 adjusted_mode->hdisplay,
+					 dsc_slice_count,
+					 bpp_x16,
+					 flags);
 }
 
 static void intel_dp_mst_compute_m_n(const struct intel_crtc_state *crtc_state,
@@ -241,6 +235,15 @@ static int intel_dp_mst_dsc_get_slice_count(const struct intel_connector *connec
 					    num_joined_pipes);
 }
 
+static void mst_stream_update_slots(const struct intel_crtc_state *crtc_state,
+				    struct drm_dp_mst_topology_state *topology_state)
+{
+	u8 link_coding_cap = intel_dp_is_uhbr(crtc_state) ?
+		DP_CAP_ANSI_128B132B : DP_CAP_ANSI_8B10B;
+
+	drm_dp_mst_update_slots(topology_state, link_coding_cap);
+}
+
 int intel_dp_mtp_tu_compute_config(struct intel_dp *intel_dp,
 				   struct intel_crtc_state *crtc_state,
 				   struct drm_connector_state *conn_state,
@@ -263,6 +266,12 @@ int intel_dp_mtp_tu_compute_config(struct intel_dp *intel_dp,
 					   fxp_q4_to_frac(max_bpp_x16) ||
 					   fxp_q4_to_frac(bpp_step_x16)));
 
+	if (!bpp_step_x16) {
+		/* Allow using zero step only to indicate single try for a given bpp. */
+		drm_WARN_ON(display->drm, min_bpp_x16 != max_bpp_x16);
+		bpp_step_x16 = 1;
+	}
+
 	if (is_mst) {
 		mst_state = drm_atomic_get_mst_topology_state(state, &intel_dp->mst.mgr);
 		if (IS_ERR(mst_state))
@@ -270,14 +279,26 @@ int intel_dp_mtp_tu_compute_config(struct intel_dp *intel_dp,
 
 		mst_state->pbn_div = drm_dp_get_vc_payload_bw(crtc_state->port_clock,
 							      crtc_state->lane_count);
+
+		mst_stream_update_slots(crtc_state, mst_state);
 	}
 
-	if (dsc) {
-		if (!intel_dp_supports_fec(intel_dp, connector, crtc_state))
-			return -EINVAL;
-
-		crtc_state->fec_enable = !intel_dp_is_uhbr(crtc_state);
-	}
+	/*
+	 * NOTE: The following must reset crtc_state->fec_enable for UHBR/DSC
+	 * after it was set by intel_dp_dsc_compute_config() ->
+	 * intel_dp_needs_8b10b_fec().
+	 */
+	crtc_state->fec_enable = intel_dp_needs_8b10b_fec(crtc_state, dsc);
+	/*
+	 * If FEC gets enabled only because of another compressed stream, FEC
+	 * may not be supported for this uncompressed stream on the whole link
+	 * path until the sink DPRX. In this case a downstream branch device
+	 * will disable FEC for the uncompressed stream as expected and so the
+	 * FEC support doesn't need to be checked for this uncompressed stream.
+	 */
+	if (crtc_state->fec_enable && dsc &&
+	    !intel_dp_supports_fec(intel_dp, connector, crtc_state))
+		return -EINVAL;
 
 	max_dpt_bpp_x16 = fxp_q4_from_int(intel_dp_mst_max_dpt_bpp(crtc_state, dsc));
 	if (max_dpt_bpp_x16 && max_bpp_x16 > max_dpt_bpp_x16) {
@@ -298,15 +319,23 @@ int intel_dp_mtp_tu_compute_config(struct intel_dp *intel_dp,
 		}
 	}
 
+	drm_WARN_ON(display->drm, min_bpp_x16 % bpp_step_x16 || max_bpp_x16 % bpp_step_x16);
+
 	for (bpp_x16 = max_bpp_x16; bpp_x16 >= min_bpp_x16; bpp_x16 -= bpp_step_x16) {
 		int local_bw_overhead;
 		int link_bpp_x16;
 
 		drm_dbg_kms(display->drm, "Trying bpp " FXP_Q4_FMT "\n", FXP_Q4_ARGS(bpp_x16));
 
+		if (dsc && !intel_dp_dsc_valid_compressed_bpp(intel_dp, bpp_x16)) {
+			/* SST must have validated the single bpp tried here already earlier. */
+			drm_WARN_ON(display->drm, !is_mst);
+			continue;
+		}
+
 		link_bpp_x16 = dsc ? bpp_x16 :
-			fxp_q4_from_int(intel_dp_output_bpp(crtc_state->output_format,
-							    fxp_q4_to_int(bpp_x16)));
+			intel_dp_output_format_link_bpp_x16(crtc_state->output_format,
+							    fxp_q4_to_int(bpp_x16));
 
 		local_bw_overhead = intel_dp_mst_bw_overhead(crtc_state,
 							     false, dsc_slice_count, link_bpp_x16);
@@ -367,6 +396,10 @@ int intel_dp_mtp_tu_compute_config(struct intel_dp *intel_dp,
 			slots = drm_dp_atomic_find_time_slots(state, &intel_dp->mst.mgr,
 							      connector->mst.port,
 							      dfixed_trunc(pbn));
+
+			/* TODO: Check this already in drm_dp_atomic_find_time_slots(). */
+			if (slots > mst_state->total_avail_slots)
+				slots = -EINVAL;
 		} else {
 			/* Same as above for remote_tu */
 			crtc_state->dp_m_n.tu = ALIGN(crtc_state->dp_m_n.tu,
@@ -386,10 +419,6 @@ int intel_dp_mtp_tu_compute_config(struct intel_dp *intel_dp,
 
 			break;
 		}
-
-		/* Allow using zero step to indicate one try */
-		if (!bpp_step_x16)
-			break;
 	}
 
 	if (slots < 0) {
@@ -434,74 +463,21 @@ static int mst_stream_dsc_compute_link_config(struct intel_dp *intel_dp,
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 	struct intel_connector *connector = to_intel_connector(conn_state->connector);
-	int num_bpc;
-	u8 dsc_bpc[3] = {};
-	int min_bpp, max_bpp, sink_min_bpp, sink_max_bpp;
-	int min_compressed_bpp, max_compressed_bpp;
 
-	max_bpp = limits->pipe.max_bpp;
-	min_bpp = limits->pipe.min_bpp;
+	crtc_state->pipe_bpp = limits->pipe.max_bpp;
 
-	num_bpc = drm_dp_dsc_sink_supported_input_bpcs(connector->dp.dsc_dpcd,
-						       dsc_bpc);
-
-	drm_dbg_kms(display->drm, "DSC Source supported min bpp %d max bpp %d\n",
-		    min_bpp, max_bpp);
-
-	sink_min_bpp = min_array(dsc_bpc, num_bpc) * 3;
-	sink_max_bpp = max_array(dsc_bpc, num_bpc) * 3;
-
-	drm_dbg_kms(display->drm, "DSC Sink supported min bpp %d max bpp %d\n",
-		    sink_min_bpp, sink_max_bpp);
-
-	if (min_bpp < sink_min_bpp)
-		min_bpp = sink_min_bpp;
-
-	if (max_bpp > sink_max_bpp)
-		max_bpp = sink_max_bpp;
-
-	crtc_state->pipe_bpp = max_bpp;
-
-	max_compressed_bpp = fxp_q4_to_int(limits->link.max_bpp_x16);
-	min_compressed_bpp = fxp_q4_to_int_roundup(limits->link.min_bpp_x16);
-
-	drm_dbg_kms(display->drm, "DSC Sink supported compressed min bpp %d compressed max bpp %d\n",
-		    min_compressed_bpp, max_compressed_bpp);
-
-	/* Align compressed bpps according to our own constraints */
-	max_compressed_bpp = intel_dp_dsc_nearest_valid_bpp(display, max_compressed_bpp,
-							    crtc_state->pipe_bpp);
-	min_compressed_bpp = intel_dp_dsc_nearest_valid_bpp(display, min_compressed_bpp,
-							    crtc_state->pipe_bpp);
+	drm_dbg_kms(display->drm,
+		    "DSC Sink supported compressed min bpp " FXP_Q4_FMT " compressed max bpp " FXP_Q4_FMT "\n",
+		    FXP_Q4_ARGS(limits->link.min_bpp_x16), FXP_Q4_ARGS(limits->link.max_bpp_x16));
 
 	crtc_state->lane_count = limits->max_lane_count;
 	crtc_state->port_clock = limits->max_rate;
 
 	return intel_dp_mtp_tu_compute_config(intel_dp, crtc_state, conn_state,
-					      fxp_q4_from_int(min_compressed_bpp),
-					      fxp_q4_from_int(max_compressed_bpp),
-					      fxp_q4_from_int(1), true);
-}
-
-static int mst_stream_update_slots(struct intel_dp *intel_dp,
-				   struct intel_crtc_state *crtc_state,
-				   struct drm_connector_state *conn_state)
-{
-	struct intel_display *display = to_intel_display(intel_dp);
-	struct drm_dp_mst_topology_mgr *mgr = &intel_dp->mst.mgr;
-	struct drm_dp_mst_topology_state *topology_state;
-	u8 link_coding_cap = intel_dp_is_uhbr(crtc_state) ?
-		DP_CAP_ANSI_128B132B : DP_CAP_ANSI_8B10B;
-
-	topology_state = drm_atomic_get_mst_topology_state(conn_state->state, mgr);
-	if (IS_ERR(topology_state)) {
-		drm_dbg_kms(display->drm, "slot update failed\n");
-		return PTR_ERR(topology_state);
-	}
-
-	drm_dp_mst_update_slots(topology_state, link_coding_cap);
-
-	return 0;
+					      limits->link.min_bpp_x16,
+					      limits->link.max_bpp_x16,
+					      intel_dp_dsc_bpp_step_x16(connector),
+					      true);
 }
 
 static int mode_hblank_period_ns(const struct drm_display_mode *mode)
@@ -599,12 +575,15 @@ adjust_limits_for_dsc_hblank_expansion_quirk(struct intel_dp *intel_dp,
 
 static bool
 mst_stream_compute_config_limits(struct intel_dp *intel_dp,
-				 struct intel_connector *connector,
+				 struct drm_connector_state *conn_state,
 				 struct intel_crtc_state *crtc_state,
 				 bool dsc,
 				 struct link_config_limits *limits)
 {
-	if (!intel_dp_compute_config_limits(intel_dp, connector,
+	struct intel_connector *connector =
+		to_intel_connector(conn_state->connector);
+
+	if (!intel_dp_compute_config_limits(intel_dp, conn_state,
 					    crtc_state, false, dsc,
 					    limits))
 		return false;
@@ -653,7 +632,7 @@ static int mst_stream_compute_config(struct intel_encoder *encoder,
 	joiner_needs_dsc = intel_dp_joiner_needs_dsc(display, num_joined_pipes);
 
 	dsc_needed = joiner_needs_dsc || intel_dp->force_dsc_en ||
-		!mst_stream_compute_config_limits(intel_dp, connector,
+		!mst_stream_compute_config_limits(intel_dp, conn_state,
 						  pipe_config, false, &limits);
 
 	if (!dsc_needed) {
@@ -679,7 +658,7 @@ static int mst_stream_compute_config(struct intel_encoder *encoder,
 			    str_yes_no(intel_dp->force_dsc_en));
 
 
-		if (!mst_stream_compute_config_limits(intel_dp, connector,
+		if (!mst_stream_compute_config_limits(intel_dp, conn_state,
 						      pipe_config, true,
 						      &limits))
 			return -EINVAL;
@@ -706,10 +685,6 @@ static int mst_stream_compute_config(struct intel_encoder *encoder,
 						  pipe_config->dp_m_n.tu);
 	}
 
-	if (ret)
-		return ret;
-
-	ret = mst_stream_update_slots(intel_dp, pipe_config, conn_state);
 	if (ret)
 		return ret;
 
@@ -800,14 +775,14 @@ static u8 get_pipes_downstream_of_mst_port(struct intel_atomic_state *state,
 	return mask;
 }
 
-static int intel_dp_mst_check_fec_change(struct intel_atomic_state *state,
+static int intel_dp_mst_check_dsc_change(struct intel_atomic_state *state,
 					 struct drm_dp_mst_topology_mgr *mst_mgr,
 					 struct intel_link_bw_limits *limits)
 {
 	struct intel_display *display = to_intel_display(state);
 	struct intel_crtc *crtc;
 	u8 mst_pipe_mask;
-	u8 fec_pipe_mask = 0;
+	u8 dsc_pipe_mask = 0;
 	int ret;
 
 	mst_pipe_mask = get_pipes_downstream_of_mst_port(state, mst_mgr, NULL);
@@ -820,16 +795,16 @@ static int intel_dp_mst_check_fec_change(struct intel_atomic_state *state,
 		if (drm_WARN_ON(display->drm, !crtc_state))
 			return -EINVAL;
 
-		if (crtc_state->fec_enable)
-			fec_pipe_mask |= BIT(crtc->pipe);
+		if (intel_dsc_enabled_on_link(crtc_state))
+			dsc_pipe_mask |= BIT(crtc->pipe);
 	}
 
-	if (!fec_pipe_mask || mst_pipe_mask == fec_pipe_mask)
+	if (!dsc_pipe_mask || mst_pipe_mask == dsc_pipe_mask)
 		return 0;
 
-	limits->force_fec_pipes |= mst_pipe_mask;
+	limits->link_dsc_pipes |= mst_pipe_mask;
 
-	ret = intel_modeset_pipes_in_mask_early(state, "MST FEC",
+	ret = intel_modeset_pipes_in_mask_early(state, "MST DSC",
 						mst_pipe_mask);
 
 	return ret ? : -EAGAIN;
@@ -883,7 +858,7 @@ int intel_dp_mst_atomic_check_link(struct intel_atomic_state *state,
 	int i;
 
 	for_each_new_mst_mgr_in_state(&state->base, mgr, mst_state, i) {
-		ret = intel_dp_mst_check_fec_change(state, mgr, limits);
+		ret = intel_dp_mst_check_dsc_change(state, mgr, limits);
 		if (ret)
 			return ret;
 
@@ -1447,10 +1422,10 @@ mst_connector_mode_valid_ctx(struct drm_connector *_connector,
 	const int min_bpp = 18;
 	int max_dotclk = display->cdclk.max_dotclk_freq;
 	int max_rate, mode_rate, max_lanes, max_link_clock;
+	unsigned long bw_overhead_flags =
+		DRM_DP_BW_OVERHEAD_MST | DRM_DP_BW_OVERHEAD_SSC_REF_CLK;
 	int ret;
 	bool dsc = false;
-	u16 dsc_max_compressed_bpp = 0;
-	u8 dsc_slice_count = 0;
 	int target_clock = mode->clock;
 	int num_joined_pipes;
 
@@ -1478,7 +1453,10 @@ mst_connector_mode_valid_ctx(struct drm_connector *_connector,
 
 	max_rate = intel_dp_max_link_data_rate(intel_dp,
 					       max_link_clock, max_lanes);
-	mode_rate = intel_dp_link_required(mode->clock, min_bpp);
+	mode_rate = intel_dp_link_required(max_link_clock, max_lanes,
+					   mode->clock, mode->hdisplay,
+					   fxp_q4_from_int(min_bpp),
+					   bw_overhead_flags);
 
 	/*
 	 * TODO:
@@ -1506,31 +1484,22 @@ mst_connector_mode_valid_ctx(struct drm_connector *_connector,
 		return 0;
 	}
 
-	if (intel_dp_has_dsc(connector)) {
+	if (intel_dp_has_dsc(connector) && drm_dp_sink_supports_fec(connector->dp.fec_capability)) {
 		/*
 		 * TBD pass the connector BPC,
 		 * for now U8_MAX so that max BPC on that platform would be picked
 		 */
 		int pipe_bpp = intel_dp_dsc_compute_max_bpp(connector, U8_MAX);
 
-		if (drm_dp_sink_supports_fec(connector->dp.fec_capability)) {
-			dsc_max_compressed_bpp =
-				intel_dp_dsc_get_max_compressed_bpp(display,
-								    max_link_clock,
-								    max_lanes,
-								    target_clock,
-								    mode->hdisplay,
-								    num_joined_pipes,
-								    INTEL_OUTPUT_FORMAT_RGB,
-								    pipe_bpp, 64);
-			dsc_slice_count =
-				intel_dp_dsc_get_slice_count(connector,
-							     target_clock,
-							     mode->hdisplay,
-							     num_joined_pipes);
-		}
+		if (!drm_dp_is_uhbr_rate(max_link_clock))
+			bw_overhead_flags |= DRM_DP_BW_OVERHEAD_FEC;
 
-		dsc = dsc_max_compressed_bpp && dsc_slice_count;
+		dsc = intel_dp_mode_valid_with_dsc(connector,
+						   max_link_clock, max_lanes,
+						   target_clock, mode->hdisplay,
+						   num_joined_pipes,
+						   INTEL_OUTPUT_FORMAT_RGB, pipe_bpp,
+						   bw_overhead_flags);
 	}
 
 	if (intel_dp_joiner_needs_dsc(display, num_joined_pipes) && !dsc) {
@@ -1647,6 +1616,7 @@ intel_dp_mst_read_decompression_port_dsc_caps(struct intel_dp *intel_dp,
 					      struct intel_connector *connector)
 {
 	u8 dpcd_caps[DP_RECEIVER_CAP_SIZE];
+	struct drm_dp_desc desc;
 
 	if (!connector->dp.dsc_decompression_aux)
 		return;
@@ -1654,7 +1624,13 @@ intel_dp_mst_read_decompression_port_dsc_caps(struct intel_dp *intel_dp,
 	if (drm_dp_read_dpcd_caps(connector->dp.dsc_decompression_aux, dpcd_caps) < 0)
 		return;
 
-	intel_dp_get_dsc_sink_cap(dpcd_caps[DP_DPCD_REV], connector);
+	if (drm_dp_read_desc(connector->dp.dsc_decompression_aux, &desc,
+			     drm_dp_is_branch(dpcd_caps)) < 0)
+		return;
+
+	intel_dp_get_dsc_sink_cap(dpcd_caps[DP_DPCD_REV],
+				  &desc, drm_dp_is_branch(dpcd_caps),
+				  connector);
 }
 
 static bool detect_dsc_hblank_expansion_quirk(const struct intel_connector *connector)
@@ -1789,7 +1765,7 @@ mst_stream_encoder_create(struct intel_digital_port *dig_port, enum pipe pipe)
 	struct intel_dp_mst_encoder *intel_mst;
 	struct intel_encoder *encoder;
 
-	intel_mst = kzalloc(sizeof(*intel_mst), GFP_KERNEL);
+	intel_mst = kzalloc_obj(*intel_mst);
 
 	if (!intel_mst)
 		return NULL;

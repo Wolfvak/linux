@@ -53,7 +53,7 @@ MODULE_PARM_DESC(led_id,
  *
  * There are several buses present on the WIL6210 card.
  * Same memory areas are visible at different address on
- * the different busses. There are 3 main bus masters:
+ * the different buses. There are 3 main bus masters:
  *  - MAC CPU (ucode)
  *  - User CPU (firmware)
  *  - AHB (host)
@@ -1080,7 +1080,7 @@ static void wmi_evt_connect(struct wil6210_vif *vif, int id, void *d, int len)
 			goto out;
 		}
 
-		sinfo = kzalloc(sizeof(*sinfo), GFP_KERNEL);
+		sinfo = kzalloc_obj(*sinfo);
 		if (!sinfo) {
 			rc = -ENOMEM;
 			goto out;

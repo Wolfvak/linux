@@ -24,6 +24,7 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <time.h>
 
 #include <linux/genetlink.h>
 #include <linux/taskstats.h>
@@ -194,75 +195,225 @@ static int get_family_id(int sd)
 #define average_ms(t, c) (t / 1000000ULL / (c ? c : 1))
 #define delay_ms(t) (t / 1000000ULL)
 
+/*
+ * Format __kernel_timespec to human readable string (YYYY-MM-DD HH:MM:SS)
+ * Returns formatted string or "N/A" if timestamp is zero
+ */
+static const char *format_timespec(struct __kernel_timespec *ts)
+{
+	static char buffer[32];
+	struct tm tm_info;
+	__kernel_time_t time_sec;
+
+	/* Check if timestamp is zero (not set) */
+	if (ts->tv_sec == 0 && ts->tv_nsec == 0)
+		return "N/A";
+
+	time_sec = ts->tv_sec;
+
+	/* Use thread-safe localtime_r */
+	if (localtime_r(&time_sec, &tm_info) == NULL)
+		return "N/A";
+
+	snprintf(buffer, sizeof(buffer), "%04d-%02d-%02dT%02d:%02d:%02d",
+		tm_info.tm_year + 1900,
+		tm_info.tm_mon + 1,
+		tm_info.tm_mday,
+		tm_info.tm_hour,
+		tm_info.tm_min,
+		tm_info.tm_sec);
+
+	return buffer;
+}
+
+/*
+ * Version compatibility note:
+ * Field availability depends on taskstats version (t->version),
+ * corresponding to TASKSTATS_VERSION in kernel headers
+ * see include/uapi/linux/taskstats.h
+ *
+ * Version feature mapping:
+ * version >= 11  - supports COMPACT statistics
+ * version >= 13  - supports WPCOPY statistics
+ * version >= 14  - supports IRQ statistics
+ * version >= 16  - supports *_max and *_min delay statistics
+ * version >= 17  - supports delay max timestamp statistics
+ *
+ * Always verify version before accessing version-dependent fields
+ * to maintain backward compatibility.
+ */
+#define PRINT_CPU_DELAY(version, t) \
+	do { \
+		if (version >= 17) { \
+			printf("%-10s%15s%15s%15s%15s%15s%15s%15s%25s\n", \
+				"CPU", "count", "real total", "virtual total", \
+				"delay total", "delay average", "delay max", \
+				"delay min", "delay max timestamp"); \
+			printf("          %15llu%15llu%15llu%15llu%15.3fms%13.6fms%13.6fms%23s\n", \
+				(unsigned long long)(t)->cpu_count, \
+				(unsigned long long)(t)->cpu_run_real_total, \
+				(unsigned long long)(t)->cpu_run_virtual_total, \
+				(unsigned long long)(t)->cpu_delay_total, \
+				average_ms((double)(t)->cpu_delay_total, (t)->cpu_count), \
+				delay_ms((double)(t)->cpu_delay_max), \
+				delay_ms((double)(t)->cpu_delay_min), \
+				format_timespec(&(t)->cpu_delay_max_ts)); \
+		} else if (version >= 16) { \
+			printf("%-10s%15s%15s%15s%15s%15s%15s%15s\n", \
+				"CPU", "count", "real total", "virtual total", \
+				"delay total", "delay average", "delay max", "delay min"); \
+			printf("          %15llu%15llu%15llu%15llu%15.3fms%13.6fms%13.6fms\n", \
+				(unsigned long long)(t)->cpu_count, \
+				(unsigned long long)(t)->cpu_run_real_total, \
+				(unsigned long long)(t)->cpu_run_virtual_total, \
+				(unsigned long long)(t)->cpu_delay_total, \
+				average_ms((double)(t)->cpu_delay_total, (t)->cpu_count), \
+				delay_ms((double)(t)->cpu_delay_max), \
+				delay_ms((double)(t)->cpu_delay_min)); \
+		} else { \
+			printf("%-10s%15s%15s%15s%15s%15s\n", \
+				"CPU", "count", "real total", "virtual total", \
+				"delay total", "delay average"); \
+			printf("          %15llu%15llu%15llu%15llu%15.3fms\n", \
+				(unsigned long long)(t)->cpu_count, \
+				(unsigned long long)(t)->cpu_run_real_total, \
+				(unsigned long long)(t)->cpu_run_virtual_total, \
+				(unsigned long long)(t)->cpu_delay_total, \
+				average_ms((double)(t)->cpu_delay_total, (t)->cpu_count)); \
+		} \
+	} while (0)
+#define PRINT_FILED_DELAY(name, version, t, count, total, max, min) \
+	do { \
+		if (version >= 16) { \
+			printf("%-10s%15s%15s%15s%15s%15s\n", \
+				name, "count", "delay total", "delay average", \
+				"delay max", "delay min"); \
+			printf("          %15llu%15llu%15.3fms%13.6fms%13.6fms\n", \
+				(unsigned long long)(t)->count, \
+				(unsigned long long)(t)->total, \
+				average_ms((double)(t)->total, (t)->count), \
+				delay_ms((double)(t)->max), \
+				delay_ms((double)(t)->min)); \
+		} else { \
+			printf("%-10s%15s%15s%15s\n", \
+				name, "count", "delay total", "delay average"); \
+			printf("          %15llu%15llu%15.3fms\n", \
+				(unsigned long long)(t)->count, \
+				(unsigned long long)(t)->total, \
+				average_ms((double)(t)->total, (t)->count)); \
+		} \
+	} while (0)
+
+#define PRINT_FILED_DELAY_WITH_TS(name, version, t, count, total, max, min, max_ts) \
+	do { \
+		if (version >= 17) { \
+			printf("%-10s%15s%15s%15s%15s%15s%25s\n", \
+				name, "count", "delay total", "delay average", \
+				"delay max", "delay min", "delay max timestamp"); \
+			printf("          %15llu%15llu%15.3fms%13.6fms%13.6fms%23s\n", \
+				(unsigned long long)(t)->count, \
+				(unsigned long long)(t)->total, \
+				average_ms((double)(t)->total, (t)->count), \
+				delay_ms((double)(t)->max), \
+				delay_ms((double)(t)->min), \
+				format_timespec(&(t)->max_ts)); \
+		} else if (version >= 16) { \
+			printf("%-10s%15s%15s%15s%15s%15s\n", \
+				name, "count", "delay total", "delay average", \
+				"delay max", "delay min"); \
+			printf("          %15llu%15llu%15.3fms%13.6fms%13.6fms\n", \
+				(unsigned long long)(t)->count, \
+				(unsigned long long)(t)->total, \
+				average_ms((double)(t)->total, (t)->count), \
+				delay_ms((double)(t)->max), \
+				delay_ms((double)(t)->min)); \
+		} else { \
+			printf("%-10s%15s%15s%15s\n", \
+				name, "count", "delay total", "delay average"); \
+			printf("          %15llu%15llu%15.3fms\n", \
+				(unsigned long long)(t)->count, \
+				(unsigned long long)(t)->total, \
+				average_ms((double)(t)->total, (t)->count)); \
+		} \
+	} while (0)
+
 static void print_delayacct(struct taskstats *t)
 {
-	printf("\n\nCPU   %15s%15s%15s%15s%15s%15s%15s\n"
-	       "      %15llu%15llu%15llu%15llu%15.3fms%13.6fms%13.6fms\n"
-	       "IO    %15s%15s%15s%15s%15s\n"
-	       "      %15llu%15llu%15.3fms%13.6fms%13.6fms\n"
-	       "SWAP  %15s%15s%15s%15s%15s\n"
-	       "      %15llu%15llu%15.3fms%13.6fms%13.6fms\n"
-	       "RECLAIM  %12s%15s%15s%15s%15s\n"
-	       "      %15llu%15llu%15.3fms%13.6fms%13.6fms\n"
-	       "THRASHING%12s%15s%15s%15s%15s\n"
-	       "      %15llu%15llu%15.3fms%13.6fms%13.6fms\n"
-	       "COMPACT  %12s%15s%15s%15s%15s\n"
-	       "      %15llu%15llu%15.3fms%13.6fms%13.6fms\n"
-	       "WPCOPY   %12s%15s%15s%15s%15s\n"
-	       "      %15llu%15llu%15.3fms%13.6fms%13.6fms\n"
-	       "IRQ   %15s%15s%15s%15s%15s\n"
-	       "      %15llu%15llu%15.3fms%13.6fms%13.6fms\n",
-	       "count", "real total", "virtual total",
-	       "delay total", "delay average", "delay max", "delay min",
-	       (unsigned long long)t->cpu_count,
-	       (unsigned long long)t->cpu_run_real_total,
-	       (unsigned long long)t->cpu_run_virtual_total,
-	       (unsigned long long)t->cpu_delay_total,
-	       average_ms((double)t->cpu_delay_total, t->cpu_count),
-	       delay_ms((double)t->cpu_delay_max),
-	       delay_ms((double)t->cpu_delay_min),
-	       "count", "delay total", "delay average", "delay max", "delay min",
-	       (unsigned long long)t->blkio_count,
-	       (unsigned long long)t->blkio_delay_total,
-	       average_ms((double)t->blkio_delay_total, t->blkio_count),
-	       delay_ms((double)t->blkio_delay_max),
-	       delay_ms((double)t->blkio_delay_min),
-	       "count", "delay total", "delay average", "delay max", "delay min",
-	       (unsigned long long)t->swapin_count,
-	       (unsigned long long)t->swapin_delay_total,
-	       average_ms((double)t->swapin_delay_total, t->swapin_count),
-	       delay_ms((double)t->swapin_delay_max),
-	       delay_ms((double)t->swapin_delay_min),
-	       "count", "delay total", "delay average", "delay max", "delay min",
-	       (unsigned long long)t->freepages_count,
-	       (unsigned long long)t->freepages_delay_total,
-	       average_ms((double)t->freepages_delay_total, t->freepages_count),
-	       delay_ms((double)t->freepages_delay_max),
-	       delay_ms((double)t->freepages_delay_min),
-	       "count", "delay total", "delay average", "delay max", "delay min",
-	       (unsigned long long)t->thrashing_count,
-	       (unsigned long long)t->thrashing_delay_total,
-	       average_ms((double)t->thrashing_delay_total, t->thrashing_count),
-	       delay_ms((double)t->thrashing_delay_max),
-	       delay_ms((double)t->thrashing_delay_min),
-	       "count", "delay total", "delay average", "delay max", "delay min",
-	       (unsigned long long)t->compact_count,
-	       (unsigned long long)t->compact_delay_total,
-	       average_ms((double)t->compact_delay_total, t->compact_count),
-	       delay_ms((double)t->compact_delay_max),
-	       delay_ms((double)t->compact_delay_min),
-	       "count", "delay total", "delay average", "delay max", "delay min",
-	       (unsigned long long)t->wpcopy_count,
-	       (unsigned long long)t->wpcopy_delay_total,
-	       average_ms((double)t->wpcopy_delay_total, t->wpcopy_count),
-	       delay_ms((double)t->wpcopy_delay_max),
-	       delay_ms((double)t->wpcopy_delay_min),
-	       "count", "delay total", "delay average", "delay max", "delay min",
-	       (unsigned long long)t->irq_count,
-	       (unsigned long long)t->irq_delay_total,
-	       average_ms((double)t->irq_delay_total, t->irq_count),
-	       delay_ms((double)t->irq_delay_max),
-	       delay_ms((double)t->irq_delay_min));
+	printf("\n\n");
+
+	PRINT_CPU_DELAY(t->version, t);
+
+	/* Use new macro with timestamp support for version >= 17 */
+	if (t->version >= 17) {
+		PRINT_FILED_DELAY_WITH_TS("IO", t->version, t,
+			blkio_count, blkio_delay_total,
+			blkio_delay_max, blkio_delay_min, blkio_delay_max_ts);
+
+		PRINT_FILED_DELAY_WITH_TS("SWAP", t->version, t,
+			swapin_count, swapin_delay_total,
+			swapin_delay_max, swapin_delay_min, swapin_delay_max_ts);
+
+		PRINT_FILED_DELAY_WITH_TS("RECLAIM", t->version, t,
+			freepages_count, freepages_delay_total,
+			freepages_delay_max, freepages_delay_min, freepages_delay_max_ts);
+
+		PRINT_FILED_DELAY_WITH_TS("THRASHING", t->version, t,
+			thrashing_count, thrashing_delay_total,
+			thrashing_delay_max, thrashing_delay_min, thrashing_delay_max_ts);
+
+		if (t->version >= 11) {
+			PRINT_FILED_DELAY_WITH_TS("COMPACT", t->version, t,
+				compact_count, compact_delay_total,
+				compact_delay_max, compact_delay_min, compact_delay_max_ts);
+		}
+
+		if (t->version >= 13) {
+			PRINT_FILED_DELAY_WITH_TS("WPCOPY", t->version, t,
+				wpcopy_count, wpcopy_delay_total,
+				wpcopy_delay_max, wpcopy_delay_min, wpcopy_delay_max_ts);
+		}
+
+		if (t->version >= 14) {
+			PRINT_FILED_DELAY_WITH_TS("IRQ", t->version, t,
+				irq_count, irq_delay_total,
+				irq_delay_max, irq_delay_min, irq_delay_max_ts);
+		}
+	} else {
+		/* Use original macro for older versions */
+		PRINT_FILED_DELAY("IO", t->version, t,
+			blkio_count, blkio_delay_total,
+			blkio_delay_max, blkio_delay_min);
+
+		PRINT_FILED_DELAY("SWAP", t->version, t,
+			swapin_count, swapin_delay_total,
+			swapin_delay_max, swapin_delay_min);
+
+		PRINT_FILED_DELAY("RECLAIM", t->version, t,
+			freepages_count, freepages_delay_total,
+			freepages_delay_max, freepages_delay_min);
+
+		PRINT_FILED_DELAY("THRASHING", t->version, t,
+			thrashing_count, thrashing_delay_total,
+			thrashing_delay_max, thrashing_delay_min);
+
+		if (t->version >= 11) {
+			PRINT_FILED_DELAY("COMPACT", t->version, t,
+				compact_count, compact_delay_total,
+				compact_delay_max, compact_delay_min);
+		}
+
+		if (t->version >= 13) {
+			PRINT_FILED_DELAY("WPCOPY", t->version, t,
+				wpcopy_count, wpcopy_delay_total,
+				wpcopy_delay_max, wpcopy_delay_min);
+		}
+
+		if (t->version >= 14) {
+			PRINT_FILED_DELAY("IRQ", t->version, t,
+				irq_count, irq_delay_total,
+				irq_delay_max, irq_delay_min);
+		}
+	}
 }
 
 static void task_context_switch_counts(struct taskstats *t)

@@ -11,6 +11,7 @@
 
 #define NXP_ENETC_VENDOR_ID		0x1131
 #define NXP_ENETC_PF_DEV_ID		0xe101
+#define NXP_ENETC_PPM_DEV_ID		0xe110
 
 /**********************Station interface registers************************/
 /* Station interface LSO segmentation flag mask register 0/1 */
@@ -115,6 +116,10 @@
 #define  PMCAPR_HD			BIT(8)
 #define  PMCAPR_FP			GENMASK(10, 9)
 
+/* Port capability register */
+#define ENETC4_PCAPR			0x4000
+#define  PCAPR_LINK_TYPE		BIT(4)
+
 /* Port configuration register */
 #define ENETC4_PCR			0x4010
 #define  PCR_HDR_FMT			BIT(0)
@@ -129,6 +134,12 @@
 
 /* Port operational register */
 #define ENETC4_POR			0x4100
+#define  POR_TXDIS			BIT(0)
+#define  POR_RXDIS			BIT(1)
+
+/* Port status register */
+#define ENETC4_PSR			0x4104
+#define  PSR_RX_BUSY			BIT(1)
 
 /* Port traffic class a transmit maximum SDU register */
 #define ENETC4_PTCTMSDUR(a)		((a) * 0x20 + 0x4208)
@@ -165,11 +176,25 @@
 /* Port MAC 0/1 Maximum Frame Length Register */
 #define ENETC4_PM_MAXFRM(mac)		(0x5014 + (mac) * 0x400)
 
+/* Port internal MDIO base address, use to access PCS */
+#define ENETC4_PM_IMDIO_BASE		0x5030
+
+/* Port MAC 0/1 Interrupt Event Register */
+#define ENETC4_PM_IEVENT(mac)		(0x5040 + (mac) * 0x400)
+#define  PM_IEVENT_TX_EMPTY		BIT(5)
+#define  PM_IEVENT_RX_EMPTY		BIT(6)
+
 /* Port MAC 0/1 Pause Quanta Register */
 #define ENETC4_PM_PAUSE_QUANTA(mac)	(0x5054 + (mac) * 0x400)
 
 /* Port MAC 0/1 Pause Quanta Threshold Register */
 #define ENETC4_PM_PAUSE_THRESH(mac)	(0x5064 + (mac) * 0x400)
+
+#define ENETC4_PM_SINGLE_STEP(mac)	(0x50c0 + (mac) * 0x400)
+#define  PM_SINGLE_STEP_CH		BIT(6)
+#define  PM_SINGLE_STEP_OFFSET		GENMASK(15, 7)
+#define  PM_SINGLE_STEP_OFFSET_SET(o)	FIELD_PREP(PM_SINGLE_STEP_OFFSET, o)
+#define  PM_SINGLE_STEP_EN		BIT(31)
 
 /* Port MAC 0 Interface Mode Control Register */
 #define ENETC4_PM_IF_MODE(mac)		(0x5300 + (mac) * 0x400)
@@ -186,5 +211,33 @@
 #define   SSP_10M			1
 #define   SSP_1G			2
 #define  PM_IF_MODE_ENA			BIT(15)
+
+/* Port external MDIO Base address, use to access off-chip PHY */
+#define ENETC4_EMDIO_BASE		0x5c00
+
+/**********************ENETC Pseudo MAC port registers************************/
+/* Port pseudo MAC receive octets counter (64-bit) */
+#define ENETC4_PPMROCR			0x5080
+
+/* Port pseudo MAC receive unicast frame counter register (64-bit) */
+#define ENETC4_PPMRUFCR			0x5088
+
+/* Port pseudo MAC receive multicast frame counter register (64-bit) */
+#define ENETC4_PPMRMFCR			0x5090
+
+/* Port pseudo MAC receive broadcast frame counter register (64-bit) */
+#define ENETC4_PPMRBFCR			0x5098
+
+/* Port pseudo MAC transmit octets counter (64-bit) */
+#define ENETC4_PPMTOCR			0x50c0
+
+/* Port pseudo MAC transmit unicast frame counter register (64-bit) */
+#define ENETC4_PPMTUFCR			0x50c8
+
+/* Port pseudo MAC transmit multicast frame counter register (64-bit) */
+#define ENETC4_PPMTMFCR			0x50d0
+
+/* Port pseudo MAC transmit broadcast frame counter register (64-bit) */
+#define ENETC4_PPMTBFCR			0x50d8
 
 #endif

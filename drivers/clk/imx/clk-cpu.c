@@ -30,12 +30,14 @@ static unsigned long clk_cpu_recalc_rate(struct clk_hw *hw,
 	return clk_get_rate(cpu->div);
 }
 
-static long clk_cpu_round_rate(struct clk_hw *hw, unsigned long rate,
-			       unsigned long *prate)
+static int clk_cpu_determine_rate(struct clk_hw *hw,
+				  struct clk_rate_request *req)
 {
 	struct clk_cpu *cpu = to_clk_cpu(hw);
 
-	return clk_round_rate(cpu->pll, rate);
+	req->rate = clk_round_rate(cpu->pll, req->rate);
+
+	return 0;
 }
 
 static int clk_cpu_set_rate(struct clk_hw *hw, unsigned long rate,
@@ -66,7 +68,7 @@ static int clk_cpu_set_rate(struct clk_hw *hw, unsigned long rate,
 
 static const struct clk_ops clk_cpu_ops = {
 	.recalc_rate	= clk_cpu_recalc_rate,
-	.round_rate	= clk_cpu_round_rate,
+	.determine_rate = clk_cpu_determine_rate,
 	.set_rate	= clk_cpu_set_rate,
 };
 
@@ -79,7 +81,7 @@ struct clk_hw *imx_clk_hw_cpu(const char *name, const char *parent_name,
 	struct clk_init_data init;
 	int ret;
 
-	cpu = kzalloc(sizeof(*cpu), GFP_KERNEL);
+	cpu = kzalloc_obj(*cpu);
 	if (!cpu)
 		return ERR_PTR(-ENOMEM);
 

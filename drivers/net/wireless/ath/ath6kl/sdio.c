@@ -486,7 +486,7 @@ static void ath6kl_sdio_irq_handler(struct sdio_func *func)
 	ar_sdio = sdio_get_drvdata(func);
 	atomic_set(&ar_sdio->irq_handling, 1);
 	/*
-	 * Release the host during interrups so we can pick it back up when
+	 * Release the host during interrupts so we can pick it back up when
 	 * we process commands.
 	 */
 	sdio_release_host(ar_sdio->func);
@@ -1316,7 +1316,7 @@ static int ath6kl_sdio_probe(struct sdio_func *func,
 		   func->num, func->vendor, func->device,
 		   func->max_blksize, func->cur_blksize);
 
-	ar_sdio = kzalloc(sizeof(struct ath6kl_sdio), GFP_KERNEL);
+	ar_sdio = kzalloc_obj(struct ath6kl_sdio);
 	if (!ar_sdio)
 		return -ENOMEM;
 

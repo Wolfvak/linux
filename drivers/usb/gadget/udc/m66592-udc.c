@@ -359,7 +359,7 @@ static void m66592_ep_setting(struct m66592 *m66592, struct m66592_ep *ep,
 	ep->pipenum = pipenum;
 	ep->ep.maxpacket = usb_endpoint_maxp(desc);
 	m66592->pipenum2ep[pipenum] = ep;
-	m66592->epaddr2ep[desc->bEndpointAddress&USB_ENDPOINT_NUMBER_MASK] = ep;
+	m66592->epaddr2ep[usb_endpoint_num(desc)] = ep;
 	INIT_LIST_HEAD(&ep->queue);
 }
 
@@ -391,7 +391,7 @@ static int alloc_pipe_config(struct m66592_ep *ep,
 
 	BUG_ON(ep->pipenum);
 
-	switch (desc->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK) {
+	switch (usb_endpoint_type(desc)) {
 	case USB_ENDPOINT_XFER_BULK:
 		if (m66592->bulk >= M66592_MAX_NUM_BULK) {
 			if (m66592->isochronous >= M66592_MAX_NUM_ISOC) {
@@ -433,7 +433,7 @@ static int alloc_pipe_config(struct m66592_ep *ep,
 	}
 	ep->type = info.type;
 
-	info.epnum = desc->bEndpointAddress & USB_ENDPOINT_NUMBER_MASK;
+	info.epnum = usb_endpoint_num(desc);
 	info.maxpacket = usb_endpoint_maxp(desc);
 	info.interval = desc->bInterval;
 	if (desc->bEndpointAddress & USB_ENDPOINT_DIR_MASK)
@@ -1330,7 +1330,7 @@ static struct usb_request *m66592_alloc_request(struct usb_ep *_ep,
 {
 	struct m66592_request *req;
 
-	req = kzalloc(sizeof(struct m66592_request), gfp_flags);
+	req = kzalloc_obj(struct m66592_request, gfp_flags);
 	if (!req)
 		return NULL;
 
@@ -1571,7 +1571,7 @@ static int m66592_probe(struct platform_device *pdev)
 	}
 
 	/* initialize ucd */
-	m66592 = kzalloc(sizeof(struct m66592), GFP_KERNEL);
+	m66592 = kzalloc_obj(struct m66592);
 	if (m66592 == NULL) {
 		ret = -ENOMEM;
 		goto clean_up;

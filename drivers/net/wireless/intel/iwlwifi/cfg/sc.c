@@ -9,11 +9,11 @@
 #include "iwl-prph.h"
 #include "fw/api/txq.h"
 
-/* Highest firmware API version supported */
-#define IWL_SC_UCODE_API_MAX	99
+/* Highest firmware core release supported */
+#define IWL_SC_UCODE_CORE_MAX	101
 
 /* Lowest firmware API version supported */
-#define IWL_SC_UCODE_API_MIN	97
+#define IWL_SC_UCODE_API_MIN	100
 
 /* NVM versions */
 #define IWL_SC_NVM_VERSION		0x0a1d
@@ -24,20 +24,9 @@
 
 #define IWL_SC_A_FM_B_FW_PRE		"iwlwifi-sc-a0-fm-b0"
 #define IWL_SC_A_FM_C_FW_PRE		"iwlwifi-sc-a0-fm-c0"
-#define IWL_SC_A_HR_A_FW_PRE		"iwlwifi-sc-a0-hr-b0"
-#define IWL_SC_A_HR_B_FW_PRE		"iwlwifi-sc-a0-hr-b0"
-#define IWL_SC_A_GF_A_FW_PRE		"iwlwifi-sc-a0-gf-a0"
-#define IWL_SC_A_GF4_A_FW_PRE		"iwlwifi-sc-a0-gf4-a0"
 #define IWL_SC_A_WH_A_FW_PRE		"iwlwifi-sc-a0-wh-a0"
 #define IWL_SC2_A_FM_C_FW_PRE		"iwlwifi-sc2-a0-fm-c0"
 #define IWL_SC2_A_WH_A_FW_PRE		"iwlwifi-sc2-a0-wh-a0"
-#define IWL_SC2F_A_FM_C_FW_PRE		"iwlwifi-sc2f-a0-fm-c0"
-#define IWL_SC2F_A_WH_A_FW_PRE		"iwlwifi-sc2f-a0-wh-a0"
-
-#define IWL_SC_A_HR_A_FW_MODULE_FIRMWARE(api) \
-	IWL_SC_A_HR_A_FW_PRE "-" __stringify(api) ".ucode"
-#define IWL_SC_A_HR_B_FW_MODULE_FIRMWARE(api) \
-	IWL_SC_A_HR_B_FW_PRE "-" __stringify(api) ".ucode"
 
 static const struct iwl_family_base_params iwl_sc_base = {
 	.num_of_queues = 512,
@@ -52,7 +41,6 @@ static const struct iwl_family_base_params iwl_sc_base = {
 	.smem_len = IWL_SC_SMEM_LEN,
 	.apmg_not_supported = true,
 	.mac_addr_from_csr = 0x30,
-	.min_umac_error_event_table = 0xD0000,
 	.d3_debug_data_base_addr = 0x401000,
 	.d3_debug_data_length = 60 * 1024,
 	.mon_smem_regs = {
@@ -89,7 +77,7 @@ static const struct iwl_family_base_params iwl_sc_base = {
 		},
 	},
 	.features = IWL_TX_CSUM_NETIF_FLAGS | NETIF_F_RXCSUM,
-	.ucode_api_max = IWL_SC_UCODE_API_MAX,
+	.ucode_api_max = ENCODE_CORE_AS_API(IWL_SC_UCODE_CORE_MAX),
 	.ucode_api_min = IWL_SC_UCODE_API_MIN,
 };
 
@@ -105,14 +93,8 @@ const struct iwl_mac_cfg iwl_sc_mac_cfg = {
 	.ltr_delay = IWL_CFG_TRANS_LTR_DELAY_2500US,
 };
 
-IWL_FW_AND_PNVM(IWL_SC_A_FM_B_FW_PRE, IWL_SC_UCODE_API_MAX);
-IWL_FW_AND_PNVM(IWL_SC_A_FM_C_FW_PRE, IWL_SC_UCODE_API_MAX);
-MODULE_FIRMWARE(IWL_SC_A_HR_A_FW_MODULE_FIRMWARE(IWL_SC_UCODE_API_MAX));
-MODULE_FIRMWARE(IWL_SC_A_HR_B_FW_MODULE_FIRMWARE(IWL_SC_UCODE_API_MAX));
-IWL_FW_AND_PNVM(IWL_SC_A_GF_A_FW_PRE, IWL_SC_UCODE_API_MAX);
-IWL_FW_AND_PNVM(IWL_SC_A_GF4_A_FW_PRE, IWL_SC_UCODE_API_MAX);
-IWL_FW_AND_PNVM(IWL_SC_A_WH_A_FW_PRE, IWL_SC_UCODE_API_MAX);
-IWL_FW_AND_PNVM(IWL_SC2_A_FM_C_FW_PRE, IWL_SC_UCODE_API_MAX);
-IWL_FW_AND_PNVM(IWL_SC2_A_WH_A_FW_PRE, IWL_SC_UCODE_API_MAX);
-IWL_FW_AND_PNVM(IWL_SC2F_A_FM_C_FW_PRE, IWL_SC_UCODE_API_MAX);
-IWL_FW_AND_PNVM(IWL_SC2F_A_WH_A_FW_PRE, IWL_SC_UCODE_API_MAX);
+IWL_CORE_FW(IWL_SC_A_FM_B_FW_PRE, IWL_SC_UCODE_CORE_MAX);
+IWL_CORE_FW(IWL_SC_A_FM_C_FW_PRE, IWL_SC_UCODE_CORE_MAX);
+IWL_CORE_FW(IWL_SC_A_WH_A_FW_PRE, IWL_SC_UCODE_CORE_MAX);
+IWL_CORE_FW(IWL_SC2_A_FM_C_FW_PRE, IWL_SC_UCODE_CORE_MAX);
+IWL_CORE_FW(IWL_SC2_A_WH_A_FW_PRE, IWL_SC_UCODE_CORE_MAX);

@@ -377,9 +377,9 @@ static int hynix_nand_rr_init(struct nand_chip *chip)
 
 	/*
 	 * We only support read-retry for 1xnm NANDs, and those NANDs all
-	 * expose a valid JEDEC ID.
+	 * expose a valid JEDEC ID. SLC NANDs don't require read-retry.
 	 */
-	if (valid_jedecid) {
+	if (valid_jedecid && nanddev_bits_per_cell(&chip->base) > 1) {
 		u8 nand_tech = chip->id.data[5] >> 4;
 
 		/* 1xnm technology */
@@ -705,7 +705,7 @@ static int hynix_nand_init(struct nand_chip *chip)
 	else
 		chip->options |= NAND_BBM_FIRSTPAGE | NAND_BBM_SECONDPAGE;
 
-	hynix = kzalloc(sizeof(*hynix), GFP_KERNEL);
+	hynix = kzalloc_obj(*hynix);
 	if (!hynix)
 		return -ENOMEM;
 

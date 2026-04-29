@@ -82,7 +82,7 @@ static struct mlx5e_skb_cb_hwtstamp *mlx5e_skb_cb_get_hwts(struct sk_buff *skb)
 }
 
 static void mlx5e_skb_cb_hwtstamp_tx(struct sk_buff *skb,
-				     struct mlx5e_ptp_cq_stats *cq_stats)
+				     struct mlx5e_ptpsq *ptpsq)
 {
 	struct skb_shared_hwtstamps hwts = {};
 	ktime_t diff;
@@ -92,8 +92,17 @@ static void mlx5e_skb_cb_hwtstamp_tx(struct sk_buff *skb,
 
 	/* Maximal allowed diff is 1 / 128 second */
 	if (diff > (NSEC_PER_SEC >> 7)) {
-		cq_stats->abort++;
-		cq_stats->abort_abs_diff_ns += diff;
+		struct mlx5e_txqsq *sq = &ptpsq->txqsq;
+
+		ptpsq->cq_stats->abort++;
+		ptpsq->cq_stats->abort_abs_diff_ns += diff;
+		if (diff > (NSEC_PER_SEC >> 1) &&
+		    !test_and_set_bit(MLX5E_SQ_STATE_RECOVERING, &sq->state)) {
+			netdev_warn(sq->channel->netdev,
+				    "PTP TX timestamp difference between CQE and port exceeds threshold: %lld ns, recovering SQ %u\n",
+				    (s64)diff, sq->sqn);
+			queue_work(sq->priv->wq, &ptpsq->report_unhealthy_work);
+		}
 		return;
 	}
 
@@ -103,7 +112,7 @@ static void mlx5e_skb_cb_hwtstamp_tx(struct sk_buff *skb,
 
 void mlx5e_skb_cb_hwtstamp_handler(struct sk_buff *skb, int hwtstamp_type,
 				   ktime_t hwtstamp,
-				   struct mlx5e_ptp_cq_stats *cq_stats)
+				   struct mlx5e_ptpsq *ptpsq)
 {
 	switch (hwtstamp_type) {
 	case (MLX5E_SKB_CB_CQE_HWTSTAMP):
@@ -121,7 +130,7 @@ void mlx5e_skb_cb_hwtstamp_handler(struct sk_buff *skb, int hwtstamp_type,
 	    !mlx5e_skb_cb_get_hwts(skb)->port_hwtstamp)
 		return;
 
-	mlx5e_skb_cb_hwtstamp_tx(skb, cq_stats);
+	mlx5e_skb_cb_hwtstamp_tx(skb, ptpsq);
 	memset(skb->cb, 0, sizeof(struct mlx5e_skb_cb_hwtstamp));
 }
 
@@ -209,7 +218,7 @@ static void mlx5e_ptp_handle_ts_cqe(struct mlx5e_ptpsq *ptpsq,
 
 	hwtstamp = mlx5e_cqe_ts_to_ns(sq->ptp_cyc2time, sq->clock, get_cqe_ts(cqe));
 	mlx5e_skb_cb_hwtstamp_handler(skb, MLX5E_SKB_CB_PORT_HWTSTAMP,
-				      hwtstamp, ptpsq->cq_stats);
+				      hwtstamp, ptpsq);
 	ptpsq->cq_stats->cqe++;
 
 	mlx5e_ptpsq_mark_ts_cqes_undelivered(ptpsq, hwtstamp);
@@ -334,14 +343,12 @@ static int mlx5e_ptp_alloc_txqsq(struct mlx5e_ptp *c, int txq_ix,
 	sq->mdev      = mdev;
 	sq->ch_ix     = MLX5E_PTP_CHANNEL_IX;
 	sq->txq_ix    = txq_ix;
-	sq->uar_map   = mdev->mlx5e_res.hw_objs.bfreg.map;
+	sq->uar_map   = c->bfreg->map;
 	sq->min_inline_mode = params->tx_min_inline_mode;
 	sq->hw_mtu    = MLX5E_SW2HW_MTU(params, params->sw_mtu);
 	sq->stats     = &c->priv->ptp_stats.sq[tc];
 	sq->ptpsq     = ptpsq;
 	INIT_WORK(&sq->recover_work, mlx5e_tx_err_cqe_work);
-	if (!MLX5_CAP_ETH(mdev, wqe_vlan_insert))
-		set_bit(MLX5E_SQ_STATE_VLAN_NEED_L2_INLINE, &sq->state);
 	sq->stop_room = param->stop_room;
 	sq->ptp_cyc2time = mlx5_sq_ts_translator(mdev);
 
@@ -450,22 +457,8 @@ static void mlx5e_ptpsq_unhealthy_work(struct work_struct *work)
 {
 	struct mlx5e_ptpsq *ptpsq =
 		container_of(work, struct mlx5e_ptpsq, report_unhealthy_work);
-	struct mlx5e_txqsq *sq = &ptpsq->txqsq;
-
-	/* Recovering the PTP SQ means re-enabling NAPI, which requires the
-	 * netdev instance lock. However, SQ closing has to wait for this work
-	 * task to finish while also holding the same lock. So either get the
-	 * lock or find that the SQ is no longer enabled and thus this work is
-	 * not relevant anymore.
-	 */
-	while (!netdev_trylock(sq->netdev)) {
-		if (!test_bit(MLX5E_SQ_STATE_ENABLED, &sq->state))
-			return;
-		msleep(20);
-	}
 
 	mlx5e_reporter_tx_ptpsq_unhealthy(ptpsq);
-	netdev_unlock(sq->netdev);
 }
 
 static int mlx5e_ptp_open_txqsq(struct mlx5e_ptp *c, u32 tisn,
@@ -488,6 +481,7 @@ static int mlx5e_ptp_open_txqsq(struct mlx5e_ptp *c, u32 tisn,
 	csp.wq_ctrl         = &txqsq->wq_ctrl;
 	csp.min_inline_mode = txqsq->min_inline_mode;
 	csp.ts_cqe_to_dest_cqn = ptpsq->ts_cq.mcq.cqn;
+	csp.uar_page = c->bfreg->index;
 
 	err = mlx5e_create_sq_rdy(c->mdev, sqp, &csp, 0, &txqsq->sqn);
 	if (err)
@@ -579,6 +573,7 @@ static int mlx5e_ptp_open_tx_cqs(struct mlx5e_ptp *c,
 	ccp.ch_stats = c->stats;
 	ccp.napi     = &c->napi;
 	ccp.ix       = MLX5E_PTP_CHANNEL_IX;
+	ccp.uar      = c->bfreg->up;
 
 	cq_param = &cparams->txq_sq_param.cqp;
 
@@ -628,6 +623,7 @@ static int mlx5e_ptp_open_rx_cq(struct mlx5e_ptp *c,
 	ccp.ch_stats = c->stats;
 	ccp.napi     = &c->napi;
 	ccp.ix       = MLX5E_PTP_CHANNEL_IX;
+	ccp.uar      = c->bfreg->up;
 
 	cq_param = &cparams->rq_param.cqp;
 
@@ -712,7 +708,7 @@ static int mlx5e_init_ptp_rq(struct mlx5e_ptp *c, struct mlx5e_params *params,
 	rq->netdev       = priv->netdev;
 	rq->priv         = priv;
 	rq->clock        = mdev->clock;
-	rq->tstamp       = &priv->tstamp;
+	rq->hwtstamp_config = &priv->hwtstamp_config;
 	rq->mdev         = mdev;
 	rq->hw_mtu       = MLX5E_SW2HW_MTU(params, params->sw_mtu);
 	rq->stats        = &c->priv->ptp_stats.rq;
@@ -887,7 +883,7 @@ int mlx5e_ptp_open(struct mlx5e_priv *priv, struct mlx5e_params *params,
 
 
 	c = kvzalloc_node(sizeof(*c), GFP_KERNEL, dev_to_node(mlx5_core_dma_dev(mdev)));
-	cparams = kvzalloc(sizeof(*cparams), GFP_KERNEL);
+	cparams = kvzalloc_obj(*cparams);
 	if (!c || !cparams) {
 		err = -ENOMEM;
 		goto err_free;
@@ -895,13 +891,13 @@ int mlx5e_ptp_open(struct mlx5e_priv *priv, struct mlx5e_params *params,
 
 	c->priv     = priv;
 	c->mdev     = priv->mdev;
-	c->tstamp   = &priv->tstamp;
 	c->pdev     = mlx5_core_dma_dev(priv->mdev);
 	c->netdev   = priv->netdev;
 	c->mkey_be  = cpu_to_be32(priv->mdev->mlx5e_res.hw_objs.mkey);
 	c->num_tc   = mlx5e_get_dcb_num_tc(params);
 	c->stats    = &priv->ptp_stats.ch;
 	c->lag_port = lag_port;
+	c->bfreg    = &mdev->priv.bfreg;
 
 	err = mlx5e_ptp_set_state(c, params);
 	if (err)
@@ -992,7 +988,7 @@ int mlx5e_ptp_alloc_rx_fs(struct mlx5e_flow_steering *fs,
 	if (!mlx5e_profile_feature_cap(profile, PTP_RX))
 		return 0;
 
-	ptp_fs = kzalloc(sizeof(*ptp_fs), GFP_KERNEL);
+	ptp_fs = kzalloc_obj(*ptp_fs);
 	if (!ptp_fs)
 		return -ENOMEM;
 	mlx5e_fs_set_ptp(fs, ptp_fs);

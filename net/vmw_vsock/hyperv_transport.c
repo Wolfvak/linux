@@ -444,7 +444,7 @@ static int hvs_sock_init(struct vsock_sock *vsk, struct vsock_sock *psk)
 	struct hvsock *hvs;
 	struct sock *sk = sk_vsock(vsk);
 
-	hvs = kzalloc(sizeof(*hvs), GFP_KERNEL);
+	hvs = kzalloc_obj(*hvs);
 	if (!hvs)
 		return -ENOMEM;
 
@@ -570,7 +570,7 @@ static int hvs_dgram_enqueue(struct vsock_sock *vsk,
 	return -EOPNOTSUPP;
 }
 
-static bool hvs_dgram_allow(u32 cid, u32 port)
+static bool hvs_dgram_allow(struct vsock_sock *vsk, u32 cid, u32 port)
 {
 	return false;
 }
@@ -655,7 +655,7 @@ static ssize_t hvs_stream_enqueue(struct vsock_sock *vsk, struct msghdr *msg,
 
 	BUILD_BUG_ON(sizeof(*send_buf) != HV_HYP_PAGE_SIZE);
 
-	send_buf = kmalloc(sizeof(*send_buf), GFP_KERNEL);
+	send_buf = kmalloc_obj(*send_buf);
 	if (!send_buf)
 		return -ENOMEM;
 
@@ -694,15 +694,26 @@ out:
 static s64 hvs_stream_has_data(struct vsock_sock *vsk)
 {
 	struct hvsock *hvs = vsk->trans;
+	bool need_refill;
 	s64 ret;
 
 	if (hvs->recv_data_len > 0)
-		return 1;
+		return hvs->recv_data_len;
 
 	switch (hvs_channel_readable_payload(hvs->chan)) {
 	case 1:
-		ret = 1;
-		break;
+		need_refill = !hvs->recv_desc;
+		if (!need_refill)
+			return -EIO;
+
+		hvs->recv_desc = hv_pkt_iter_first(hvs->chan);
+		if (!hvs->recv_desc)
+			return -ENOBUFS;
+
+		ret = hvs_update_recv_data(hvs);
+		if (ret)
+			return ret;
+		return hvs->recv_data_len;
 	case 0:
 		vsk->peer_shutdown |= SEND_SHUTDOWN;
 		ret = 0;
@@ -734,8 +745,11 @@ static bool hvs_stream_is_active(struct vsock_sock *vsk)
 	return hvs->chan != NULL;
 }
 
-static bool hvs_stream_allow(u32 cid, u32 port)
+static bool hvs_stream_allow(struct vsock_sock *vsk, u32 cid, u32 port)
 {
+	if (!vsock_net_mode_global(vsk))
+		return false;
+
 	if (cid == VMADDR_CID_HOST)
 		return true;
 

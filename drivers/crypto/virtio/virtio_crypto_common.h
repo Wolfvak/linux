@@ -113,8 +113,6 @@ struct virtio_crypto_request {
 int virtcrypto_devmgr_add_dev(struct virtio_crypto *vcrypto_dev);
 struct list_head *virtcrypto_devmgr_get_head(void);
 void virtcrypto_devmgr_rm_dev(struct virtio_crypto *vcrypto_dev);
-struct virtio_crypto *virtcrypto_devmgr_get_first(void);
-int virtcrypto_dev_in_use(struct virtio_crypto *vcrypto_dev);
 int virtcrypto_dev_get(struct virtio_crypto *vcrypto_dev);
 void virtcrypto_dev_put(struct virtio_crypto *vcrypto_dev);
 int virtcrypto_dev_started(struct virtio_crypto *vcrypto_dev);
@@ -137,7 +135,7 @@ static inline int virtio_crypto_get_current_node(void)
 	int cpu, node;
 
 	cpu = get_cpu();
-	node = topology_physical_package_id(cpu);
+	node = cpu_to_node(cpu);
 	put_cpu();
 
 	return node;

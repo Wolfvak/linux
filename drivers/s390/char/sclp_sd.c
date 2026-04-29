@@ -5,8 +5,7 @@
  * Copyright IBM Corp. 2017
  */
 
-#define KMSG_COMPONENT "sclp_sd"
-#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
+#define pr_fmt(fmt) "sclp_sd: " fmt
 
 #include <linux/completion.h>
 #include <linux/jiffies.h>
@@ -16,10 +15,8 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/async.h>
-#include <linux/export.h>
 #include <linux/mutex.h>
-
-#include <asm/pgalloc.h>
+#include <linux/pgalloc.h>
 
 #include "sclp.h"
 
@@ -521,7 +518,7 @@ static __init struct sclp_sd_file *sclp_sd_file_create(const char *name, u8 di)
 	struct sclp_sd_file *sd_file;
 	int rc;
 
-	sd_file = kzalloc(sizeof(*sd_file), GFP_KERNEL);
+	sd_file = kzalloc_obj(*sd_file);
 	if (!sd_file)
 		return NULL;
 	sd_file->di = di;
@@ -539,7 +536,7 @@ static __init struct sclp_sd_file *sclp_sd_file_create(const char *name, u8 di)
 	sysfs_bin_attr_init(&sd_file->data_attr);
 	sd_file->data_attr.attr.name = "data";
 	sd_file->data_attr.attr.mode = 0444;
-	sd_file->data_attr.read_new = data_read;
+	sd_file->data_attr.read = data_read;
 
 	rc = sysfs_create_bin_file(&sd_file->kobj, &sd_file->data_attr);
 	if (rc) {

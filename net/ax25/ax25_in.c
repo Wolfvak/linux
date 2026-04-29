@@ -377,7 +377,7 @@ static int ax25_rcv(struct sk_buff *skb, struct net_device *dev,
 	 *	Sort out any digipeated paths.
 	 */
 	if (dp.ndigi && !ax25->digipeat &&
-	    (ax25->digipeat = kmalloc(sizeof(ax25_digi), GFP_ATOMIC)) == NULL) {
+	    (ax25->digipeat = kmalloc_obj(ax25_digi, GFP_ATOMIC)) == NULL) {
 		kfree_skb(skb);
 		ax25_destroy_socket(ax25);
 		if (sk)
@@ -433,6 +433,10 @@ free:
 int ax25_kiss_rcv(struct sk_buff *skb, struct net_device *dev,
 		  struct packet_type *ptype, struct net_device *orig_dev)
 {
+	skb = skb_share_check(skb, GFP_ATOMIC);
+	if (!skb)
+		return NET_RX_DROP;
+
 	skb_orphan(skb);
 
 	if (!net_eq(dev_net(dev), &init_net)) {

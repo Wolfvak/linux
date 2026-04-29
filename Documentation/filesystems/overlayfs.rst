@@ -9,7 +9,7 @@ Overlay Filesystem
 This document describes a prototype for a new approach to providing
 overlay-filesystem functionality in Linux (sometimes referred to as
 union-filesystems).  An overlay-filesystem tries to present a
-filesystem which is the result over overlaying one filesystem on top
+filesystem which is the result of overlaying one filesystem on top
 of the other.
 
 
@@ -61,7 +61,7 @@ Inode properties
 |Configuration | Persistent | Uniform    | st_ino == d_ino | d_ino == i_ino |
 |              | st_ino     | st_dev     |                 | [*]            |
 +==============+=====+======+=====+======+========+========+========+=======+
-|              | dir | !dir | dir | !dir |  dir   +  !dir  |  dir   | !dir  |
+|              | dir | !dir | dir | !dir |  dir   |  !dir  |  dir   | !dir  |
 +--------------+-----+------+-----+------+--------+--------+--------+-------+
 | All layers   |  Y  |  Y   |  Y  |  Y   |  Y     |   Y    |  Y     |  Y    |
 | on same fs   |     |      |     |      |        |        |        |       |
@@ -425,7 +425,7 @@ of information from up to three different layers:
 The "lower data" file can be on any lower layer, except from the top most
 lower layer.
 
-Below the top most lower layer, any number of lower most layers may be defined
+Below the topmost lower layer, any number of lowermost layers may be defined
 as "data-only" lower layers, using double colon ("::") separators.
 A normal lower layer is not allowed to be below a data-only layer, so single
 colon separators are not allowed to the right of double colon ("::") separators.
@@ -445,8 +445,8 @@ to the absolute path of the "lower data" file in the "data-only" lower layer.
 
 Instead of explicitly enabling "metacopy=on" it is sufficient to specify at
 least one data-only layer to enable redirection of data to a data-only layer.
-In this case other forms of metacopy are rejected.  Note: this way data-only
-layers may be used toghether with "userxattr", in which case careful attention
+In this case other forms of metacopy are rejected.  Note: this way, data-only
+layers may be used together with "userxattr", in which case careful attention
 must be given to privileges needed to change the "user.overlay.redirect" xattr
 to prevent misuse.
 
@@ -515,7 +515,7 @@ supports these values:
     The metacopy digest is never generated or used. This is the
     default if verity option is not specified.
 - "on":
-    Whenever a metacopy files specifies an expected digest, the
+    Whenever a metacopy file specifies an expected digest, the
     corresponding data file must match the specified digest. When
     generating a metacopy file the verity digest will be set in it
     based on the source file (if it has one).
@@ -537,7 +537,7 @@ Using an upper layer path and/or a workdir path that are already used by
 another overlay mount is not allowed and may fail with EBUSY.  Using
 partially overlapping paths is not allowed and may fail with EBUSY.
 If files are accessed from two overlayfs mounts which share or overlap the
-upper layer and/or workdir path the behavior of the overlay is undefined,
+upper layer and/or workdir path, the behavior of the overlay is undefined,
 though it will not result in a crash or deadlock.
 
 Mounting an overlay using an upper layer path, where the upper layer path
@@ -753,9 +753,9 @@ Note: the mount options index=off,nfs_export=on are conflicting for a
 read-write mount and will result in an error.
 
 Note: the mount option uuid=off can be used to replace UUID of the underlying
-filesystem in file handles with null, and effectively disable UUID checks. This
+filesystem in file handles with null, in order to relax the UUID checks. This
 can be useful in case the underlying disk is copied and the UUID of this copy
-is changed. This is only applicable if all lower/upper/work directories are on
+is changed. This is only applicable if all lower directories are on
 the same filesystem, otherwise it will fallback to normal behaviour.
 
 
@@ -769,7 +769,7 @@ controlled by the "uuid" mount option, which supports these values:
     UUID of overlayfs is null. fsid is taken from upper most filesystem.
 - "off":
     UUID of overlayfs is null. fsid is taken from upper most filesystem.
-    UUID of underlying layers is ignored.
+    UUID of underlying layers is ignored and null used instead.
 - "on":
     UUID of overlayfs is generated and used to report a unique fsid.
     UUID is stored in xattr "trusted.overlay.uuid", making overlayfs fsid
@@ -778,9 +778,59 @@ controlled by the "uuid" mount option, which supports these values:
 - "auto": (default)
     UUID is taken from xattr "trusted.overlay.uuid" if it exists.
     Upgrade to "uuid=on" on first time mount of new overlay filesystem that
-    meets the prerequites.
+    meets the prerequisites.
     Downgrade to "uuid=null" for existing overlay filesystems that were never
     mounted with "uuid=on".
+
+
+Durability and copy up
+----------------------
+
+The fsync(2) system call ensures that the data and metadata of a file
+are safely written to the backing storage, which is expected to
+guarantee the existence of the information post system crash.
+
+Without an fsync(2) call, there is no guarantee that the observed
+data after a system crash will be either the old or the new data, but
+in practice, the observed data after crash is often the old or new data
+or a mix of both.
+
+When an overlayfs file is modified for the first time, copy up will
+create a copy of the lower file and its parent directories in the upper
+layer.  Since the Linux filesystem API does not enforce any particular
+ordering on storing changes without explicit fsync(2) calls, in case
+of a system crash, the upper file could end up with no data at all
+(i.e. zeros), which would be an unusual outcome.  To avoid this
+experience, overlayfs calls fsync(2) on the upper file before completing
+data copy up with rename(2) or link(2) to make the copy up "atomic".
+
+By default, overlayfs does not explicitly call fsync(2) on copied up
+directories or on metadata-only copy up, so it provides no guarantee to
+persist the user's modification unless the user calls fsync(2).
+The fsync during copy up only guarantees that if a copy up is observed
+after a crash, the observed data is not zeroes or intermediate values
+from the copy up staging area.
+
+On traditional local filesystems with a single journal (e.g. ext4, xfs),
+fsync on a file also persists the parent directory changes, because they
+are usually modified in the same transaction, so metadata durability during
+data copy up effectively comes for free.  Overlayfs further limits risk by
+disallowing network filesystems as upper layer.
+
+Overlayfs can be tuned to prefer performance or durability when storing
+to the underlying upper layer.  This is controlled by the "fsync" mount
+option, which supports these values:
+
+- "auto": (default)
+    Call fsync(2) on upper file before completion of data copy up.
+    No explicit fsync(2) on directory or metadata-only copy up.
+- "strict":
+    Call fsync(2) on upper file and directories before completion of any
+    copy up.
+- "volatile": [*]
+    Prefer performance over durability (see `Volatile mount`_)
+
+[*] The mount option "volatile" is an alias to "fsync=volatile".
 
 
 Volatile mount
@@ -794,20 +844,20 @@ without significant effort.
 The advantage of mounting with the "volatile" option is that all forms of
 sync calls to the upper filesystem are omitted.
 
-In order to avoid a giving a false sense of safety, the syncfs (and fsync)
+In order to avoid giving a false sense of safety, the syncfs (and fsync)
 semantics of volatile mounts are slightly different than that of the rest of
 VFS.  If any writeback error occurs on the upperdir's filesystem after a
 volatile mount takes place, all sync functions will return an error.  Once this
 condition is reached, the filesystem will not recover, and every subsequent sync
-call will return an error, even if the upperdir has not experience a new error
+call will return an error, even if the upperdir has not experienced a new error
 since the last sync call.
 
 When overlay is mounted with "volatile" option, the directory
 "$workdir/work/incompat/volatile" is created.  During next mount, overlay
 checks for this directory and refuses to mount if present. This is a strong
-indicator that user should throw away upper and work directories and create
-fresh one. In very limited cases where the user knows that the system has
-not crashed and contents of upperdir are intact, The "volatile" directory
+indicator that the user should discard upper and work directories and create
+fresh ones. In very limited cases where the user knows that the system has
+not crashed and contents of upperdir are intact, the "volatile" directory
 can be removed.
 
 

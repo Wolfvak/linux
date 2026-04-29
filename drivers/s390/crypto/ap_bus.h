@@ -166,6 +166,7 @@ void ap_driver_unregister(struct ap_driver *);
 struct ap_device {
 	struct device device;
 	int device_type;		/* AP device type. */
+	const char *driver_override;
 };
 
 #define to_ap_dev(x) container_of((x), struct ap_device, device)
@@ -180,7 +181,7 @@ struct ap_card {
 	atomic64_t total_request_count;	/* # requests ever for this AP device.*/
 };
 
-#define TAPQ_CARD_HWINFO_MASK 0xFEFF0000FFFF0F0FUL
+#define TAPQ_CARD_HWINFO_MASK 0xFFFF0000FFFF0F0FUL
 #define ASSOC_IDX_INVALID 0x10000
 
 #define to_ap_card(x) container_of((x), struct ap_card, ap_dev.device)
@@ -280,7 +281,9 @@ struct ap_perms {
 };
 
 extern struct ap_perms ap_perms;
-extern struct mutex ap_perms_mutex;
+extern bool ap_apmask_aqmask_in_use;
+extern int ap_driver_override_ctr;
+extern struct mutex ap_attr_mutex;
 
 /*
  * Get ap_queue device for this qid.

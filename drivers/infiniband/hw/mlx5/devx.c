@@ -159,7 +159,7 @@ int mlx5_ib_devx_create(struct mlx5_ib_dev *dev, bool is_user, u64 req_ucaps)
 	uctx = MLX5_ADDR_OF(create_uctx_in, in, uctx);
 	if (is_user &&
 	    (MLX5_CAP_GEN(dev->mdev, uctx_cap) & MLX5_UCTX_CAP_RAW_TX) &&
-	    capable(CAP_NET_RAW))
+	    rdma_dev_has_raw_cap(&dev->ib_dev))
 		cap |= MLX5_UCTX_CAP_RAW_TX;
 	if (is_user &&
 	    (MLX5_CAP_GEN(dev->mdev, uctx_cap) &
@@ -233,6 +233,7 @@ static u16 get_legacy_obj_type(u16 opcode)
 {
 	switch (opcode) {
 	case MLX5_CMD_OP_CREATE_RQ:
+	case MLX5_CMD_OP_CREATE_RMP:
 		return MLX5_EVENT_QUEUE_TYPE_RQ;
 	case MLX5_CMD_OP_CREATE_QP:
 		return MLX5_EVENT_QUEUE_TYPE_QP;
@@ -1224,6 +1225,11 @@ static void devx_obj_build_destroy_cmd(void *in, void *out, void *din,
 			 MLX5_GET(create_flow_table_in,  in, other_vport));
 		MLX5_SET(destroy_flow_table_in, din, vport_number,
 			 MLX5_GET(create_flow_table_in,  in, vport_number));
+		MLX5_SET(destroy_flow_table_in, din, other_eswitch,
+			 MLX5_GET(create_flow_table_in,  in, other_eswitch));
+		MLX5_SET(destroy_flow_table_in, din, eswitch_owner_vhca_id,
+			 MLX5_GET(create_flow_table_in, in,
+				  eswitch_owner_vhca_id));
 		MLX5_SET(destroy_flow_table_in, din, table_type,
 			 MLX5_GET(create_flow_table_in,  in, table_type));
 		MLX5_SET(destroy_flow_table_in, din, table_id, *obj_id);
@@ -1236,6 +1242,11 @@ static void devx_obj_build_destroy_cmd(void *in, void *out, void *din,
 			 MLX5_GET(create_flow_group_in, in, other_vport));
 		MLX5_SET(destroy_flow_group_in, din, vport_number,
 			 MLX5_GET(create_flow_group_in, in, vport_number));
+		MLX5_SET(destroy_flow_group_in, din, other_eswitch,
+			 MLX5_GET(create_flow_group_in, in, other_eswitch));
+		MLX5_SET(destroy_flow_group_in, din, eswitch_owner_vhca_id,
+			 MLX5_GET(create_flow_group_in, in,
+				  eswitch_owner_vhca_id));
 		MLX5_SET(destroy_flow_group_in, din, table_type,
 			 MLX5_GET(create_flow_group_in, in, table_type));
 		MLX5_SET(destroy_flow_group_in, din, table_id,
@@ -1250,6 +1261,10 @@ static void devx_obj_build_destroy_cmd(void *in, void *out, void *din,
 			 MLX5_GET(set_fte_in,  in, other_vport));
 		MLX5_SET(delete_fte_in, din, vport_number,
 			 MLX5_GET(set_fte_in, in, vport_number));
+		MLX5_SET(delete_fte_in, din, other_eswitch,
+			 MLX5_GET(set_fte_in,  in, other_eswitch));
+		MLX5_SET(delete_fte_in, din, eswitch_owner_vhca_id,
+			 MLX5_GET(set_fte_in, in, eswitch_owner_vhca_id));
 		MLX5_SET(delete_fte_in, din, table_type,
 			 MLX5_GET(set_fte_in, in, table_type));
 		MLX5_SET(delete_fte_in, din, table_id,
@@ -1393,6 +1408,10 @@ static int devx_handle_mkey_create(struct mlx5_ib_dev *dev,
 	}
 
 	MLX5_SET(create_mkey_in, in, mkey_umem_valid, 1);
+	/* TPH is not allowed to bypass the regular kernel's verbs flow */
+	MLX5_SET(mkc, mkc, pcie_tph_en, 0);
+	MLX5_SET(mkc, mkc, pcie_tph_steering_tag_index,
+		 MLX5_MKC_PCIE_TPH_NO_STEERING_TAG_INDEX);
 	return 0;
 }
 
@@ -1931,7 +1950,7 @@ subscribe_event_xa_alloc(struct mlx5_devx_event_table *devx_event_table,
 
 	event = xa_load(&devx_event_table->event_xa, key_level1);
 	if (!event) {
-		event = kzalloc(sizeof(*event), GFP_KERNEL);
+		event = kzalloc_obj(*event);
 		if (!event)
 			return -ENOMEM;
 
@@ -1953,7 +1972,7 @@ subscribe_event_xa_alloc(struct mlx5_devx_event_table *devx_event_table,
 
 	obj_event = xa_load(&event->object_ids, key_level2);
 	if (!obj_event) {
-		obj_event = kzalloc(sizeof(*obj_event), GFP_KERNEL);
+		obj_event = kzalloc_obj(*obj_event);
 		if (!obj_event)
 			/* Level1 is valid for future use, no need to free */
 			return -ENOMEM;
@@ -2678,7 +2697,7 @@ void mlx5_ib_ufile_hw_cleanup(struct ib_uverbs_file *ufile)
 	int head = 0;
 	int tail = 0;
 
-	async_cmd = kcalloc(MAX_ASYNC_CMDS, sizeof(*async_cmd), GFP_KERNEL);
+	async_cmd = kzalloc_objs(*async_cmd, MAX_ASYNC_CMDS);
 	if (!async_cmd)
 		return;
 

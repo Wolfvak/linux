@@ -76,7 +76,7 @@ static int msi_domain_prepare_irqs(struct irq_domain *domain, struct device *dev
 static struct msi_desc *msi_alloc_desc(struct device *dev, int nvec,
 				       const struct irq_affinity_desc *affinity)
 {
-	struct msi_desc *desc = kzalloc(sizeof(*desc), GFP_KERNEL);
+	struct msi_desc *desc = kzalloc_obj(*desc);
 
 	if (!desc)
 		return NULL;
@@ -530,7 +530,7 @@ static int msi_sysfs_populate_desc(struct device *dev, struct msi_desc *desc)
 	struct device_attribute *attrs;
 	int ret, i;
 
-	attrs = kcalloc(desc->nvec_used, sizeof(*attrs), GFP_KERNEL);
+	attrs = kzalloc_objs(*attrs, desc->nvec_used);
 	if (!attrs)
 		return -ENOMEM;
 
@@ -706,7 +706,7 @@ static int msi_domain_alloc(struct irq_domain *domain, unsigned int virq,
 	irq_hw_number_t hwirq = ops->get_hwirq(info, arg);
 	int i, ret;
 
-	if (irq_find_mapping(domain, hwirq) > 0)
+	if (irq_resolve_mapping(domain, hwirq))
 		return -EEXIST;
 
 	if (domain->parent) {
@@ -889,6 +889,7 @@ static struct irq_domain *__msi_create_irq_domain(struct fwnode_handle *fwnode,
 
 	if (domain) {
 		irq_domain_update_bus_token(domain, info->bus_token);
+		domain->dev = info->dev;
 		if (info->flags & MSI_FLAG_PARENT_PM_DEV)
 			domain->pm_dev = parent->pm_dev;
 	}
@@ -1051,6 +1052,7 @@ bool msi_create_device_irq_domain(struct device *dev, unsigned int domid,
 	bundle->info.data = domain_data;
 	bundle->info.chip_data = chip_data;
 	bundle->info.alloc_data = &bundle->alloc_info;
+	bundle->info.dev = dev;
 
 	pops = parent->msi_parent_ops;
 	snprintf(bundle->name, sizeof(bundle->name), "%s%s-%s",
@@ -1089,7 +1091,6 @@ bool msi_create_device_irq_domain(struct device *dev, unsigned int domid,
 	if (!domain)
 		return false;
 
-	domain->dev = dev;
 	dev->msi.data->__domains[domid].domain = domain;
 
 	if (msi_domain_prepare_irqs(domain, dev, hwsize, &bundle->alloc_info)) {
@@ -1642,9 +1643,6 @@ static void msi_domain_free_locked(struct device *dev, struct msi_ctrl *ctrl)
 		ops->domain_free_irqs(domain, dev);
 	else
 		__msi_domain_free_irqs(dev, domain, ctrl);
-
-	if (ops->msi_post_free)
-		ops->msi_post_free(domain, dev);
 
 	if (info->flags & MSI_FLAG_FREE_MSI_DESCS)
 		msi_domain_free_descs(dev, ctrl);

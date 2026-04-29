@@ -3,8 +3,12 @@
 
 #include <linux/list.h>
 #include <linux/kref.h>
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+#include <linux/mount.h>
+#endif
 #include <linux/mutex.h>
 #include <linux/idr.h>
+#include <linux/sched.h>
 
 #include <drm/drm_mode_config.h>
 
@@ -25,10 +29,24 @@ struct pci_controller;
  * Recovery methods for wedged device in order of less to more side-effects.
  * To be used with drm_dev_wedged_event() as recovery @method. Callers can
  * use any one, multiple (or'd) or none depending on their needs.
+ *
+ * Refer to "Device Wedging" chapter in Documentation/gpu/drm-uapi.rst for more
+ * details.
  */
 #define DRM_WEDGE_RECOVERY_NONE		BIT(0)	/* optional telemetry collection */
 #define DRM_WEDGE_RECOVERY_REBIND	BIT(1)	/* unbind + bind driver */
 #define DRM_WEDGE_RECOVERY_BUS_RESET	BIT(2)	/* unbind + reset bus device + bind */
+#define DRM_WEDGE_RECOVERY_VENDOR	BIT(3)	/* vendor specific recovery method */
+
+/**
+ * struct drm_wedge_task_info - information about the guilty task of a wedge dev
+ */
+struct drm_wedge_task_info {
+	/** @pid: pid of the task */
+	pid_t pid;
+	/** @comm: command name of the task */
+	char comm[TASK_COMM_LEN];
+};
 
 /**
  * enum switch_power_state - power state of drm device
@@ -153,6 +171,18 @@ struct drm_device {
 	 */
 	struct drm_master *master;
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+	/**
+	 * @huge_mnt:
+	 *
+	 * Huge tmpfs mountpoint used at GEM object initialization
+	 * drm_gem_object_init(). Drivers can call drm_gem_huge_mnt_create() to
+	 * create, mount and use it. The default tmpfs mountpoint (`shm_mnt`) is
+	 * used if NULL.
+	 */
+	struct vfsmount *huge_mnt;
+#endif
+
 	/**
 	 * @driver_features: per-device driver features
 	 *
@@ -176,16 +206,6 @@ struct drm_device {
 
 	/** @unique: Unique name of the device */
 	char *unique;
-
-	/**
-	 * @struct_mutex:
-	 *
-	 * Lock for others (not &drm_minor.master and &drm_file.is_master)
-	 *
-	 * TODO: This lock used to be the BKL of the DRM subsystem. Move the
-	 *       lock into i915, which is the only remaining user.
-	 */
-	struct mutex struct_mutex;
 
 	/**
 	 * @master_mutex:
@@ -232,6 +252,14 @@ struct drm_device {
 	 * List of in-kernel clients. Protected by &clientlist_mutex.
 	 */
 	struct list_head clientlist;
+
+	/**
+	 * @client_sysrq_list:
+	 *
+	 * Entry into list of devices registered for sysrq. Allows in-kernel
+	 * clients on this device to handle sysrq keys.
+	 */
+	struct list_head client_sysrq_list;
 
 	/**
 	 * @vblank_disable_immediate:

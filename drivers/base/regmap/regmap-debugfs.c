@@ -130,7 +130,7 @@ static unsigned int regmap_debugfs_get_dump_start(struct regmap *map,
 
 			/* No cache entry?  Start a new one */
 			if (!c) {
-				c = kzalloc(sizeof(*c), GFP_KERNEL);
+				c = kzalloc_obj(*c);
 				if (!c) {
 					regmap_debugfs_free_dump_cache(map);
 					mutex_unlock(&map->cache_lock);
@@ -470,10 +470,6 @@ static ssize_t regmap_cache_only_write_file(struct file *file,
 	if (err)
 		return count;
 
-	err = debugfs_file_get(file->f_path.dentry);
-	if (err)
-		return err;
-
 	map->lock(map->lock_arg);
 
 	if (new_val && !map->cache_only) {
@@ -486,7 +482,6 @@ static ssize_t regmap_cache_only_write_file(struct file *file,
 	map->cache_only = new_val;
 
 	map->unlock(map->lock_arg);
-	debugfs_file_put(file->f_path.dentry);
 
 	if (require_sync) {
 		err = regcache_sync(map);
@@ -517,10 +512,6 @@ static ssize_t regmap_cache_bypass_write_file(struct file *file,
 	if (err)
 		return count;
 
-	err = debugfs_file_get(file->f_path.dentry);
-	if (err)
-		return err;
-
 	map->lock(map->lock_arg);
 
 	if (new_val && !map->cache_bypass) {
@@ -532,7 +523,6 @@ static ssize_t regmap_cache_bypass_write_file(struct file *file,
 	map->cache_bypass = new_val;
 
 	map->unlock(map->lock_arg);
-	debugfs_file_put(file->f_path.dentry);
 
 	return count;
 }
@@ -565,7 +555,7 @@ void regmap_debugfs_init(struct regmap *map)
 	/* If we don't have the debugfs root yet, postpone init */
 	if (!regmap_debugfs_root) {
 		struct regmap_debugfs_node *node;
-		node = kzalloc(sizeof(*node), GFP_KERNEL);
+		node = kzalloc_obj(*node);
 		if (!node)
 			return;
 		node->map = map;

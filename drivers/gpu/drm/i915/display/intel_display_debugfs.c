@@ -4,6 +4,7 @@
  */
 
 #include <linux/debugfs.h>
+#include <linux/string_choices.h>
 #include <linux/string_helpers.h>
 
 #include <drm/drm_debugfs.h>
@@ -11,9 +12,9 @@
 #include <drm/drm_edid.h>
 #include <drm/drm_file.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_print.h>
 
 #include "hsw_ips.h"
-#include "i915_irq.h"
 #include "i915_reg.h"
 #include "i9xx_wm_regs.h"
 #include "intel_alpm.h"
@@ -25,6 +26,7 @@
 #include "intel_display_debugfs_params.h"
 #include "intel_display_power.h"
 #include "intel_display_power_well.h"
+#include "intel_display_regs.h"
 #include "intel_display_rpm.h"
 #include "intel_display_types.h"
 #include "intel_dmc.h"
@@ -39,12 +41,14 @@
 #include "intel_hdcp.h"
 #include "intel_hdmi.h"
 #include "intel_hotplug.h"
+#include "intel_link_bw.h"
 #include "intel_panel.h"
 #include "intel_pps.h"
 #include "intel_psr.h"
 #include "intel_psr_regs.h"
 #include "intel_vdsc.h"
 #include "intel_wm.h"
+#include "intel_tc.h"
 
 static struct intel_display *node_to_intel_display(struct drm_info_node *node)
 {
@@ -74,9 +78,6 @@ static int i915_frontbuffer_tracking(struct seq_file *m, void *unused)
 	seq_printf(m, "FB tracking busy bits: 0x%08x\n",
 		   display->fb_tracking.busy_bits);
 
-	seq_printf(m, "FB tracking flip bits: 0x%08x\n",
-		   display->fb_tracking.flip_bits);
-
 	spin_unlock(&display->fb_tracking.lock);
 
 	return 0;
@@ -85,7 +86,7 @@ static int i915_frontbuffer_tracking(struct seq_file *m, void *unused)
 static int i915_sr_status(struct seq_file *m, void *unused)
 {
 	struct intel_display *display = node_to_intel_display(m->private);
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 	bool sr_enabled = false;
 
 	wakeref = intel_display_power_get(display, POWER_DOMAIN_INIT);
@@ -244,6 +245,8 @@ static void intel_connector_info(struct seq_file *m,
 {
 	struct intel_connector *intel_connector = to_intel_connector(connector);
 	const struct drm_display_mode *mode;
+	struct drm_printer p = drm_seq_file_printer(m);
+	struct intel_digital_port *dig_port = NULL;
 
 	seq_printf(m, "[CONNECTOR:%d:%s]: status: %s\n",
 		   connector->base.id, connector->name,
@@ -266,13 +269,18 @@ static void intel_connector_info(struct seq_file *m,
 			intel_dp_mst_info(m, intel_connector);
 		else
 			intel_dp_info(m, intel_connector);
+		dig_port = dp_to_dig_port(intel_attached_dp(intel_connector));
 		break;
 	case DRM_MODE_CONNECTOR_HDMIA:
 		intel_hdmi_info(m, intel_connector);
+		dig_port = hdmi_to_dig_port(intel_attached_hdmi(intel_connector));
 		break;
 	default:
 		break;
 	}
+
+	if (dig_port != NULL && intel_encoder_is_tc(&dig_port->base))
+		intel_tc_info(&p, dig_port);
 
 	intel_hdcp_info(m, intel_connector);
 
@@ -618,7 +626,7 @@ static int i915_shared_dplls_info(struct seq_file *m, void *unused)
 {
 	struct intel_display *display = node_to_intel_display(m->private);
 	struct drm_printer p = drm_seq_file_printer(m);
-	struct intel_shared_dpll *pll;
+	struct intel_dpll *pll;
 	int i;
 
 	drm_modeset_lock_all(display->drm);
@@ -627,7 +635,7 @@ static int i915_shared_dplls_info(struct seq_file *m, void *unused)
 		   display->dpll.ref_clks.nssc,
 		   display->dpll.ref_clks.ssc);
 
-	for_each_shared_dpll(display, pll, i) {
+	for_each_dpll(display, pll, i) {
 		drm_printf(&p, "DPLL%i: %s, id: %i\n", pll->index,
 			   pll->info->name, pll->info->id);
 		drm_printf(&p, " pipe_mask: 0x%x, active: 0x%x, on: %s\n",
@@ -818,14 +826,14 @@ static const struct drm_info_list intel_display_debugfs_list[] = {
 
 void intel_display_debugfs_register(struct intel_display *display)
 {
-	struct drm_minor *minor = display->drm->primary;
+	struct dentry *debugfs_root = display->drm->debugfs_root;
 
-	debugfs_create_file("i915_fifo_underrun_reset", 0644, minor->debugfs_root,
+	debugfs_create_file("i915_fifo_underrun_reset", 0644, debugfs_root,
 			    display, &i915_fifo_underrun_reset_ops);
 
 	drm_debugfs_create_files(intel_display_debugfs_list,
 				 ARRAY_SIZE(intel_display_debugfs_list),
-				 minor->debugfs_root, minor);
+				 debugfs_root, display->drm->primary);
 
 	intel_bios_debugfs_register(display);
 	intel_cdclk_debugfs_register(display);
@@ -972,7 +980,7 @@ static ssize_t i915_dsc_fec_support_write(struct file *file,
 		return ret;
 
 	drm_dbg(display->drm, "Got %s for DSC Enable\n",
-		(dsc_enable) ? "true" : "false");
+		str_true_false(dsc_enable));
 	intel_dp->force_dsc_en = dsc_enable;
 
 	*offp += len;
@@ -1183,7 +1191,7 @@ static ssize_t i915_dsc_fractional_bpp_write(struct file *file,
 		return ret;
 
 	drm_dbg(display->drm, "Got %s for DSC Fractional BPP Enable\n",
-		(dsc_fractional_bpp_enable) ? "true" : "false");
+		str_true_false(dsc_fractional_bpp_enable));
 	intel_dp->force_dsc_fractional_bpp_en = dsc_fractional_bpp_enable;
 
 	*offp += len;
@@ -1325,6 +1333,7 @@ void intel_connector_debugfs_add(struct intel_connector *connector)
 	intel_psr_connector_debugfs_add(connector);
 	intel_alpm_lobf_debugfs_add(connector);
 	intel_dp_link_training_debugfs_add(connector);
+	intel_link_bw_connector_debugfs_add(connector);
 
 	if (DISPLAY_VER(display) >= 11 &&
 	    ((connector_type == DRM_MODE_CONNECTOR_DisplayPort && !connector->mst.dp) ||

@@ -5,23 +5,32 @@
  * Copyright (C) 2021, Alibaba Cloud
  */
 #include "xattr.h"
+#include <linux/compat.h>
 #include <trace/events/erofs.h>
 
-static int erofs_fill_symlink(struct inode *inode, void *kaddr,
-			      unsigned int m_pofs)
+static int erofs_fill_symlink(struct inode *inode, void *bptr, unsigned int ofs)
 {
 	struct erofs_inode *vi = EROFS_I(inode);
-	loff_t off;
+	char *link;
+	loff_t end;
 
-	m_pofs += vi->xattr_isize;
-	/* check if it cannot be handled with fast symlink scheme */
-	if (vi->datalayout != EROFS_INODE_FLAT_INLINE ||
-	    check_add_overflow(m_pofs, inode->i_size, &off) ||
-	    off > i_blocksize(inode))
-		return 0;
-
-	inode->i_link = kmemdup_nul(kaddr + m_pofs, inode->i_size, GFP_KERNEL);
-	return inode->i_link ? 0 : -ENOMEM;
+	ofs += vi->xattr_isize;
+	/* check whether the symlink data is small enough to be inlined */
+	if (vi->datalayout == EROFS_INODE_FLAT_INLINE &&
+	    !check_add_overflow(ofs, inode->i_size, &end) &&
+	    end <= i_blocksize(inode)) {
+		link = kmemdup_nul(bptr + ofs, inode->i_size, GFP_KERNEL);
+		if (!link)
+			return -ENOMEM;
+		if (unlikely(!inode->i_size || strlen(link) != inode->i_size)) {
+			erofs_err(inode->i_sb, "invalid fast symlink size %llu @ nid %llu",
+				  inode->i_size | 0ULL, vi->nid);
+			kfree(link);
+			return -EFSCORRUPTED;
+		}
+		inode_set_cached_link(inode, link, inode->i_size);
+	}
+	return 0;
 }
 
 static int erofs_read_inode(struct inode *inode)
@@ -29,6 +38,7 @@ static int erofs_read_inode(struct inode *inode)
 	struct super_block *sb = inode->i_sb;
 	erofs_blk_t blkaddr = erofs_blknr(sb, erofs_iloc(inode));
 	unsigned int ofs = erofs_blkoff(sb, erofs_iloc(inode));
+	bool in_mbox = erofs_inode_in_metabox(inode);
 	struct erofs_buf buf = __EROFS_BUF_INITIALIZER;
 	struct erofs_sb_info *sbi = EROFS_SB(sb);
 	erofs_blk_t addrmask = BIT_ULL(48) - 1;
@@ -39,10 +49,10 @@ static int erofs_read_inode(struct inode *inode)
 	void *ptr;
 	int err = 0;
 
-	ptr = erofs_read_metabuf(&buf, sb, erofs_pos(sb, blkaddr), true);
+	ptr = erofs_read_metabuf(&buf, sb, erofs_pos(sb, blkaddr), in_mbox);
 	if (IS_ERR(ptr)) {
 		err = PTR_ERR(ptr);
-		erofs_err(sb, "failed to get inode (nid: %llu) page, err %d",
+		erofs_err(sb, "failed to read inode meta block (nid: %llu): %d",
 			  vi->nid, err);
 		goto err_out;
 	}
@@ -78,10 +88,10 @@ static int erofs_read_inode(struct inode *inode)
 
 			memcpy(&copied, dic, gotten);
 			ptr = erofs_read_metabuf(&buf, sb,
-					erofs_pos(sb, blkaddr + 1), true);
+					erofs_pos(sb, blkaddr + 1), in_mbox);
 			if (IS_ERR(ptr)) {
 				err = PTR_ERR(ptr);
-				erofs_err(sb, "failed to get inode payload block (nid: %llu), err %d",
+				erofs_err(sb, "failed to read inode payload block (nid: %llu): %d",
 					  vi->nid, err);
 				goto err_out;
 			}
@@ -135,6 +145,11 @@ static int erofs_read_inode(struct inode *inode)
 		err = -EFSCORRUPTED;
 		goto err_out;
 	}
+
+	if (IS_ENABLED(CONFIG_EROFS_FS_POSIX_ACL) &&
+	    erofs_inode_has_noacl(inode, ptr, ofs))
+		cache_no_acl(inode);
+
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFDIR:
 		vi->dot_omitted = (ifmt >> EROFS_I_DOT_OMITTED_BIT) & 1;
@@ -168,11 +183,17 @@ static int erofs_read_inode(struct inode *inode)
 		goto err_out;
 	}
 
-	if (erofs_inode_is_data_compressed(vi->datalayout))
-		inode->i_blocks = le32_to_cpu(copied.i_u.blocks_lo) <<
-					(sb->s_blocksize_bits - 9);
-	else
+	if (!erofs_inode_is_data_compressed(vi->datalayout)) {
 		inode->i_blocks = round_up(inode->i_size, sb->s_blocksize) >> 9;
+	} else if (!IS_ENABLED(CONFIG_EROFS_FS_ZIP) || !sbi->available_compr_algs) {
+		erofs_err(sb, "compressed inode (nid %llu) is invalid in a plain filesystem",
+			  vi->nid);
+		err = -EFSCORRUPTED;
+		goto err_out;
+	} else {
+		inode->i_blocks = le32_to_cpu(copied.i_u.blocks_lo) <<
+				(sb->s_blocksize_bits - 9);
+	}
 
 	if (vi->datalayout == EROFS_INODE_CHUNK_BASED) {
 		/* fill chunked inode summary info */
@@ -201,7 +222,7 @@ err_out:
 
 static int erofs_fill_inode(struct inode *inode)
 {
-	struct erofs_inode *vi = EROFS_I(inode);
+	const struct address_space_operations *aops;
 	int err;
 
 	trace_erofs_fill_inode(inode);
@@ -212,10 +233,8 @@ static int erofs_fill_inode(struct inode *inode)
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFREG:
 		inode->i_op = &erofs_generic_iops;
-		if (erofs_inode_is_data_compressed(vi->datalayout))
-			inode->i_fop = &generic_ro_fops;
-		else
-			inode->i_fop = &erofs_file_fops;
+		inode->i_fop = erofs_ishare_fill_inode(inode) ?
+			       &erofs_ishare_fops : &erofs_file_fops;
 		break;
 	case S_IFDIR:
 		inode->i_op = &erofs_dir_iops;
@@ -236,41 +255,24 @@ static int erofs_fill_inode(struct inode *inode)
 	}
 
 	mapping_set_large_folios(inode->i_mapping);
-	if (erofs_inode_is_data_compressed(vi->datalayout)) {
-#ifdef CONFIG_EROFS_FS_ZIP
-		DO_ONCE_LITE_IF(inode->i_blkbits != PAGE_SHIFT,
-			  erofs_info, inode->i_sb,
-			  "EXPERIMENTAL EROFS subpage compressed block support in use. Use at your own risk!");
-		inode->i_mapping->a_ops = &z_erofs_aops;
-#else
-		err = -EOPNOTSUPP;
-#endif
-	} else {
-		inode->i_mapping->a_ops = &erofs_aops;
-#ifdef CONFIG_EROFS_FS_ONDEMAND
-		if (erofs_is_fscache_mode(inode->i_sb))
-			inode->i_mapping->a_ops = &erofs_fscache_access_aops;
-#endif
-#ifdef CONFIG_EROFS_FS_BACKED_BY_FILE
-		if (erofs_is_fileio_mode(EROFS_SB(inode->i_sb)))
-			inode->i_mapping->a_ops = &erofs_fileio_aops;
-#endif
-	}
-
-	return err;
+	aops = erofs_get_aops(inode, false);
+	if (IS_ERR(aops))
+		return PTR_ERR(aops);
+	inode->i_mapping->a_ops = aops;
+	return 0;
 }
 
 /*
  * ino_t is 32-bits on 32-bit arch. We have to squash the 64-bit value down
  * so that it will fit.
  */
-static ino_t erofs_squash_ino(erofs_nid_t nid)
+static ino_t erofs_squash_ino(struct super_block *sb, erofs_nid_t nid)
 {
-	ino_t ino = (ino_t)nid;
+	u64 ino64 = erofs_nid_to_ino64(EROFS_SB(sb), nid);
 
 	if (sizeof(ino_t) < sizeof(erofs_nid_t))
-		ino ^= nid >> (sizeof(erofs_nid_t) - sizeof(ino_t)) * 8;
-	return ino;
+		ino64 ^= ino64 >> (sizeof(erofs_nid_t) - sizeof(ino_t)) * 8;
+	return (ino_t)ino64;
 }
 
 static int erofs_iget5_eq(struct inode *inode, void *opaque)
@@ -282,7 +284,7 @@ static int erofs_iget5_set(struct inode *inode, void *opaque)
 {
 	const erofs_nid_t nid = *(erofs_nid_t *)opaque;
 
-	inode->i_ino = erofs_squash_ino(nid);
+	inode->i_ino = erofs_squash_ino(inode->i_sb, nid);
 	EROFS_I(inode)->nid = nid;
 	return 0;
 }
@@ -291,12 +293,12 @@ struct inode *erofs_iget(struct super_block *sb, erofs_nid_t nid)
 {
 	struct inode *inode;
 
-	inode = iget5_locked(sb, erofs_squash_ino(nid), erofs_iget5_eq,
+	inode = iget5_locked(sb, erofs_squash_ino(sb, nid), erofs_iget5_eq,
 			     erofs_iget5_set, &nid);
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
 
-	if (inode->i_state & I_NEW) {
+	if (inode_state_read_once(inode) & I_NEW) {
 		int err = erofs_fill_inode(inode);
 
 		if (err) {
@@ -339,6 +341,40 @@ int erofs_getattr(struct mnt_idmap *idmap, const struct path *path,
 	generic_fillattr(idmap, request_mask, inode, stat);
 	return 0;
 }
+
+static int erofs_ioctl_get_volume_label(struct inode *inode, void __user *arg)
+{
+	struct erofs_sb_info *sbi = EROFS_I_SB(inode);
+	int ret;
+
+	if (!sbi->volume_name)
+		ret = clear_user(arg, 1);
+	else
+		ret = copy_to_user(arg, sbi->volume_name,
+				   strlen(sbi->volume_name));
+	return ret ? -EFAULT : 0;
+}
+
+long erofs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+	struct inode *inode = file_inode(filp);
+	void __user *argp = (void __user *)arg;
+
+	switch (cmd) {
+	case FS_IOC_GETFSLABEL:
+		return erofs_ioctl_get_volume_label(inode, argp);
+	default:
+		return -ENOTTY;
+	}
+}
+
+#ifdef CONFIG_COMPAT
+long erofs_compat_ioctl(struct file *filp, unsigned int cmd,
+			unsigned long arg)
+{
+	return erofs_ioctl(filp, cmd, (unsigned long)compat_ptr(arg));
+}
+#endif
 
 const struct inode_operations erofs_generic_iops = {
 	.getattr = erofs_getattr,

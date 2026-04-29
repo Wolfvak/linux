@@ -965,7 +965,7 @@ static const struct gpio_chip gpio_chip_template = {
 	.ngpio			= 32,
 	.direction_input	= sm501_gpio_input,
 	.direction_output	= sm501_gpio_output,
-	.set_rv			= sm501_gpio_set,
+	.set			= sm501_gpio_set,
 	.get			= sm501_gpio_get,
 };
 
@@ -1335,7 +1335,7 @@ static int sm501_plat_probe(struct platform_device *dev)
 	struct sm501_devdata *sm;
 	int ret;
 
-	sm = kzalloc(sizeof(*sm), GFP_KERNEL);
+	sm = kzalloc_obj(*sm);
 	if (!sm) {
 		ret = -ENOMEM;
 		goto err1;
@@ -1518,7 +1518,7 @@ static int sm501_pci_probe(struct pci_dev *dev,
 	struct sm501_devdata *sm;
 	int err;
 
-	sm = kzalloc(sizeof(*sm), GFP_KERNEL);
+	sm = kzalloc_obj(*sm);
 	if (!sm) {
 		err = -ENOMEM;
 		goto err1;

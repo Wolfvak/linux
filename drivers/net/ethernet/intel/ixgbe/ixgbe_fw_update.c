@@ -516,7 +516,7 @@ int ixgbe_get_pending_updates(struct ixgbe_adapter *adapter, u8 *pending,
 	struct ixgbe_hw *hw = &adapter->hw;
 	int err;
 
-	dev_caps = kzalloc(sizeof(*dev_caps), GFP_KERNEL);
+	dev_caps = kzalloc_obj(*dev_caps);
 	if (!dev_caps)
 		return -ENOMEM;
 
@@ -593,7 +593,7 @@ static int ixgbe_cancel_pending_update(struct ixgbe_adapter *adapter,
 					   "Canceling previous pending update",
 					   component, 0, 0);
 
-	err = ixgbe_acquire_nvm(hw, IXGBE_RES_WRITE);
+	err = ixgbe_acquire_nvm(hw, LIBIE_AQC_RES_ACCESS_WRITE);
 	if (err) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "Failed to acquire device flash lock");
@@ -686,7 +686,7 @@ int ixgbe_flash_pldm_image(struct devlink *devlink,
 	if (err)
 		return err;
 
-	err = ixgbe_acquire_nvm(hw, IXGBE_RES_WRITE);
+	err = ixgbe_acquire_nvm(hw, LIBIE_AQC_RES_ACCESS_WRITE);
 	if (err) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "Failed to acquire device flash lock");

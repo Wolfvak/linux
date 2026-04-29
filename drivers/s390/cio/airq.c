@@ -9,6 +9,7 @@
  *		 Peter Oberparleiter <peter.oberparleiter@de.ibm.com>
  */
 
+#include <linux/export.h>
 #include <linux/init.h>
 #include <linux/irq.h>
 #include <linux/kernel_stat.h>
@@ -129,7 +130,7 @@ struct airq_iv *airq_iv_create(unsigned long bits, unsigned long flags,
 	struct airq_iv *iv;
 	unsigned long size;
 
-	iv = kzalloc(sizeof(*iv), GFP_KERNEL);
+	iv = kzalloc_obj(*iv);
 	if (!iv)
 		goto out;
 	iv->bits = bits;

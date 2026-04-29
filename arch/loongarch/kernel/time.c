@@ -5,6 +5,7 @@
  * Copyright (C) 2020-2022 Loongson Technology Corporation Limited
  */
 #include <linux/clockchips.h>
+#include <linux/cpuhotplug.h>
 #include <linux/delay.h>
 #include <linux/export.h>
 #include <linux/init.h>
@@ -17,6 +18,7 @@
 #include <asm/loongarch.h>
 #include <asm/paravirt.h>
 #include <asm/time.h>
+#include <asm/timex.h>
 
 u64 cpu_clock_freq;
 EXPORT_SYMBOL(cpu_clock_freq);
@@ -49,10 +51,10 @@ static int constant_set_state_oneshot(struct clock_event_device *evt)
 
 	raw_spin_lock(&state_lock);
 
-	timer_config = csr_read64(LOONGARCH_CSR_TCFG);
+	timer_config = csr_read(LOONGARCH_CSR_TCFG);
 	timer_config |= CSR_TCFG_EN;
 	timer_config &= ~CSR_TCFG_PERIOD;
-	csr_write64(timer_config, LOONGARCH_CSR_TCFG);
+	csr_write(timer_config, LOONGARCH_CSR_TCFG);
 
 	raw_spin_unlock(&state_lock);
 
@@ -61,15 +63,15 @@ static int constant_set_state_oneshot(struct clock_event_device *evt)
 
 static int constant_set_state_periodic(struct clock_event_device *evt)
 {
-	unsigned long period;
 	unsigned long timer_config;
+	u64 period = const_clock_freq;
 
 	raw_spin_lock(&state_lock);
 
-	period = const_clock_freq / HZ;
+	do_div(period, HZ);
 	timer_config = period & CSR_TCFG_VAL;
 	timer_config |= (CSR_TCFG_PERIOD | CSR_TCFG_EN);
-	csr_write64(timer_config, LOONGARCH_CSR_TCFG);
+	csr_write(timer_config, LOONGARCH_CSR_TCFG);
 
 	raw_spin_unlock(&state_lock);
 
@@ -82,9 +84,9 @@ static int constant_set_state_shutdown(struct clock_event_device *evt)
 
 	raw_spin_lock(&state_lock);
 
-	timer_config = csr_read64(LOONGARCH_CSR_TCFG);
+	timer_config = csr_read(LOONGARCH_CSR_TCFG);
 	timer_config &= ~CSR_TCFG_EN;
-	csr_write64(timer_config, LOONGARCH_CSR_TCFG);
+	csr_write(timer_config, LOONGARCH_CSR_TCFG);
 
 	raw_spin_unlock(&state_lock);
 
@@ -97,14 +99,29 @@ static int constant_timer_next_event(unsigned long delta, struct clock_event_dev
 
 	delta &= CSR_TCFG_VAL;
 	timer_config = delta | CSR_TCFG_EN;
-	csr_write64(timer_config, LOONGARCH_CSR_TCFG);
+	csr_write(timer_config, LOONGARCH_CSR_TCFG);
+
+	return 0;
+}
+
+static int arch_timer_starting(unsigned int cpu)
+{
+	set_csr_ecfg(ECFGF_TIMER);
+
+	return 0;
+}
+
+static int arch_timer_dying(unsigned int cpu)
+{
+	/* Clear Timer Interrupt */
+	write_csr_tintclear(CSR_TINTCLR_TI);
 
 	return 0;
 }
 
 static unsigned long get_loops_per_jiffy(void)
 {
-	unsigned long lpj = (unsigned long)const_clock_freq;
+	u64 lpj = const_clock_freq;
 
 	do_div(lpj, HZ);
 
@@ -115,13 +132,13 @@ static long init_offset;
 
 void save_counter(void)
 {
-	init_offset = drdtime();
+	init_offset = get_cycles();
 }
 
 void sync_counter(void)
 {
 	/* Ensure counter begin at 0 */
-	csr_write64(init_offset, LOONGARCH_CSR_CNTC);
+	csr_write(init_offset, LOONGARCH_CSR_CNTC);
 }
 
 int constant_clockevent_init(void)
@@ -172,17 +189,21 @@ int constant_clockevent_init(void)
 	lpj_fine = get_loops_per_jiffy();
 	pr_info("Constant clock event device register\n");
 
+	cpuhp_setup_state(CPUHP_AP_LOONGARCH_ARCH_TIMER_STARTING,
+			  "clockevents/loongarch/timer:starting",
+			  arch_timer_starting, arch_timer_dying);
+
 	return 0;
 }
 
 static u64 read_const_counter(struct clocksource *clk)
 {
-	return drdtime();
+	return get_cycles64();
 }
 
 static noinstr u64 sched_clock_read(void)
 {
-	return drdtime();
+	return get_cycles64();
 }
 
 static struct clocksource clocksource_const = {
@@ -191,7 +212,9 @@ static struct clocksource clocksource_const = {
 	.read = read_const_counter,
 	.mask = CLOCKSOURCE_MASK(64),
 	.flags = CLOCK_SOURCE_IS_CONTINUOUS,
+#ifdef CONFIG_GENERIC_GETTIMEOFDAY
 	.vdso_clock_mode = VDSO_CLOCKMODE_CPU,
+#endif
 };
 
 int __init constant_clocksource_init(void)
@@ -215,7 +238,7 @@ void __init time_init(void)
 	else
 		const_clock_freq = calc_const_freq();
 
-	init_offset = -(drdtime() - csr_read64(LOONGARCH_CSR_CNTC));
+	init_offset = -(get_cycles() - csr_read(LOONGARCH_CSR_CNTC));
 
 	constant_clockevent_init();
 	constant_clocksource_init();

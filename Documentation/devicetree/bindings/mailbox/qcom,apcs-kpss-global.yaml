@@ -187,10 +187,10 @@ allOf:
             enum:
               - qcom,msm8916-apcs-kpss-global
     then:
-      $ref: "#/$defs/msm8916-apcs-clock-controller"
+      $ref: '#/$defs/msm8916-apcs-clock-controller'
       properties:
         clock-controller:
-          $ref: "#/$defs/msm8916-apcs-clock-controller"
+          $ref: '#/$defs/msm8916-apcs-clock-controller'
 
   - if:
       properties:
@@ -199,10 +199,10 @@ allOf:
             enum:
               - qcom,msm8939-apcs-kpss-global
     then:
-      $ref: "#/$defs/msm8939-apcs-clock-controller"
+      $ref: '#/$defs/msm8939-apcs-clock-controller'
       properties:
         clock-controller:
-          $ref: "#/$defs/msm8939-apcs-clock-controller"
+          $ref: '#/$defs/msm8939-apcs-clock-controller'
 
   - if:
       properties:
@@ -211,10 +211,10 @@ allOf:
             enum:
               - qcom,sdx55-apcs-gcc
     then:
-      $ref: "#/$defs/sdx55-apcs-clock-controller"
+      $ref: '#/$defs/sdx55-apcs-clock-controller'
       properties:
         clock-controller:
-          $ref: "#/$defs/sdx55-apcs-clock-controller"
+          $ref: '#/$defs/sdx55-apcs-clock-controller'
 
   - if:
       properties:
@@ -223,10 +223,10 @@ allOf:
             enum:
               - qcom,ipq6018-apcs-apps-global
     then:
-      $ref: "#/$defs/ipq6018-apcs-clock-controller"
+      $ref: '#/$defs/ipq6018-apcs-clock-controller'
       properties:
         clock-controller:
-          $ref: "#/$defs/ipq6018-apcs-clock-controller"
+          $ref: '#/$defs/ipq6018-apcs-clock-controller'
 
   - if:
       properties:
@@ -251,19 +251,12 @@ examples:
   # Example apcs with msm8996
   - |
     #include <dt-bindings/interrupt-controller/arm-gic.h>
-    apcs_glb: mailbox@9820000 {
+    mailbox@9820000 {
         compatible = "qcom,msm8996-apcs-hmss-global";
         reg = <0x9820000 0x1000>;
 
         #mbox-cells = <1>;
         #clock-cells = <0>;
-    };
-
-    rpm-glink {
-        compatible = "qcom,glink-rpm";
-        interrupts = <GIC_SPI 168 IRQ_TYPE_EDGE_RISING>;
-        qcom,rpm-msg-ram = <&rpm_msg_ram>;
-        mboxes = <&apcs_glb 0>;
     };
 
   # Example apcs with qcs404

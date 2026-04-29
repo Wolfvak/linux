@@ -14,6 +14,7 @@
 #include <linux/buffer_head.h>
 #include <linux/spinlock.h>
 #include <linux/blkdev.h>
+#include <linux/fs_struct.h>
 #include <linux/nilfs2_api.h>
 #include <linux/nilfs2_ondisk.h>
 #include "the_nilfs.h"
@@ -268,9 +269,9 @@ int nilfs_set_link(struct inode *dir, struct nilfs_dir_entry *de,
 extern int nilfs_sync_file(struct file *, loff_t, loff_t, int);
 
 /* ioctl.c */
-int nilfs_fileattr_get(struct dentry *dentry, struct fileattr *m);
+int nilfs_fileattr_get(struct dentry *dentry, struct file_kattr *m);
 int nilfs_fileattr_set(struct mnt_idmap *idmap,
-		       struct dentry *dentry, struct fileattr *fa);
+		       struct dentry *dentry, struct file_kattr *fa);
 long nilfs_ioctl(struct file *, unsigned int, unsigned long);
 long nilfs_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 int nilfs_ioctl_prepare_clean_segments(struct the_nilfs *, struct nilfs_argv *,

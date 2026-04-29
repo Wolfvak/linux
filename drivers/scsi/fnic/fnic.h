@@ -323,8 +323,6 @@ enum fnic_state {
 	FNIC_IN_ETH_TRANS_FC_MODE,
 };
 
-struct mempool;
-
 enum fnic_role_e {
 	FNIC_ROLE_FCP_INITIATOR = 0,
 };
@@ -505,7 +503,8 @@ void fnic_free_rq_buf(struct vnic_rq *rq, struct vnic_rq_buf *buf);
 void fnic_flush_tx(struct work_struct *work);
 void fnic_update_mac_locked(struct fnic *, u8 *new);
 
-int fnic_queuecommand(struct Scsi_Host *, struct scsi_cmnd *);
+enum scsi_qc_status fnic_queuecommand(struct Scsi_Host *shost,
+				      struct scsi_cmnd *sc);
 int fnic_abort_cmd(struct scsi_cmnd *);
 int fnic_device_reset(struct scsi_cmnd *);
 int fnic_eh_host_reset_handler(struct scsi_cmnd *sc);

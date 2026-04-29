@@ -3,6 +3,8 @@
 #define _LINUX_CLEANUP_H
 
 #include <linux/compiler.h>
+#include <linux/err.h>
+#include <linux/args.h>
 
 /**
  * DOC: scope-based cleanup helpers
@@ -61,9 +63,20 @@
  * Observe the lock is held for the remainder of the "if ()" block not
  * the remainder of "func()".
  *
- * Now, when a function uses both __free() and guard(), or multiple
- * instances of __free(), the LIFO order of variable definition order
- * matters. GCC documentation says:
+ * The ACQUIRE() macro can be used in all places that guard() can be
+ * used and additionally support conditional locks::
+ *
+ *	DEFINE_GUARD_COND(pci_dev, _try, pci_dev_trylock(_T))
+ *	...
+ *	ACQUIRE(pci_dev_try, lock)(dev);
+ *	rc = ACQUIRE_ERR(pci_dev_try, &lock);
+ *	if (rc)
+ *		return rc;
+ *	// @lock is held
+ *
+ * Now, when a function uses both __free() and guard()/ACQUIRE(), or
+ * multiple instances of __free(), the LIFO order of variable definition
+ * order matters. GCC documentation says:
  *
  * "When multiple variables in the same scope have cleanup attributes,
  * at exit from the scope their associated cleanup functions are run in
@@ -195,19 +208,19 @@
  */
 
 #define DEFINE_FREE(_name, _type, _free) \
-	static inline void __free_##_name(void *p) { _type _T = *(_type *)p; _free; }
+	static __always_inline void __free_##_name(void *p) { _type _T = *(_type *)p; _free; }
 
 #define __free(_name)	__cleanup(__free_##_name)
 
-#define __get_and_null(p, nullvalue)   \
+#define __get_and_null(p, nullvalue)	    \
 	({                                  \
-		__auto_type __ptr = &(p);   \
-		__auto_type __val = *__ptr; \
+		auto __ptr = &(p);	    \
+		auto __val = *__ptr;	    \
 		*__ptr = nullvalue;         \
 		__val;                      \
 	})
 
-static inline __must_check
+static __always_inline __must_check
 const volatile void * __must_check_fn(const volatile void *val)
 { return val; }
 
@@ -248,6 +261,10 @@ const volatile void * __must_check_fn(const volatile void *val)
  * CLASS(name, var)(args...):
  *	declare the variable @var as an instance of the named class
  *
+ * CLASS_INIT(name, var, init_expr):
+ *	declare the variable @var as an instance of the named class with
+ *	custom initialization expression.
+ *
  * Ex.
  *
  * DEFINE_CLASS(fdget, struct fd, fdput(_T), fdget(fd), int fd)
@@ -261,22 +278,39 @@ const volatile void * __must_check_fn(const volatile void *val)
 
 #define DEFINE_CLASS(_name, _type, _exit, _init, _init_args...)		\
 typedef _type class_##_name##_t;					\
-static inline void class_##_name##_destructor(_type *p)			\
+typedef _type lock_##_name##_t;						\
+static __always_inline void class_##_name##_destructor(_type *p)	\
+	__no_context_analysis						\
 { _type _T = *p; _exit; }						\
-static inline _type class_##_name##_constructor(_init_args)		\
+static __always_inline _type class_##_name##_constructor(_init_args)	\
+	__no_context_analysis						\
 { _type t = _init; return t; }
 
 #define EXTEND_CLASS(_name, ext, _init, _init_args...)			\
+typedef lock_##_name##_t lock_##_name##ext##_t;			\
 typedef class_##_name##_t class_##_name##ext##_t;			\
-static inline void class_##_name##ext##_destructor(class_##_name##_t *p)\
+static __always_inline void class_##_name##ext##_destructor(class_##_name##_t *p) \
 { class_##_name##_destructor(p); }					\
-static inline class_##_name##_t class_##_name##ext##_constructor(_init_args) \
+static __always_inline class_##_name##_t class_##_name##ext##_constructor(_init_args) \
+	__no_context_analysis \
 { class_##_name##_t t = _init; return t; }
 
 #define CLASS(_name, var)						\
 	class_##_name##_t var __cleanup(class_##_name##_destructor) =	\
 		class_##_name##_constructor
 
+#define CLASS_INIT(_name, _var, _init_expr)                             \
+        class_##_name##_t _var __cleanup(class_##_name##_destructor) = (_init_expr)
+
+#define __scoped_class(_name, var, _label, args...)        \
+	for (CLASS(_name, var)(args); ; ({ goto _label; })) \
+		if (0) {                                   \
+_label:                                                    \
+			break;                             \
+		} else
+
+#define scoped_class(_name, var, args...) \
+	__scoped_class(_name, var, __UNIQUE_ID(label), args)
 
 /*
  * DEFINE_GUARD(name, type, lock, unlock):
@@ -305,14 +339,51 @@ static inline class_##_name##_t class_##_name##ext##_constructor(_init_args) \
  *      acquire fails.
  *
  *      Only for conditional locks.
+ *
+ * ACQUIRE(name, var):
+ *	a named instance of the (guard) class, suitable for conditional
+ *	locks when paired with ACQUIRE_ERR().
+ *
+ * ACQUIRE_ERR(name, &var):
+ *	a helper that is effectively a PTR_ERR() conversion of the guard
+ *	pointer. Returns 0 when the lock was acquired and a negative
+ *	error code otherwise.
  */
 
 #define __DEFINE_CLASS_IS_CONDITIONAL(_name, _is_cond)	\
 static __maybe_unused const bool class_##_name##_is_conditional = _is_cond
 
-#define __DEFINE_GUARD_LOCK_PTR(_name, _exp) \
+#define DEFINE_CLASS_IS_UNCONDITIONAL(_name)		\
+	__DEFINE_CLASS_IS_CONDITIONAL(_name, false);	\
 	static inline void * class_##_name##_lock_ptr(class_##_name##_t *_T) \
-	{ return (void *)(__force unsigned long)*(_exp); }
+	{ return (void *)1; }
+
+#define __GUARD_IS_ERR(_ptr)                                       \
+	({                                                         \
+		unsigned long _rc = (__force unsigned long)(_ptr); \
+		unlikely((_rc - 1) >= -MAX_ERRNO - 1);             \
+	})
+
+#define __DEFINE_GUARD_LOCK_PTR(_name, _exp)                                \
+	static __always_inline void *class_##_name##_lock_ptr(class_##_name##_t *_T) \
+	{                                                                   \
+		void *_ptr = (void *)(__force unsigned long)*(_exp);        \
+		if (IS_ERR(_ptr)) {                                         \
+			_ptr = NULL;                                        \
+		}                                                           \
+		return _ptr;                                                \
+	}                                                                   \
+	static __always_inline int class_##_name##_lock_err(class_##_name##_t *_T) \
+	{                                                                   \
+		long _rc = (__force unsigned long)*(_exp);                  \
+		if (!_rc) {                                                 \
+			_rc = -EBUSY;                                       \
+		}                                                           \
+		if (!IS_ERR_VALUE(_rc)) {                                   \
+			_rc = 0;                                            \
+		}                                                           \
+		return _rc;                                                 \
+	}
 
 #define DEFINE_CLASS_IS_GUARD(_name) \
 	__DEFINE_CLASS_IS_CONDITIONAL(_name, false); \
@@ -323,22 +394,36 @@ static __maybe_unused const bool class_##_name##_is_conditional = _is_cond
 	__DEFINE_GUARD_LOCK_PTR(_name, _T)
 
 #define DEFINE_GUARD(_name, _type, _lock, _unlock) \
-	DEFINE_CLASS(_name, _type, if (_T) { _unlock; }, ({ _lock; _T; }), _type _T); \
+	DEFINE_CLASS(_name, _type, if (!__GUARD_IS_ERR(_T)) { _unlock; }, ({ _lock; _T; }), _type _T); \
 	DEFINE_CLASS_IS_GUARD(_name)
 
-#define DEFINE_GUARD_COND(_name, _ext, _condlock) \
+#define DEFINE_GUARD_COND_4(_name, _ext, _lock, _cond) \
 	__DEFINE_CLASS_IS_CONDITIONAL(_name##_ext, true); \
 	EXTEND_CLASS(_name, _ext, \
-		     ({ void *_t = _T; if (_T && !(_condlock)) _t = NULL; _t; }), \
+		     ({ void *_t = _T; int _RET = (_lock); if (_T && !(_cond)) _t = ERR_PTR(_RET); _t; }), \
 		     class_##_name##_t _T) \
-	static inline void * class_##_name##_ext##_lock_ptr(class_##_name##_t *_T) \
-	{ return class_##_name##_lock_ptr(_T); }
+	static __always_inline void * class_##_name##_ext##_lock_ptr(class_##_name##_t *_T) \
+	{ return class_##_name##_lock_ptr(_T); } \
+	static __always_inline int class_##_name##_ext##_lock_err(class_##_name##_t *_T) \
+	{ return class_##_name##_lock_err(_T); }
+
+/*
+ * Default binary condition; success on 'true'.
+ */
+#define DEFINE_GUARD_COND_3(_name, _ext, _lock) \
+	DEFINE_GUARD_COND_4(_name, _ext, _lock, _RET)
+
+#define DEFINE_GUARD_COND(X...) CONCATENATE(DEFINE_GUARD_COND_, COUNT_ARGS(X))(X)
 
 #define guard(_name) \
 	CLASS(_name, __UNIQUE_ID(guard))
 
 #define __guard_ptr(_name) class_##_name##_lock_ptr
+#define __guard_err(_name) class_##_name##_lock_err
 #define __is_cond_ptr(_name) class_##_name##_is_conditional
+
+#define ACQUIRE(_name, _var)     CLASS(_name, _var)
+#define ACQUIRE_ERR(_name, _var) __guard_err(_name)(_var)
 
 /*
  * Helper macro for scoped_guard().
@@ -394,34 +479,79 @@ _label:									\
  */
 
 #define __DEFINE_UNLOCK_GUARD(_name, _type, _unlock, ...)		\
+typedef _type lock_##_name##_t;						\
 typedef struct {							\
 	_type *lock;							\
 	__VA_ARGS__;							\
 } class_##_name##_t;							\
 									\
-static inline void class_##_name##_destructor(class_##_name##_t *_T)	\
+static __always_inline void class_##_name##_destructor(class_##_name##_t *_T) \
+	__no_context_analysis						\
 {									\
-	if (_T->lock) { _unlock; }					\
+	if (!__GUARD_IS_ERR(_T->lock)) { _unlock; }			\
 }									\
 									\
 __DEFINE_GUARD_LOCK_PTR(_name, &_T->lock)
 
-#define __DEFINE_LOCK_GUARD_1(_name, _type, _lock)			\
-static inline class_##_name##_t class_##_name##_constructor(_type *l)	\
+#define __DEFINE_LOCK_GUARD_1(_name, _type, ...)			\
+static __always_inline class_##_name##_t class_##_name##_constructor(_type *l) \
+	__no_context_analysis						\
 {									\
 	class_##_name##_t _t = { .lock = l }, *_T = &_t;		\
-	_lock;								\
+	__VA_ARGS__;							\
 	return _t;							\
 }
 
-#define __DEFINE_LOCK_GUARD_0(_name, _lock)				\
-static inline class_##_name##_t class_##_name##_constructor(void)	\
+#define __DEFINE_LOCK_GUARD_0(_name, ...)				\
+static __always_inline class_##_name##_t class_##_name##_constructor(void) \
+	__no_context_analysis						\
 {									\
 	class_##_name##_t _t = { .lock = (void*)1 },			\
 			 *_T __maybe_unused = &_t;			\
-	_lock;								\
+	__VA_ARGS__;							\
 	return _t;							\
 }
+
+#define DECLARE_LOCK_GUARD_0_ATTRS(_name, _lock, _unlock)		\
+static inline class_##_name##_t class_##_name##_constructor(void) _lock;\
+static inline void class_##_name##_destructor(class_##_name##_t *_T) _unlock;
+
+/*
+ * To support Context Analysis, we need to allow the compiler to see the
+ * acquisition and release of the context lock. However, the "cleanup" helpers
+ * wrap the lock in a struct passed through separate helper functions, which
+ * hides the lock alias from the compiler (no inter-procedural analysis).
+ *
+ * To make it work, we introduce an explicit alias to the context lock instance
+ * that is "cleaned" up with a separate cleanup helper. This helper is a dummy
+ * function that does nothing at runtime, but has the "_unlock" attribute to
+ * tell the compiler what happens at the end of the scope.
+ *
+ * To generalize the pattern, the WITH_LOCK_GUARD_1_ATTRS() macro should be used
+ * to redefine the constructor, which then also creates the alias variable with
+ * the right "cleanup" attribute, *after* DECLARE_LOCK_GUARD_1_ATTRS() has been
+ * used.
+ *
+ * Example usage:
+ *
+ *   DECLARE_LOCK_GUARD_1_ATTRS(mutex, __acquires(_T), __releases(*(struct mutex **)_T))
+ *   #define class_mutex_constructor(_T) WITH_LOCK_GUARD_1_ATTRS(mutex, _T)
+ *
+ * Note: To support the for-loop based scoped helpers, the auxiliary variable
+ * must be a pointer to the "class" type because it is defined in the same
+ * statement as the guard variable. However, we initialize it with the lock
+ * pointer (despite the type mismatch, the compiler's alias analysis still works
+ * as expected). The "_unlock" attribute receives a pointer to the auxiliary
+ * variable (a double pointer to the class type), and must be cast and
+ * dereferenced appropriately.
+ */
+#define DECLARE_LOCK_GUARD_1_ATTRS(_name, _lock, _unlock)		\
+static inline class_##_name##_t class_##_name##_constructor(lock_##_name##_t *_T) _lock;\
+static __always_inline void __class_##_name##_cleanup_ctx(class_##_name##_t **_T) \
+	__no_context_analysis _unlock { }
+#define WITH_LOCK_GUARD_1_ATTRS(_name, _T)				\
+	class_##_name##_constructor(_T),				\
+	*__UNIQUE_ID(unlock) __cleanup(__class_##_name##_cleanup_ctx) = (void *)(unsigned long)(_T)
 
 #define DEFINE_LOCK_GUARD_1(_name, _type, _lock, _unlock, ...)		\
 __DEFINE_CLASS_IS_CONDITIONAL(_name, false);				\
@@ -433,15 +563,22 @@ __DEFINE_CLASS_IS_CONDITIONAL(_name, false);				\
 __DEFINE_UNLOCK_GUARD(_name, void, _unlock, __VA_ARGS__)		\
 __DEFINE_LOCK_GUARD_0(_name, _lock)
 
-#define DEFINE_LOCK_GUARD_1_COND(_name, _ext, _condlock)		\
+#define DEFINE_LOCK_GUARD_1_COND_4(_name, _ext, _lock, _cond)		\
 	__DEFINE_CLASS_IS_CONDITIONAL(_name##_ext, true);		\
 	EXTEND_CLASS(_name, _ext,					\
 		     ({ class_##_name##_t _t = { .lock = l }, *_T = &_t;\
-		        if (_T->lock && !(_condlock)) _T->lock = NULL;	\
+		        int _RET = (_lock);                             \
+		        if (_T->lock && !(_cond)) _T->lock = ERR_PTR(_RET);\
 			_t; }),						\
 		     typeof_member(class_##_name##_t, lock) l)		\
-	static inline void * class_##_name##_ext##_lock_ptr(class_##_name##_t *_T) \
-	{ return class_##_name##_lock_ptr(_T); }
+	static __always_inline void * class_##_name##_ext##_lock_ptr(class_##_name##_t *_T) \
+	{ return class_##_name##_lock_ptr(_T); } \
+	static __always_inline int class_##_name##_ext##_lock_err(class_##_name##_t *_T) \
+	{ return class_##_name##_lock_err(_T); }
 
+#define DEFINE_LOCK_GUARD_1_COND_3(_name, _ext, _lock) \
+	DEFINE_LOCK_GUARD_1_COND_4(_name, _ext, _lock, _RET)
+
+#define DEFINE_LOCK_GUARD_1_COND(X...) CONCATENATE(DEFINE_LOCK_GUARD_1_COND_, COUNT_ARGS(X))(X)
 
 #endif /* _LINUX_CLEANUP_H */

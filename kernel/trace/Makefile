@@ -16,6 +16,23 @@ obj-y += trace_selftest_dynamic.o
 endif
 endif
 
+# Allow some files to be function traced
+ifdef CONFIG_FUNCTION_SELF_TRACING
+CFLAGS_trace_output.o = $(CC_FLAGS_FTRACE)
+CFLAGS_trace_seq.o = $(CC_FLAGS_FTRACE)
+CFLAGS_trace_stat.o = $(CC_FLAGS_FTRACE)
+CFLAGS_tracing_map.o = $(CC_FLAGS_FTRACE)
+CFLAGS_synth_event_gen_test.o = $(CC_FLAGS_FTRACE)
+CFLAGS_trace_events.o = $(CC_FLAGS_FTRACE)
+CFLAGS_trace_syscalls.o = $(CC_FLAGS_FTRACE)
+CFLAGS_trace_events_filter.o = $(CC_FLAGS_FTRACE)
+CFLAGS_trace_events_trigger.o = $(CC_FLAGS_FTRACE)
+CFLAGS_trace_events_synth.o = $(CC_FLAGS_FTRACE)
+CFLAGS_trace_events_hist.o = $(CC_FLAGS_FTRACE)
+CFLAGS_trace_events_user.o = $(CC_FLAGS_FTRACE)
+CFLAGS_trace_dynevent.o = $(CC_FLAGS_FTRACE)
+endif
+
 ifdef CONFIG_FTRACE_STARTUP_TEST
 CFLAGS_trace_kprobe_selftest.o = $(CC_FLAGS_FTRACE)
 obj-$(CONFIG_KPROBE_EVENTS) += trace_kprobe_selftest.o
@@ -51,6 +68,7 @@ obj-$(CONFIG_TRACING) += trace_output.o
 obj-$(CONFIG_TRACING) += trace_seq.o
 obj-$(CONFIG_TRACING) += trace_stat.o
 obj-$(CONFIG_TRACING) += trace_printk.o
+obj-$(CONFIG_TRACING) += trace_pid.o
 obj-$(CONFIG_TRACING) += 	pid_list.o
 obj-$(CONFIG_TRACING_MAP) += tracing_map.o
 obj-$(CONFIG_PREEMPTIRQ_DELAY_TEST) += preemptirq_delay_test.o
@@ -82,7 +100,7 @@ obj-$(CONFIG_EVENT_TRACING) += trace_event_perf.o
 endif
 obj-$(CONFIG_EVENT_TRACING) += trace_events_filter.o
 obj-$(CONFIG_EVENT_TRACING) += trace_events_trigger.o
-obj-$(CONFIG_PROBE_EVENTS) += trace_eprobe.o
+obj-$(CONFIG_EPROBE_EVENTS) += trace_eprobe.o
 obj-$(CONFIG_TRACE_EVENT_INJECT) += trace_events_inject.o
 obj-$(CONFIG_SYNTH_EVENTS) += trace_events_synth.o
 obj-$(CONFIG_HIST_TRIGGERS) += trace_events_hist.o

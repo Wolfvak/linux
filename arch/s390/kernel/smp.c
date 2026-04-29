@@ -15,8 +15,7 @@
  * operates on physical cpu numbers needs to go into smp.c.
  */
 
-#define KMSG_COMPONENT "cpu"
-#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
+#define pr_fmt(fmt) "cpu: " fmt
 
 #include <linux/cpufeature.h>
 #include <linux/workqueue.h>
@@ -175,13 +174,10 @@ static struct pcpu *pcpu_find_address(const struct cpumask *mask, u16 address)
 
 static void pcpu_ec_call(struct pcpu *pcpu, int ec_bit)
 {
-	int order;
-
 	if (test_and_set_bit(ec_bit, &pcpu->ec_mask))
 		return;
-	order = pcpu_running(pcpu) ? SIGP_EXTERNAL_CALL : SIGP_EMERGENCY_SIGNAL;
 	pcpu->ec_clk = get_tod_clock_fast();
-	pcpu_sigp_retry(pcpu, order, 0);
+	pcpu_sigp_retry(pcpu, SIGP_EXTERNAL_CALL, 0);
 }
 
 static int pcpu_alloc_lowcore(struct pcpu *pcpu, int cpu)
@@ -284,6 +280,9 @@ static void pcpu_attach_task(int cpu, struct task_struct *tsk)
 	lc->hardirq_timer = tsk->thread.hardirq_timer;
 	lc->softirq_timer = tsk->thread.softirq_timer;
 	lc->steal_timer = 0;
+#ifdef CONFIG_STACKPROTECTOR
+	lc->stack_canary = tsk->stack_canary;
+#endif
 }
 
 static void pcpu_start_fn(int cpu, void (*func)(void *), void *data)
@@ -308,9 +307,9 @@ static void __pcpu_delegate(pcpu_delegate_fn *func, void *data)
 	func(data);	/* should not return */
 }
 
-static void pcpu_delegate(struct pcpu *pcpu, int cpu,
-			  pcpu_delegate_fn *func,
-			  void *data, unsigned long stack)
+static void __noreturn pcpu_delegate(struct pcpu *pcpu, int cpu,
+				     pcpu_delegate_fn *func,
+				     void *data, unsigned long stack)
 {
 	struct lowcore *lc, *abs_lc;
 	unsigned int source_cpu;
@@ -343,7 +342,7 @@ static void pcpu_delegate(struct pcpu *pcpu, int cpu,
 		"0:	sigp	0,%0,%2	# sigp restart to target cpu\n"
 		"	brc	2,0b	# busy, try again\n"
 		"1:	sigp	0,%1,%3	# sigp stop to current cpu\n"
-		"	brc	2,1b	# busy, try again\n"
+		"	brc	2,1b	# busy, try again"
 		: : "d" (pcpu->address), "d" (source_cpu),
 		    "K" (SIGP_RESTART), "K" (SIGP_STOP)
 		: "0", "1", "cc");
@@ -373,7 +372,7 @@ static int pcpu_set_smt(unsigned int mtid)
 /*
  * Call function on the ipl CPU.
  */
-void smp_call_ipl_cpu(void (*func)(void *), void *data)
+void __noreturn smp_call_ipl_cpu(void (*func)(void *), void *data)
 {
 	struct lowcore *lc = lowcore_ptr[0];
 
@@ -433,16 +432,16 @@ void notrace smp_emergency_stop(void)
 	cpumask_copy(&cpumask, cpu_online_mask);
 	cpumask_clear_cpu(smp_processor_id(), &cpumask);
 
-	end = get_tod_clock() + (1000000UL << 12);
+	end = get_tod_clock_monotonic() + (1000000UL << 12);
 	for_each_cpu(cpu, &cpumask) {
 		struct pcpu *pcpu = per_cpu_ptr(&pcpu_devices, cpu);
 		set_bit(ec_stop_cpu, &pcpu->ec_mask);
 		while (__pcpu_sigp(pcpu->address, SIGP_EMERGENCY_SIGNAL,
 				   0, NULL) == SIGP_CC_BUSY &&
-		       get_tod_clock() < end)
+		       get_tod_clock_monotonic() < end)
 			cpu_relax();
 	}
-	while (get_tod_clock() < end) {
+	while (get_tod_clock_monotonic() < end) {
 		for_each_cpu(cpu, &cpumask)
 			if (pcpu_stopped(per_cpu_ptr(&pcpu_devices, cpu)))
 				cpumask_clear_cpu(cpu, &cpumask);
@@ -700,6 +699,7 @@ static void __ref smp_get_core_info(struct sclp_core_info *info, int early)
 				continue;
 			info->core[info->configured].core_id =
 				address >> smp_cpu_mt_shift;
+			info->core[info->configured].type = boot_core_type;
 			info->configured++;
 		}
 		info->combined = info->configured;
@@ -1145,13 +1145,13 @@ int __ref smp_rescan_cpus(bool early)
 	struct sclp_core_info *info;
 	int nr;
 
-	info = kzalloc(sizeof(*info), GFP_KERNEL);
+	info = kzalloc_obj(*info);
 	if (!info)
 		return -ENOMEM;
 	smp_get_core_info(info, 0);
 	nr = __smp_rescan_cpus(info, early);
 	kfree(info);
-	if (nr)
+	if (nr && !early)
 		topology_schedule_update();
 	return 0;
 }

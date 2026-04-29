@@ -155,7 +155,7 @@ struct ad5770r_output_modes {
 	int max;
 };
 
-static struct ad5770r_output_modes ad5770r_rng_tbl[] = {
+static const struct ad5770r_output_modes ad5770r_rng_tbl[] = {
 	{ 0, AD5770R_CH0_0_300, 0, 300 },
 	{ 0, AD5770R_CH0_NEG_60_0, -60, 0 },
 	{ 0, AD5770R_CH0_NEG_60_300, -60, 300 },
@@ -322,7 +322,7 @@ static int ad5770r_read_raw(struct iio_dev *indio_dev,
 				       chan->address,
 				       st->transf_buf, 2);
 		if (ret)
-			return 0;
+			return ret;
 
 		buf16 = get_unaligned_le16(st->transf_buf);
 		*val = buf16 >> 2;

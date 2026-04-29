@@ -706,7 +706,7 @@ static int hal2_pcm_create(struct snd_hal2 *hal2)
 		return err;
 
 	pcm->private_data = hal2;
-	strcpy(pcm->name, "SGI HAL2");
+	strscpy(pcm->name, "SGI HAL2");
 
 	/* set operators */
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK,
@@ -773,7 +773,7 @@ static int hal2_create(struct snd_card *card, struct snd_hal2 **rchip)
 	struct hpc3_regs *hpc3 = hpc3c0;
 	int err;
 
-	hal2 = kzalloc(sizeof(*hal2), GFP_KERNEL);
+	hal2 = kzalloc_obj(*hal2);
 	if (!hal2)
 		return -ENOMEM;
 
@@ -862,8 +862,8 @@ static int hal2_probe(struct platform_device *pdev)
 		return err;
 	}
 
-	strcpy(card->driver, "SGI HAL2 Audio");
-	strcpy(card->shortname, "SGI HAL2 Audio");
+	strscpy(card->driver, "SGI HAL2 Audio");
+	strscpy(card->shortname, "SGI HAL2 Audio");
 	sprintf(card->longname, "%s irq %i",
 		card->shortname,
 		SGI_HPCDMA_IRQ);

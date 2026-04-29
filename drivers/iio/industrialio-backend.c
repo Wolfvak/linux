@@ -702,7 +702,7 @@ EXPORT_SYMBOL_NS_GPL(iio_backend_interface_type_get, "IIO_BACKEND");
  * interface/data bus. Hence, the backend device needs to be aware of it so
  * data can be correctly transferred.
  *
- * Return:
+ * RETURNS:
  * 0 on success, negative error number on failure.
  */
 int iio_backend_data_size_set(struct iio_backend *back, unsigned int size)
@@ -717,15 +717,17 @@ EXPORT_SYMBOL_NS_GPL(iio_backend_data_size_set, "IIO_BACKEND");
 /**
  * iio_backend_oversampling_ratio_set - set the oversampling ratio
  * @back: Backend device
+ * @chan: Channel number
  * @ratio: The oversampling ratio - value 1 corresponds to no oversampling.
  *
- * Return:
+ * RETURNS:
  * 0 on success, negative error number on failure.
  */
 int iio_backend_oversampling_ratio_set(struct iio_backend *back,
+				       unsigned int chan,
 				       unsigned int ratio)
 {
-	return iio_backend_op_call(back, oversampling_ratio_set, ratio);
+	return iio_backend_op_call(back, oversampling_ratio_set, chan, ratio);
 }
 EXPORT_SYMBOL_NS_GPL(iio_backend_oversampling_ratio_set, "IIO_BACKEND");
 
@@ -810,6 +812,64 @@ static int __devm_iio_backend_get(struct device *dev, struct iio_backend *back)
 
 	return 0;
 }
+
+/**
+ * iio_backend_filter_type_set - Set filter type
+ * @back: Backend device
+ * @type: Filter type.
+ *
+ * RETURNS:
+ * 0 on success, negative error number on failure.
+ */
+int iio_backend_filter_type_set(struct iio_backend *back,
+				enum iio_backend_filter_type type)
+{
+	if (type >= IIO_BACKEND_FILTER_TYPE_MAX)
+		return -EINVAL;
+
+	return iio_backend_op_call(back, filter_type_set, type);
+}
+EXPORT_SYMBOL_NS_GPL(iio_backend_filter_type_set, "IIO_BACKEND");
+
+/**
+ * iio_backend_interface_data_align - Perform the data alignment process.
+ * @back: Backend device
+ * @timeout_us: Timeout value in us.
+ *
+ * When activated, it initates a proccess that aligns the sample's most
+ * significant bit (MSB) based solely on the captured data, without
+ * considering any other external signals.
+ *
+ * The timeout_us value must be greater than 0.
+ *
+ * RETURNS:
+ * 0 on success, negative error number on failure.
+ */
+int iio_backend_interface_data_align(struct iio_backend *back, u32 timeout_us)
+{
+	if (!timeout_us)
+		return -EINVAL;
+
+	return iio_backend_op_call(back, interface_data_align, timeout_us);
+}
+EXPORT_SYMBOL_NS_GPL(iio_backend_interface_data_align, "IIO_BACKEND");
+
+/**
+ * iio_backend_num_lanes_set - Number of lanes enabled.
+ * @back: Backend device
+ * @num_lanes: Number of lanes.
+ *
+ * RETURNS:
+ * 0 on success, negative error number on failure.
+ */
+int iio_backend_num_lanes_set(struct iio_backend *back, unsigned int num_lanes)
+{
+	if (!num_lanes)
+		return -EINVAL;
+
+	return iio_backend_op_call(back, num_lanes_set, num_lanes);
+}
+EXPORT_SYMBOL_NS_GPL(iio_backend_num_lanes_set, "IIO_BACKEND");
 
 /**
  * iio_backend_ddr_enable - Enable interface DDR (Double Data Rate) mode
@@ -1005,6 +1065,9 @@ EXPORT_SYMBOL_NS_GPL(__devm_iio_backend_get_from_fwnode_lookup, "IIO_BACKEND");
 /**
  * iio_backend_get_priv - Get driver private data
  * @back: Backend device
+ *
+ * RETURNS:
+ * Pointer to the driver private data associated with the backend.
  */
 void *iio_backend_get_priv(const struct iio_backend *back)
 {

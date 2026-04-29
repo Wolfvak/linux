@@ -4,6 +4,7 @@
  * Copyright (c) 2011-2017 Qualcomm Atheros, Inc.
  * Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/skbuff.h>
@@ -1937,10 +1938,16 @@ int ath10k_wmi_cmd_send(struct ath10k *ar, struct sk_buff *skb, u32 cmd_id)
 	if (cmd_id == WMI_CMD_UNSUPPORTED) {
 		ath10k_warn(ar, "wmi command %d is not supported by firmware\n",
 			    cmd_id);
+		dev_kfree_skb_any(skb);
 		return ret;
 	}
 
 	wait_event_timeout(ar->wmi.tx_credits_wq, ({
+		if (ar->state == ATH10K_STATE_WEDGED) {
+			ret = -ESHUTDOWN;
+			ath10k_dbg(ar, ATH10K_DBG_WMI,
+				   "drop wmi command %d, hardware is wedged\n", cmd_id);
+		}
 		/* try to send pending beacons first. they take priority */
 		ath10k_wmi_tx_beacons_nowait(ar);
 
@@ -3039,7 +3046,7 @@ static int ath10k_wmi_main_op_pull_fw_stats(struct ath10k *ar,
 		if (!skb_pull(skb, sizeof(*src)))
 			return -EPROTO;
 
-		dst = kzalloc(sizeof(*dst), GFP_ATOMIC);
+		dst = kzalloc_obj(*dst, GFP_ATOMIC);
 		if (!dst)
 			continue;
 
@@ -3060,7 +3067,7 @@ static int ath10k_wmi_main_op_pull_fw_stats(struct ath10k *ar,
 		if (!skb_pull(skb, sizeof(*src)))
 			return -EPROTO;
 
-		dst = kzalloc(sizeof(*dst), GFP_ATOMIC);
+		dst = kzalloc_obj(*dst, GFP_ATOMIC);
 		if (!dst)
 			continue;
 
@@ -3093,7 +3100,7 @@ static int ath10k_wmi_10x_op_pull_fw_stats(struct ath10k *ar,
 		if (!skb_pull(skb, sizeof(*src)))
 			return -EPROTO;
 
-		dst = kzalloc(sizeof(*dst), GFP_ATOMIC);
+		dst = kzalloc_obj(*dst, GFP_ATOMIC);
 		if (!dst)
 			continue;
 
@@ -3115,7 +3122,7 @@ static int ath10k_wmi_10x_op_pull_fw_stats(struct ath10k *ar,
 		if (!skb_pull(skb, sizeof(*src)))
 			return -EPROTO;
 
-		dst = kzalloc(sizeof(*dst), GFP_ATOMIC);
+		dst = kzalloc_obj(*dst, GFP_ATOMIC);
 		if (!dst)
 			continue;
 
@@ -3154,7 +3161,7 @@ static int ath10k_wmi_10_2_op_pull_fw_stats(struct ath10k *ar,
 		if (!skb_pull(skb, sizeof(*src)))
 			return -EPROTO;
 
-		dst = kzalloc(sizeof(*dst), GFP_ATOMIC);
+		dst = kzalloc_obj(*dst, GFP_ATOMIC);
 		if (!dst)
 			continue;
 
@@ -3191,7 +3198,7 @@ static int ath10k_wmi_10_2_op_pull_fw_stats(struct ath10k *ar,
 		if (!skb_pull(skb, sizeof(*src)))
 			return -EPROTO;
 
-		dst = kzalloc(sizeof(*dst), GFP_ATOMIC);
+		dst = kzalloc_obj(*dst, GFP_ATOMIC);
 		if (!dst)
 			continue;
 
@@ -3231,7 +3238,7 @@ static int ath10k_wmi_10_2_4_op_pull_fw_stats(struct ath10k *ar,
 		if (!skb_pull(skb, sizeof(*src)))
 			return -EPROTO;
 
-		dst = kzalloc(sizeof(*dst), GFP_ATOMIC);
+		dst = kzalloc_obj(*dst, GFP_ATOMIC);
 		if (!dst)
 			continue;
 
@@ -3274,7 +3281,7 @@ static int ath10k_wmi_10_2_4_op_pull_fw_stats(struct ath10k *ar,
 		if (!skb_pull(skb, stats_len))
 			return -EPROTO;
 
-		dst = kzalloc(sizeof(*dst), GFP_ATOMIC);
+		dst = kzalloc_obj(*dst, GFP_ATOMIC);
 		if (!dst)
 			continue;
 
@@ -3323,7 +3330,7 @@ static int ath10k_wmi_10_4_op_pull_fw_stats(struct ath10k *ar,
 		if (!skb_pull(skb, sizeof(*src)))
 			return -EPROTO;
 
-		dst = kzalloc(sizeof(*dst), GFP_ATOMIC);
+		dst = kzalloc_obj(*dst, GFP_ATOMIC);
 		if (!dst)
 			continue;
 
@@ -3369,7 +3376,7 @@ static int ath10k_wmi_10_4_op_pull_fw_stats(struct ath10k *ar,
 		if (!skb_pull(skb, sizeof(*src)))
 			return -EPROTO;
 
-		dst = kzalloc(sizeof(*dst), GFP_ATOMIC);
+		dst = kzalloc_obj(*dst, GFP_ATOMIC);
 		if (!dst)
 			continue;
 
@@ -3402,7 +3409,7 @@ static int ath10k_wmi_10_4_op_pull_fw_stats(struct ath10k *ar,
 			if (!skb_pull(skb, sizeof(*src)))
 				return -EPROTO;
 
-			dst = kzalloc(sizeof(*dst), GFP_ATOMIC);
+			dst = kzalloc_obj(*dst, GFP_ATOMIC);
 			if (!dst)
 				continue;
 
@@ -3422,7 +3429,7 @@ static int ath10k_wmi_10_4_op_pull_fw_stats(struct ath10k *ar,
 			if (!skb_pull(skb, sizeof(*src)))
 				return -EPROTO;
 
-			dst = kzalloc(sizeof(*dst), GFP_ATOMIC);
+			dst = kzalloc_obj(*dst, GFP_ATOMIC);
 			if (!dst)
 				continue;
 			ath10k_wmi_10_4_pull_vdev_stats(src, dst);
@@ -4905,7 +4912,7 @@ void ath10k_wmi_event_pdev_tpc_config(struct ath10k *ar, struct sk_buff *skb)
 		rate_max = WMI_TPC_RATE_MAX;
 	}
 
-	tpc_stats = kzalloc(sizeof(*tpc_stats), GFP_ATOMIC);
+	tpc_stats = kzalloc_obj(*tpc_stats, GFP_ATOMIC);
 	if (!tpc_stats)
 		return;
 
@@ -5161,7 +5168,7 @@ void ath10k_wmi_event_tpc_final_table(struct ath10k *ar, struct sk_buff *skb)
 		rate_max = WMI_TPC_FINAL_RATE_MAX;
 	}
 
-	tpc_stats = kzalloc(sizeof(*tpc_stats), GFP_ATOMIC);
+	tpc_stats = kzalloc_obj(*tpc_stats, GFP_ATOMIC);
 	if (!tpc_stats)
 		return;
 
@@ -5282,8 +5289,6 @@ ath10k_wmi_event_peer_sta_ps_state_chg(struct ath10k *ar, struct sk_buff *skb)
 	struct ath10k_sta *arsta;
 	u8 peer_addr[ETH_ALEN];
 
-	lockdep_assert_held(&ar->data_lock);
-
 	ev = (struct wmi_peer_sta_ps_state_chg_event *)skb->data;
 	ether_addr_copy(peer_addr, ev->peer_macaddr.addr);
 
@@ -5298,7 +5303,9 @@ ath10k_wmi_event_peer_sta_ps_state_chg(struct ath10k *ar, struct sk_buff *skb)
 	}
 
 	arsta = (struct ath10k_sta *)sta->drv_priv;
+	spin_lock_bh(&ar->data_lock);
 	arsta->peer_ps_state = __le32_to_cpu(ev->peer_ps_state);
+	spin_unlock_bh(&ar->data_lock);
 
 exit:
 	rcu_read_unlock();

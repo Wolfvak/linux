@@ -33,7 +33,6 @@
 
 #define PLL_CDYN_DEFAULT               0x80
 #define PLL_EPP_DEFAULT                0x80
-#define PLL_CONFIG_DEFAULT             0x0
 #define PLL_REF_CLK_FREQ               50000000ull
 #define PLL_RATIO_TO_FREQ(x)           ((x) * PLL_REF_CLK_FREQ)
 
@@ -303,7 +302,7 @@ static void prepare_wp_request(struct ivpu_device *vdev, struct wp_request *wp, 
 		wp->epp = 0;
 	} else {
 		wp->target = hw->pll.pn_ratio;
-		wp->cfg = enable ? PLL_CONFIG_DEFAULT : 0;
+		wp->cfg = 0;
 		wp->cdyn = enable ? PLL_CDYN_DEFAULT : 0;
 		wp->epp = enable ? PLL_EPP_DEFAULT : 0;
 	}
@@ -320,6 +319,14 @@ static int wait_for_pll_lock(struct ivpu_device *vdev, bool enable)
 		return 0;
 
 	return REGB_POLL_FLD(VPU_HW_BTRS_MTL_PLL_STATUS, LOCK, exp_val, PLL_TIMEOUT_US);
+}
+
+static int wait_for_cdyn_deassert(struct ivpu_device *vdev)
+{
+	if (ivpu_hw_btrs_gen(vdev) == IVPU_HW_BTRS_MTL)
+		return 0;
+
+	return REGB_POLL_FLD(VPU_HW_BTRS_LNL_CDYN, CDYN, 0, PLL_TIMEOUT_US);
 }
 
 int ivpu_hw_btrs_wp_drive(struct ivpu_device *vdev, bool enable)
@@ -353,6 +360,14 @@ int ivpu_hw_btrs_wp_drive(struct ivpu_device *vdev, bool enable)
 	if (ret) {
 		ivpu_err(vdev, "Timed out waiting for NPU ready status\n");
 		return ret;
+	}
+
+	if (!enable) {
+		ret = wait_for_cdyn_deassert(vdev);
+		if (ret) {
+			ivpu_err(vdev, "Timed out waiting for CDYN deassert\n");
+			return ret;
+		}
 	}
 
 	return 0;
@@ -674,7 +689,7 @@ bool ivpu_hw_btrs_irq_handler_lnl(struct ivpu_device *vdev, int irq)
 
 	if (REG_TEST_FLD(VPU_HW_BTRS_LNL_INTERRUPT_STAT, SURV_ERR, status)) {
 		ivpu_dbg(vdev, IRQ, "Survivability IRQ\n");
-		queue_work(system_wq, &vdev->irq_dct_work);
+		queue_work(system_percpu_wq, &vdev->irq_dct_work);
 	}
 
 	if (REG_TEST_FLD(VPU_HW_BTRS_LNL_INTERRUPT_STAT, FREQ_CHANGE, status)) {
@@ -753,7 +768,7 @@ int ivpu_hw_btrs_dct_get_request(struct ivpu_device *vdev, bool *enable)
 	}
 }
 
-void ivpu_hw_btrs_dct_set_status(struct ivpu_device *vdev, bool enable, u32 active_percent)
+void ivpu_hw_btrs_dct_set_status(struct ivpu_device *vdev, bool enable, u8 active_percent)
 {
 	u32 val = 0;
 	u32 cmd = enable ? DCT_ENABLE : DCT_DISABLE;

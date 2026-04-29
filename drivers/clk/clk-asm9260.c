@@ -92,8 +92,8 @@ static const struct asm9260_div_clk asm9260_div_clks[] __initconst = {
 	{ CLKID_SYS_CPU,	"cpu_div", "main_gate", HW_CPUCLKDIV },
 	{ CLKID_SYS_AHB,	"ahb_div", "cpu_div", HW_SYSAHBCLKDIV },
 
-	/* i2s has two deviders: one for only external mclk and internal
-	 * devider for all clks. */
+	/* i2s has two dividers: one for only external mclk and internal
+	 * divider for all clks. */
 	{ CLKID_SYS_I2S0M,	"i2s0m_div", "i2s0_mclk",  HW_I2S0MCLKDIV },
 	{ CLKID_SYS_I2S1M,	"i2s1m_div", "i2s1_mclk",  HW_I2S1MCLKDIV },
 	{ CLKID_SYS_I2S0S,	"i2s0s_div", "i2s0_gate",  HW_I2S0SCLKDIV },
@@ -262,7 +262,7 @@ static void __init asm9260_acc_init(struct device_node *np)
 	u32 rate;
 	int n;
 
-	clk_data = kzalloc(struct_size(clk_data, hws, MAX_CLKS), GFP_KERNEL);
+	clk_data = kzalloc_flex(*clk_data, hws, MAX_CLKS);
 	if (!clk_data)
 		return;
 	clk_data->num = MAX_CLKS;

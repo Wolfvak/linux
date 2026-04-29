@@ -93,7 +93,7 @@ struct ath6kl_urb_context {
 #define ATH6KL_USB_EP_ADDR_APP_DATA_MP_OUT      0x03
 #define ATH6KL_USB_EP_ADDR_APP_DATA_HP_OUT      0x04
 
-/* diagnostic command defnitions */
+/* diagnostic command definitions */
 #define ATH6KL_USB_CONTROL_REQ_SEND_BMI_CMD        1
 #define ATH6KL_USB_CONTROL_REQ_RECV_BMI_RESP       2
 #define ATH6KL_USB_CONTROL_REQ_DIAG_CMD            3
@@ -190,8 +190,7 @@ static int ath6kl_usb_alloc_pipe_resources(struct ath6kl_usb_pipe *pipe,
 	init_usb_anchor(&pipe->urb_submitted);
 
 	for (i = 0; i < urb_cnt; i++) {
-		urb_context = kzalloc(sizeof(struct ath6kl_urb_context),
-				      GFP_KERNEL);
+		urb_context = kzalloc_obj(struct ath6kl_urb_context);
 		if (urb_context == NULL) {
 			status = -ENOMEM;
 			goto fail_alloc_pipe_resources;
@@ -634,7 +633,7 @@ static struct ath6kl_usb *ath6kl_usb_create(struct usb_interface *interface)
 	int i;
 
 	/* ath6kl_usb_destroy() needs ar_usb != NULL && ar_usb->wq != NULL. */
-	ar_usb = kzalloc(sizeof(struct ath6kl_usb), GFP_KERNEL);
+	ar_usb = kzalloc_obj(struct ath6kl_usb);
 	if (ar_usb == NULL)
 		return NULL;
 	ar_usb->wq = alloc_workqueue("ath6kl_wq", 0, 0);
@@ -882,7 +881,7 @@ static int ath6kl_usb_submit_ctrl_out(struct ath6kl_usb *ar_usb,
 			return -ENOMEM;
 	}
 
-	/* note: if successful returns number of bytes transfered */
+	/* note: if successful returns number of bytes transferred */
 	ret = usb_control_msg(ar_usb->udev,
 			      usb_sndctrlpipe(ar_usb->udev, 0),
 			      req,
@@ -914,7 +913,7 @@ static int ath6kl_usb_submit_ctrl_in(struct ath6kl_usb *ar_usb,
 			return -ENOMEM;
 	}
 
-	/* note: if successful returns number of bytes transfered */
+	/* note: if successful returns number of bytes transferred */
 	ret = usb_control_msg(ar_usb->udev,
 				 usb_rcvctrlpipe(ar_usb->udev, 0),
 				 req,

@@ -143,8 +143,10 @@ static int p54_beacon_update(struct p54_common *priv,
 	if (!beacon)
 		return -ENOMEM;
 	ret = p54_beacon_format_ie_tim(beacon);
-	if (ret)
+	if (ret) {
+		dev_kfree_skb_any(beacon);
 		return ret;
+	}
 
 	/*
 	 * During operation, the firmware takes care of beaconing.
@@ -313,7 +315,7 @@ static void p54_reset_stats(struct p54_common *priv)
 	priv->survey_raw.tx = 0;
 }
 
-static int p54_config(struct ieee80211_hw *dev, u32 changed)
+static int p54_config(struct ieee80211_hw *dev, int radio_idx, u32 changed)
 {
 	int ret = 0;
 	struct p54_common *priv = dev->priv;
@@ -692,6 +694,7 @@ static void p54_flush(struct ieee80211_hw *dev, struct ieee80211_vif *vif,
 }
 
 static void p54_set_coverage_class(struct ieee80211_hw *dev,
+				   int radio_idx,
 				   s16 coverage_class)
 {
 	struct p54_common *priv = dev->priv;

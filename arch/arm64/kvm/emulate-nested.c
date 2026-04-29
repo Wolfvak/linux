@@ -70,6 +70,7 @@ enum cgt_group_id {
 	CGT_HCR_ENSCXT,
 	CGT_HCR_TTLBIS,
 	CGT_HCR_TTLBOS,
+	CGT_HCR_TID5,
 
 	CGT_MDCR_TPMCR,
 	CGT_MDCR_TPM,
@@ -88,6 +89,7 @@ enum cgt_group_id {
 
 	CGT_HCRX_EnFPM,
 	CGT_HCRX_TCR2En,
+	CGT_HCRX_SCTLR2En,
 
 	CGT_CNTHCTL_EL1TVT,
 	CGT_CNTHCTL_EL1TVCT,
@@ -108,6 +110,7 @@ enum cgt_group_id {
 	CGT_HCR_TTLB_TTLBOS,
 	CGT_HCR_TVM_TRVM,
 	CGT_HCR_TVM_TRVM_HCRX_TCR2En,
+	CGT_HCR_TVM_TRVM_HCRX_SCTLR2En,
 	CGT_HCR_TPU_TICAB,
 	CGT_HCR_TPU_TOCU,
 	CGT_HCR_NV1_nNV2_ENSCXT,
@@ -306,6 +309,12 @@ static const struct trap_bits coarse_trap_bits[] = {
 		.mask		= HCR_TTLBOS,
 		.behaviour	= BEHAVE_FORWARD_RW,
 	},
+	[CGT_HCR_TID5] = {
+		.index		= HCR_EL2,
+		.value		= HCR_TID5,
+		.mask		= HCR_TID5,
+		.behaviour	= BEHAVE_FORWARD_RW,
+	},
 	[CGT_MDCR_TPMCR] = {
 		.index		= MDCR_EL2,
 		.value		= MDCR_EL2_TPMCR,
@@ -398,6 +407,12 @@ static const struct trap_bits coarse_trap_bits[] = {
 		.mask		= HCRX_EL2_TCR2En,
 		.behaviour	= BEHAVE_FORWARD_RW,
 	},
+	[CGT_HCRX_SCTLR2En] = {
+		.index		= HCRX_EL2,
+		.value		= 0,
+		.mask		= HCRX_EL2_SCTLR2En,
+		.behaviour	= BEHAVE_FORWARD_RW,
+	},
 	[CGT_CNTHCTL_EL1TVT] = {
 		.index		= CNTHCTL_EL2,
 		.value		= CNTHCTL_EL1TVT,
@@ -449,6 +464,8 @@ static const enum cgt_group_id *coarse_control_combo[] = {
 	MCB(CGT_HCR_TVM_TRVM,		CGT_HCR_TVM, CGT_HCR_TRVM),
 	MCB(CGT_HCR_TVM_TRVM_HCRX_TCR2En,
 					CGT_HCR_TVM, CGT_HCR_TRVM, CGT_HCRX_TCR2En),
+	MCB(CGT_HCR_TVM_TRVM_HCRX_SCTLR2En,
+					CGT_HCR_TVM, CGT_HCR_TRVM, CGT_HCRX_SCTLR2En),
 	MCB(CGT_HCR_TPU_TICAB,		CGT_HCR_TPU, CGT_HCR_TICAB),
 	MCB(CGT_HCR_TPU_TOCU,		CGT_HCR_TPU, CGT_HCR_TOCU),
 	MCB(CGT_HCR_NV1_nNV2_ENSCXT,	CGT_HCR_NV1_nNV2, CGT_HCR_ENSCXT),
@@ -655,6 +672,7 @@ static const struct encoding_to_trap_config encoding_to_cgt[] __initconst = {
 	SR_TRAP(SYS_CCSIDR2_EL1,	CGT_HCR_TID2_TID4),
 	SR_TRAP(SYS_CLIDR_EL1,		CGT_HCR_TID2_TID4),
 	SR_TRAP(SYS_CSSELR_EL1,		CGT_HCR_TID2_TID4),
+	SR_TRAP(SYS_GMID_EL1,		CGT_HCR_TID5),
 	SR_RANGE_TRAP(SYS_ID_PFR0_EL1,
 		      sys_reg(3, 0, 0, 7, 7), CGT_HCR_TID3),
 	SR_TRAP(SYS_ICC_SGI0R_EL1,	CGT_HCR_IMO_FMO_ICH_HCR_TC),
@@ -782,6 +800,7 @@ static const struct encoding_to_trap_config encoding_to_cgt[] __initconst = {
 	SR_TRAP(OP_TLBI_RVALE1OSNXS,	CGT_HCR_TTLB_TTLBOS),
 	SR_TRAP(OP_TLBI_RVAALE1OSNXS,	CGT_HCR_TTLB_TTLBOS),
 	SR_TRAP(SYS_SCTLR_EL1,		CGT_HCR_TVM_TRVM),
+	SR_TRAP(SYS_SCTLR2_EL1,		CGT_HCR_TVM_TRVM_HCRX_SCTLR2En),
 	SR_TRAP(SYS_TTBR0_EL1,		CGT_HCR_TVM_TRVM),
 	SR_TRAP(SYS_TTBR1_EL1,		CGT_HCR_TVM_TRVM),
 	SR_TRAP(SYS_TCR_EL1,		CGT_HCR_TVM_TRVM),
@@ -1155,6 +1174,7 @@ static const struct encoding_to_trap_config encoding_to_cgt[] __initconst = {
 	SR_TRAP(SYS_DBGWCRn_EL1(12),	CGT_MDCR_TDE_TDA),
 	SR_TRAP(SYS_DBGWCRn_EL1(13),	CGT_MDCR_TDE_TDA),
 	SR_TRAP(SYS_DBGWCRn_EL1(14),	CGT_MDCR_TDE_TDA),
+	SR_TRAP(SYS_DBGWCRn_EL1(15),	CGT_MDCR_TDE_TDA),
 	SR_TRAP(SYS_DBGCLAIMSET_EL1,	CGT_MDCR_TDE_TDA),
 	SR_TRAP(SYS_DBGCLAIMCLR_EL1,	CGT_MDCR_TDE_TDA),
 	SR_TRAP(SYS_DBGAUTHSTATUS_EL1,	CGT_MDCR_TDE_TDA),
@@ -1174,6 +1194,7 @@ static const struct encoding_to_trap_config encoding_to_cgt[] __initconst = {
 	SR_TRAP(SYS_PMSIRR_EL1,		CGT_MDCR_TPMS),
 	SR_TRAP(SYS_PMSLATFR_EL1,	CGT_MDCR_TPMS),
 	SR_TRAP(SYS_PMSNEVFR_EL1,	CGT_MDCR_TPMS),
+	SR_TRAP(SYS_PMSDSFR_EL1,	CGT_MDCR_TPMS),
 	SR_TRAP(SYS_TRFCR_EL1,		CGT_MDCR_TTRF),
 	SR_TRAP(SYS_TRBBASER_EL1,	CGT_MDCR_E2TB),
 	SR_TRAP(SYS_TRBLIMITR_EL1,	CGT_MDCR_E2TB),
@@ -1354,6 +1375,7 @@ static const struct encoding_to_trap_config encoding_to_fgt[] __initconst = {
 	SR_FGT(SYS_SCXTNUM_EL0,		HFGRTR, SCXTNUM_EL0, 1),
 	SR_FGT(SYS_SCXTNUM_EL1, 	HFGRTR, SCXTNUM_EL1, 1),
 	SR_FGT(SYS_SCTLR_EL1, 		HFGRTR, SCTLR_EL1, 1),
+	SR_FGT(SYS_SCTLR2_EL1,		HFGRTR, SCTLR_EL1, 1),
 	SR_FGT(SYS_REVIDR_EL1, 		HFGRTR, REVIDR_EL1, 1),
 	SR_FGT(SYS_PAR_EL1, 		HFGRTR, PAR_EL1, 1),
 	SR_FGT(SYS_MPIDR_EL1, 		HFGRTR, MPIDR_EL1, 1),
@@ -2092,23 +2114,24 @@ static u32 encoding_next(u32 encoding)
 }
 
 #define FGT_MASKS(__n, __m)						\
-	struct fgt_masks __n = { .str = #__m, .res0 = __m, }
+	struct fgt_masks __n = { .str = #__m, .res0 = __m ## _RES0, .res1 = __m ## _RES1 }
 
-FGT_MASKS(hfgrtr_masks, HFGRTR_EL2_RES0);
-FGT_MASKS(hfgwtr_masks, HFGWTR_EL2_RES0);
-FGT_MASKS(hfgitr_masks, HFGITR_EL2_RES0);
-FGT_MASKS(hdfgrtr_masks, HDFGRTR_EL2_RES0);
-FGT_MASKS(hdfgwtr_masks, HDFGWTR_EL2_RES0);
-FGT_MASKS(hafgrtr_masks, HAFGRTR_EL2_RES0);
-FGT_MASKS(hfgrtr2_masks, HFGRTR2_EL2_RES0);
-FGT_MASKS(hfgwtr2_masks, HFGWTR2_EL2_RES0);
-FGT_MASKS(hfgitr2_masks, HFGITR2_EL2_RES0);
-FGT_MASKS(hdfgrtr2_masks, HDFGRTR2_EL2_RES0);
-FGT_MASKS(hdfgwtr2_masks, HDFGWTR2_EL2_RES0);
+FGT_MASKS(hfgrtr_masks, HFGRTR_EL2);
+FGT_MASKS(hfgwtr_masks, HFGWTR_EL2);
+FGT_MASKS(hfgitr_masks, HFGITR_EL2);
+FGT_MASKS(hdfgrtr_masks, HDFGRTR_EL2);
+FGT_MASKS(hdfgwtr_masks, HDFGWTR_EL2);
+FGT_MASKS(hafgrtr_masks, HAFGRTR_EL2);
+FGT_MASKS(hfgrtr2_masks, HFGRTR2_EL2);
+FGT_MASKS(hfgwtr2_masks, HFGWTR2_EL2);
+FGT_MASKS(hfgitr2_masks, HFGITR2_EL2);
+FGT_MASKS(hdfgrtr2_masks, HDFGRTR2_EL2);
+FGT_MASKS(hdfgwtr2_masks, HDFGWTR2_EL2);
 
 static __init bool aggregate_fgt(union trap_config tc)
 {
 	struct fgt_masks *rmasks, *wmasks;
+	u64 rresx, wresx;
 
 	switch (tc.fgt) {
 	case HFGRTR_GROUP:
@@ -2141,24 +2164,27 @@ static __init bool aggregate_fgt(union trap_config tc)
 		break;
 	}
 
+	rresx = rmasks->res0 | rmasks->res1;
+	if (wmasks)
+		wresx = wmasks->res0 | wmasks->res1;
+
 	/*
 	 * A bit can be reserved in either the R or W register, but
 	 * not both.
 	 */
-	if ((BIT(tc.bit) & rmasks->res0) &&
-	    (!wmasks || (BIT(tc.bit) & wmasks->res0)))
+	if ((BIT(tc.bit) & rresx) && (!wmasks || (BIT(tc.bit) & wresx)))
 		return false;
 
 	if (tc.pol)
-		rmasks->mask |= BIT(tc.bit) & ~rmasks->res0;
+		rmasks->mask |= BIT(tc.bit) & ~rresx;
 	else
-		rmasks->nmask |= BIT(tc.bit) & ~rmasks->res0;
+		rmasks->nmask |= BIT(tc.bit) & ~rresx;
 
 	if (wmasks) {
 		if (tc.pol)
-			wmasks->mask |= BIT(tc.bit) & ~wmasks->res0;
+			wmasks->mask |= BIT(tc.bit) & ~wresx;
 		else
-			wmasks->nmask |= BIT(tc.bit) & ~wmasks->res0;
+			wmasks->nmask |= BIT(tc.bit) & ~wresx;
 	}
 
 	return true;
@@ -2167,7 +2193,6 @@ static __init bool aggregate_fgt(union trap_config tc)
 static __init int check_fgt_masks(struct fgt_masks *masks)
 {
 	unsigned long duplicate = masks->mask & masks->nmask;
-	u64 res0 = masks->res0;
 	int ret = 0;
 
 	if (duplicate) {
@@ -2181,10 +2206,14 @@ static __init int check_fgt_masks(struct fgt_masks *masks)
 		ret = -EINVAL;
 	}
 
-	masks->res0 = ~(masks->mask | masks->nmask);
-	if (masks->res0 != res0)
-		kvm_info("Implicit %s = %016llx, expecting %016llx\n",
-			 masks->str, masks->res0, res0);
+	if ((masks->res0 | masks->res1 | masks->mask | masks->nmask) != GENMASK(63, 0) ||
+	    (masks->res0 & masks->res1)  || (masks->res0 & masks->mask) ||
+	    (masks->res0 & masks->nmask) || (masks->res1 & masks->mask)  ||
+	    (masks->res1 & masks->nmask) || (masks->mask & masks->nmask)) {
+		kvm_info("Inconsistent masks for %s (%016llx, %016llx, %016llx, %016llx)\n",
+			 masks->str, masks->res0, masks->res1, masks->mask, masks->nmask);
+		masks->res0 = ~(masks->res1 | masks->mask | masks->nmask);
+	}
 
 	return ret;
 }
@@ -2256,9 +2285,6 @@ int __init populate_nv_trap_config(void)
 	kvm_info("nv: %ld coarse grained trap handlers\n",
 		 ARRAY_SIZE(encoding_to_cgt));
 
-	if (!cpus_have_final_cap(ARM64_HAS_FGT))
-		goto check_mcb;
-
 	for (int i = 0; i < ARRAY_SIZE(encoding_to_fgt); i++) {
 		const struct encoding_to_trap_config *fgt = &encoding_to_fgt[i];
 		union trap_config tc;
@@ -2278,17 +2304,21 @@ int __init populate_nv_trap_config(void)
 			}
 
 			tc.val |= fgt->tc.val;
+
+			if (!aggregate_fgt(tc)) {
+				ret = -EINVAL;
+				print_nv_trap_error(fgt, "FGT bit is reserved", ret);
+			}
+
+			if (!cpus_have_final_cap(ARM64_HAS_FGT))
+				continue;
+
 			prev = xa_store(&sr_forward_xa, enc,
 					xa_mk_value(tc.val), GFP_KERNEL);
 
 			if (xa_is_err(prev)) {
 				ret = xa_err(prev);
 				print_nv_trap_error(fgt, "Failed FGT insertion", ret);
-			}
-
-			if (!aggregate_fgt(tc)) {
-				ret = -EINVAL;
-				print_nv_trap_error(fgt, "FGT bit is reserved", ret);
 			}
 		}
 	}
@@ -2305,7 +2335,6 @@ int __init populate_nv_trap_config(void)
 	kvm_info("nv: %ld fine grained trap handlers\n",
 		 ARRAY_SIZE(encoding_to_fgt));
 
-check_mcb:
 	for (int id = __MULTIPLE_CONTROL_BITS__; id < __COMPLEX_CONDITIONS__; id++) {
 		const enum cgt_group_id *cgids;
 
@@ -2407,15 +2436,7 @@ static enum trap_behaviour compute_trap_behaviour(struct kvm_vcpu *vcpu,
 
 static u64 kvm_get_sysreg_res0(struct kvm *kvm, enum vcpu_sysreg sr)
 {
-	struct kvm_sysreg_masks *masks;
-
-	/* Only handle the VNCR-backed regs for now */
-	if (sr < __VNCR_START__)
-		return 0;
-
-	masks = kvm->arch.sysreg_masks;
-
-	return masks->mask[sr - __VNCR_START__].res0;
+	return kvm_get_sysreg_resx(kvm, sr).res0;
 }
 
 static bool check_fgt_bit(struct kvm_vcpu *vcpu, enum vcpu_sysreg sr,
@@ -2568,6 +2589,19 @@ local:
 		params = esr_sys64_to_params(esr);
 
 		/*
+		 * This implements the pseudocode UnimplementedIDRegister()
+		 * helper for the purpose of dealing with FEAT_IDST.
+		 */
+		if (in_feat_id_space(&params)) {
+			if (kvm_has_feat(vcpu->kvm, ID_AA64MMFR2_EL1, IDS, IMP))
+				kvm_inject_sync(vcpu, kvm_vcpu_get_esr(vcpu));
+			else
+				kvm_inject_undefined(vcpu);
+
+			return true;
+		}
+
+		/*
 		 * Check for the IMPDEF range, as per DDI0487 J.a,
 		 * D18.3.2 Reserved encodings for IMPLEMENTATION
 		 * DEFINED registers.
@@ -2592,13 +2626,8 @@ inject:
 
 static bool __forward_traps(struct kvm_vcpu *vcpu, unsigned int reg, u64 control_bit)
 {
-	bool control_bit_set;
-
-	if (!vcpu_has_nv(vcpu))
-		return false;
-
-	control_bit_set = __vcpu_sys_reg(vcpu, reg) & control_bit;
-	if (!is_hyp_ctxt(vcpu) && control_bit_set) {
+	if (is_nested_ctxt(vcpu) &&
+	    (__vcpu_sys_reg(vcpu, reg) & control_bit)) {
 		kvm_inject_nested_sync(vcpu, kvm_vcpu_get_esr(vcpu));
 		return true;
 	}
@@ -2719,6 +2748,9 @@ static void kvm_inject_el2_exception(struct kvm_vcpu *vcpu, u64 esr_el2,
 	case except_type_irq:
 		kvm_pend_exception(vcpu, EXCEPT_AA64_EL2_IRQ);
 		break;
+	case except_type_serror:
+		kvm_pend_exception(vcpu, EXCEPT_AA64_EL2_SERR);
+		break;
 	default:
 		WARN_ONCE(1, "Unsupported EL2 exception injection %d\n", type);
 	}
@@ -2815,4 +2847,29 @@ int kvm_inject_nested_irq(struct kvm_vcpu *vcpu)
 
 	/* esr_el2 value doesn't matter for exits due to irqs. */
 	return kvm_inject_nested(vcpu, 0, except_type_irq);
+}
+
+int kvm_inject_nested_sea(struct kvm_vcpu *vcpu, bool iabt, u64 addr)
+{
+	u64 esr = FIELD_PREP(ESR_ELx_EC_MASK,
+			     iabt ? ESR_ELx_EC_IABT_LOW : ESR_ELx_EC_DABT_LOW);
+	esr |= ESR_ELx_FSC_EXTABT | ESR_ELx_IL;
+
+	vcpu_write_sys_reg(vcpu, addr, FAR_EL2);
+
+	if (__vcpu_sys_reg(vcpu, SCTLR2_EL2) & SCTLR2_EL1_EASE)
+		return kvm_inject_nested(vcpu, esr, except_type_serror);
+
+	return kvm_inject_nested_sync(vcpu, esr);
+}
+
+int kvm_inject_nested_serror(struct kvm_vcpu *vcpu, u64 esr)
+{
+	/*
+	 * Hardware sets up the EC field when propagating ESR as a result of
+	 * vSError injection. Manually populate EC for an emulated SError
+	 * exception.
+	 */
+	esr |= FIELD_PREP(ESR_ELx_EC_MASK, ESR_ELx_EC_SERROR);
+	return kvm_inject_nested(vcpu, esr, except_type_serror);
 }

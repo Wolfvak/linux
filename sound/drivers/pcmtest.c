@@ -36,6 +36,7 @@
 #include <sound/core.h>
 #include <linux/dma-mapping.h>
 #include <linux/platform_device.h>
+#include <linux/string.h>
 #include <linux/timer.h>
 #include <linux/random.h>
 #include <linux/debugfs.h>
@@ -376,7 +377,7 @@ static int snd_pcmtst_pcm_open(struct snd_pcm_substream *substream)
 	if (inject_open_err)
 		return -EBUSY;
 
-	v_iter = kzalloc(sizeof(*v_iter), GFP_KERNEL);
+	v_iter = kzalloc_obj(*v_iter);
 	if (!v_iter)
 		return -ENOMEM;
 
@@ -555,7 +556,7 @@ static int snd_pcmtst_new_pcm(struct pcmtst *pcmtst)
 	if (err < 0)
 		return err;
 	pcm->private_data = pcmtst;
-	strcpy(pcm->name, "PCMTest");
+	strscpy(pcm->name, "PCMTest");
 	pcmtst->pcm = pcm;
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &snd_pcmtst_playback_ops);
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &snd_pcmtst_capture_ops);
@@ -574,7 +575,7 @@ static int snd_pcmtst_create(struct snd_card *card, struct platform_device *pdev
 		.dev_free = snd_pcmtst_dev_free,
 	};
 
-	pcmtst = kzalloc(sizeof(*pcmtst), GFP_KERNEL);
+	pcmtst = kzalloc_obj(*pcmtst);
 	if (!pcmtst)
 		return -ENOMEM;
 	pcmtst->card = card;
@@ -613,9 +614,9 @@ static int pcmtst_probe(struct platform_device *pdev)
 	if (err < 0)
 		return err;
 
-	strcpy(card->driver, "PCM-TEST Driver");
-	strcpy(card->shortname, "PCM-Test");
-	strcpy(card->longname, "PCM-Test virtual driver");
+	strscpy(card->driver, "PCM-TEST Driver");
+	strscpy(card->shortname, "PCM-Test");
+	strscpy(card->longname, "PCM-Test virtual driver");
 
 	err = snd_card_register(card);
 	if (err < 0)
@@ -695,10 +696,10 @@ static int setup_patt_bufs(void)
 	size_t i;
 
 	for (i = 0; i < ARRAY_SIZE(patt_bufs); i++) {
-		patt_bufs[i].buf = kzalloc(MAX_PATTERN_LEN, GFP_KERNEL);
+		patt_bufs[i].buf = kmalloc(MAX_PATTERN_LEN, GFP_KERNEL);
 		if (!patt_bufs[i].buf)
 			break;
-		strcpy(patt_bufs[i].buf, DEFAULT_PATTERN);
+		strscpy_pad(patt_bufs[i].buf, DEFAULT_PATTERN, MAX_PATTERN_LEN);
 		patt_bufs[i].len = DEFAULT_PATTERN_LEN;
 	}
 

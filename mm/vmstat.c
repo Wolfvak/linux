@@ -392,7 +392,7 @@ void __mod_node_page_state(struct pglist_data *pgdat, enum node_stat_item item,
 		delta >>= PAGE_SHIFT;
 	}
 
-	/* See __mod_node_page_state */
+	/* See __mod_zone_page_state() */
 	preempt_disable_nested();
 
 	x = delta + __this_cpu_read(*p);
@@ -438,7 +438,7 @@ void __inc_zone_state(struct zone *zone, enum zone_stat_item item)
 	s8 __percpu *p = pcp->vm_stat_diff + item;
 	s8 v, t;
 
-	/* See __mod_node_page_state */
+	/* See __mod_zone_page_state() */
 	preempt_disable_nested();
 
 	v = __this_cpu_inc_return(*p);
@@ -461,7 +461,7 @@ void __inc_node_state(struct pglist_data *pgdat, enum node_stat_item item)
 
 	VM_WARN_ON_ONCE(vmstat_item_in_bytes(item));
 
-	/* See __mod_node_page_state */
+	/* See __mod_zone_page_state() */
 	preempt_disable_nested();
 
 	v = __this_cpu_inc_return(*p);
@@ -494,7 +494,7 @@ void __dec_zone_state(struct zone *zone, enum zone_stat_item item)
 	s8 __percpu *p = pcp->vm_stat_diff + item;
 	s8 v, t;
 
-	/* See __mod_node_page_state */
+	/* See __mod_zone_page_state() */
 	preempt_disable_nested();
 
 	v = __this_cpu_dec_return(*p);
@@ -517,7 +517,7 @@ void __dec_node_state(struct pglist_data *pgdat, enum node_stat_item item)
 
 	VM_WARN_ON_ONCE(vmstat_item_in_bytes(item));
 
-	/* See __mod_node_page_state */
+	/* See __mod_zone_page_state() */
 	preempt_disable_nested();
 
 	v = __this_cpu_dec_return(*p);
@@ -672,11 +672,6 @@ void mod_node_page_state(struct pglist_data *pgdat, enum node_stat_item item,
 }
 EXPORT_SYMBOL(mod_node_page_state);
 
-void inc_node_state(struct pglist_data *pgdat, enum node_stat_item item)
-{
-	mod_node_state(pgdat, item, 1, 1);
-}
-
 void inc_node_page_state(struct page *page, enum node_stat_item item)
 {
 	mod_node_state(page_pgdat(page), item, 1, 1);
@@ -725,16 +720,6 @@ void dec_zone_page_state(struct page *page, enum zone_stat_item item)
 }
 EXPORT_SYMBOL(dec_zone_page_state);
 
-void inc_node_state(struct pglist_data *pgdat, enum node_stat_item item)
-{
-	unsigned long flags;
-
-	local_irq_save(flags);
-	__inc_node_state(pgdat, item);
-	local_irq_restore(flags);
-}
-EXPORT_SYMBOL(inc_node_state);
-
 void mod_node_page_state(struct pglist_data *pgdat, enum node_stat_item item,
 					long delta)
 {
@@ -771,25 +756,28 @@ EXPORT_SYMBOL(dec_node_page_state);
 
 /*
  * Fold a differential into the global counters.
- * Returns the number of counters updated.
+ * Returns whether counters were updated.
  */
 static int fold_diff(int *zone_diff, int *node_diff)
 {
 	int i;
-	int changes = 0;
+	bool changed = false;
 
-	for (i = 0; i < NR_VM_ZONE_STAT_ITEMS; i++)
+	for (i = 0; i < NR_VM_ZONE_STAT_ITEMS; i++) {
 		if (zone_diff[i]) {
 			atomic_long_add(zone_diff[i], &vm_zone_stat[i]);
-			changes++;
+			changed = true;
+		}
 	}
 
-	for (i = 0; i < NR_VM_NODE_STAT_ITEMS; i++)
+	for (i = 0; i < NR_VM_NODE_STAT_ITEMS; i++) {
 		if (node_diff[i]) {
 			atomic_long_add(node_diff[i], &vm_node_stat[i]);
-			changes++;
+			changed = true;
+		}
 	}
-	return changes;
+
+	return changed;
 }
 
 /*
@@ -806,16 +794,16 @@ static int fold_diff(int *zone_diff, int *node_diff)
  * with the global counters. These could cause remote node cache line
  * bouncing and will have to be only done when necessary.
  *
- * The function returns the number of global counters updated.
+ * The function returns whether global counters were updated.
  */
-static int refresh_cpu_vm_stats(bool do_pagesets)
+static bool refresh_cpu_vm_stats(bool do_pagesets)
 {
 	struct pglist_data *pgdat;
 	struct zone *zone;
 	int i;
 	int global_zone_diff[NR_VM_ZONE_STAT_ITEMS] = { 0, };
 	int global_node_diff[NR_VM_NODE_STAT_ITEMS] = { 0, };
-	int changes = 0;
+	bool changed = false;
 
 	for_each_populated_zone(zone) {
 		struct per_cpu_zonestat __percpu *pzstats = zone->per_cpu_zonestats;
@@ -839,7 +827,8 @@ static int refresh_cpu_vm_stats(bool do_pagesets)
 		if (do_pagesets) {
 			cond_resched();
 
-			changes += decay_pcp_high(zone, this_cpu_ptr(pcp));
+			if (decay_pcp_high(zone, this_cpu_ptr(pcp)))
+				changed = true;
 #ifdef CONFIG_NUMA
 			/*
 			 * Deal with draining the remote pageset of this
@@ -861,13 +850,13 @@ static int refresh_cpu_vm_stats(bool do_pagesets)
 			}
 
 			if (__this_cpu_dec_return(pcp->expire)) {
-				changes++;
+				changed = true;
 				continue;
 			}
 
 			if (__this_cpu_read(pcp->count)) {
 				drain_zone_pages(zone, this_cpu_ptr(pcp));
-				changes++;
+				changed = true;
 			}
 #endif
 		}
@@ -887,8 +876,9 @@ static int refresh_cpu_vm_stats(bool do_pagesets)
 		}
 	}
 
-	changes += fold_diff(global_zone_diff, global_node_diff);
-	return changes;
+	if (fold_diff(global_zone_diff, global_node_diff))
+		changed = true;
+	return changed;
 }
 
 /*
@@ -1163,319 +1153,341 @@ int fragmentation_index(struct zone *zone, unsigned int order)
 #if defined(CONFIG_PROC_FS) || defined(CONFIG_SYSFS) || \
     defined(CONFIG_NUMA) || defined(CONFIG_MEMCG)
 #ifdef CONFIG_ZONE_DMA
-#define TEXT_FOR_DMA(xx) xx "_dma",
+#define TEXT_FOR_DMA(xx, yy) [xx##_DMA] = yy "_dma",
 #else
-#define TEXT_FOR_DMA(xx)
+#define TEXT_FOR_DMA(xx, yy)
 #endif
 
 #ifdef CONFIG_ZONE_DMA32
-#define TEXT_FOR_DMA32(xx) xx "_dma32",
+#define TEXT_FOR_DMA32(xx, yy) [xx##_DMA32] = yy "_dma32",
 #else
-#define TEXT_FOR_DMA32(xx)
+#define TEXT_FOR_DMA32(xx, yy)
 #endif
 
 #ifdef CONFIG_HIGHMEM
-#define TEXT_FOR_HIGHMEM(xx) xx "_high",
+#define TEXT_FOR_HIGHMEM(xx, yy) [xx##_HIGH] = yy "_high",
 #else
-#define TEXT_FOR_HIGHMEM(xx)
+#define TEXT_FOR_HIGHMEM(xx, yy)
 #endif
 
 #ifdef CONFIG_ZONE_DEVICE
-#define TEXT_FOR_DEVICE(xx) xx "_device",
+#define TEXT_FOR_DEVICE(xx, yy) [xx##_DEVICE] = yy "_device",
 #else
-#define TEXT_FOR_DEVICE(xx)
+#define TEXT_FOR_DEVICE(xx, yy)
 #endif
 
-#define TEXTS_FOR_ZONES(xx) TEXT_FOR_DMA(xx) TEXT_FOR_DMA32(xx) xx "_normal", \
-					TEXT_FOR_HIGHMEM(xx) xx "_movable", \
-					TEXT_FOR_DEVICE(xx)
+#define TEXTS_FOR_ZONES(xx, yy)			\
+	TEXT_FOR_DMA(xx, yy)			\
+	TEXT_FOR_DMA32(xx, yy)			\
+	[xx##_NORMAL] = yy "_normal",		\
+	TEXT_FOR_HIGHMEM(xx, yy)		\
+	[xx##_MOVABLE] = yy "_movable",		\
+	TEXT_FOR_DEVICE(xx, yy)
 
 const char * const vmstat_text[] = {
 	/* enum zone_stat_item counters */
-	"nr_free_pages",
-	"nr_free_pages_blocks",
-	"nr_zone_inactive_anon",
-	"nr_zone_active_anon",
-	"nr_zone_inactive_file",
-	"nr_zone_active_file",
-	"nr_zone_unevictable",
-	"nr_zone_write_pending",
-	"nr_mlock",
+#define I(x) (x)
+	[I(NR_FREE_PAGES)]			= "nr_free_pages",
+	[I(NR_FREE_PAGES_BLOCKS)]		= "nr_free_pages_blocks",
+	[I(NR_ZONE_INACTIVE_ANON)]		= "nr_zone_inactive_anon",
+	[I(NR_ZONE_ACTIVE_ANON)]		= "nr_zone_active_anon",
+	[I(NR_ZONE_INACTIVE_FILE)]		= "nr_zone_inactive_file",
+	[I(NR_ZONE_ACTIVE_FILE)]		= "nr_zone_active_file",
+	[I(NR_ZONE_UNEVICTABLE)]		= "nr_zone_unevictable",
+	[I(NR_ZONE_WRITE_PENDING)]		= "nr_zone_write_pending",
+	[I(NR_MLOCK)]				= "nr_mlock",
 #if IS_ENABLED(CONFIG_ZSMALLOC)
-	"nr_zspages",
+	[I(NR_ZSPAGES)]				= "nr_zspages",
 #endif
-	"nr_free_cma",
+	[I(NR_FREE_CMA_PAGES)]			= "nr_free_cma",
 #ifdef CONFIG_UNACCEPTED_MEMORY
-	"nr_unaccepted",
+	[I(NR_UNACCEPTED)]			= "nr_unaccepted",
 #endif
+#undef I
 
 	/* enum numa_stat_item counters */
+#define I(x) (NR_VM_ZONE_STAT_ITEMS + x)
 #ifdef CONFIG_NUMA
-	"numa_hit",
-	"numa_miss",
-	"numa_foreign",
-	"numa_interleave",
-	"numa_local",
-	"numa_other",
+	[I(NUMA_HIT)]				= "numa_hit",
+	[I(NUMA_MISS)]				= "numa_miss",
+	[I(NUMA_FOREIGN)]			= "numa_foreign",
+	[I(NUMA_INTERLEAVE_HIT)]		= "numa_interleave",
+	[I(NUMA_LOCAL)]				= "numa_local",
+	[I(NUMA_OTHER)]				= "numa_other",
 #endif
+#undef I
 
 	/* enum node_stat_item counters */
-	"nr_inactive_anon",
-	"nr_active_anon",
-	"nr_inactive_file",
-	"nr_active_file",
-	"nr_unevictable",
-	"nr_slab_reclaimable",
-	"nr_slab_unreclaimable",
-	"nr_isolated_anon",
-	"nr_isolated_file",
-	"workingset_nodes",
-	"workingset_refault_anon",
-	"workingset_refault_file",
-	"workingset_activate_anon",
-	"workingset_activate_file",
-	"workingset_restore_anon",
-	"workingset_restore_file",
-	"workingset_nodereclaim",
-	"nr_anon_pages",
-	"nr_mapped",
-	"nr_file_pages",
-	"nr_dirty",
-	"nr_writeback",
-	"nr_writeback_temp",
-	"nr_shmem",
-	"nr_shmem_hugepages",
-	"nr_shmem_pmdmapped",
-	"nr_file_hugepages",
-	"nr_file_pmdmapped",
-	"nr_anon_transparent_hugepages",
-	"nr_vmscan_write",
-	"nr_vmscan_immediate_reclaim",
-	"nr_dirtied",
-	"nr_written",
-	"nr_throttled_written",
-	"nr_kernel_misc_reclaimable",
-	"nr_foll_pin_acquired",
-	"nr_foll_pin_released",
-	"nr_kernel_stack",
+#define I(x) (NR_VM_ZONE_STAT_ITEMS + NR_VM_NUMA_EVENT_ITEMS + x)
+	[I(NR_INACTIVE_ANON)]			= "nr_inactive_anon",
+	[I(NR_ACTIVE_ANON)]			= "nr_active_anon",
+	[I(NR_INACTIVE_FILE)]			= "nr_inactive_file",
+	[I(NR_ACTIVE_FILE)]			= "nr_active_file",
+	[I(NR_UNEVICTABLE)]			= "nr_unevictable",
+	[I(NR_SLAB_RECLAIMABLE_B)]		= "nr_slab_reclaimable",
+	[I(NR_SLAB_UNRECLAIMABLE_B)]		= "nr_slab_unreclaimable",
+	[I(NR_ISOLATED_ANON)]			= "nr_isolated_anon",
+	[I(NR_ISOLATED_FILE)]			= "nr_isolated_file",
+	[I(WORKINGSET_NODES)]			= "workingset_nodes",
+	[I(WORKINGSET_REFAULT_ANON)]		= "workingset_refault_anon",
+	[I(WORKINGSET_REFAULT_FILE)]		= "workingset_refault_file",
+	[I(WORKINGSET_ACTIVATE_ANON)]		= "workingset_activate_anon",
+	[I(WORKINGSET_ACTIVATE_FILE)]		= "workingset_activate_file",
+	[I(WORKINGSET_RESTORE_ANON)]		= "workingset_restore_anon",
+	[I(WORKINGSET_RESTORE_FILE)]		= "workingset_restore_file",
+	[I(WORKINGSET_NODERECLAIM)]		= "workingset_nodereclaim",
+	[I(NR_ANON_MAPPED)]			= "nr_anon_pages",
+	[I(NR_FILE_MAPPED)]			= "nr_mapped",
+	[I(NR_FILE_PAGES)]			= "nr_file_pages",
+	[I(NR_FILE_DIRTY)]			= "nr_dirty",
+	[I(NR_WRITEBACK)]			= "nr_writeback",
+	[I(NR_SHMEM)]				= "nr_shmem",
+	[I(NR_SHMEM_THPS)]			= "nr_shmem_hugepages",
+	[I(NR_SHMEM_PMDMAPPED)]			= "nr_shmem_pmdmapped",
+	[I(NR_FILE_THPS)]			= "nr_file_hugepages",
+	[I(NR_FILE_PMDMAPPED)]			= "nr_file_pmdmapped",
+	[I(NR_ANON_THPS)]			= "nr_anon_transparent_hugepages",
+	[I(NR_VMSCAN_WRITE)]			= "nr_vmscan_write",
+	[I(NR_VMSCAN_IMMEDIATE)]		= "nr_vmscan_immediate_reclaim",
+	[I(NR_DIRTIED)]				= "nr_dirtied",
+	[I(NR_WRITTEN)]				= "nr_written",
+	[I(NR_THROTTLED_WRITTEN)]		= "nr_throttled_written",
+	[I(NR_KERNEL_MISC_RECLAIMABLE)]		= "nr_kernel_misc_reclaimable",
+	[I(NR_FOLL_PIN_ACQUIRED)]		= "nr_foll_pin_acquired",
+	[I(NR_FOLL_PIN_RELEASED)]		= "nr_foll_pin_released",
+	[I(NR_KERNEL_STACK_KB)]			= "nr_kernel_stack",
 #if IS_ENABLED(CONFIG_SHADOW_CALL_STACK)
-	"nr_shadow_call_stack",
+	[I(NR_KERNEL_SCS_KB)]			= "nr_shadow_call_stack",
 #endif
-	"nr_page_table_pages",
-	"nr_sec_page_table_pages",
+	[I(NR_PAGETABLE)]			= "nr_page_table_pages",
+	[I(NR_SECONDARY_PAGETABLE)]		= "nr_sec_page_table_pages",
 #ifdef CONFIG_IOMMU_SUPPORT
-	"nr_iommu_pages",
+	[I(NR_IOMMU_PAGES)]			= "nr_iommu_pages",
 #endif
 #ifdef CONFIG_SWAP
-	"nr_swapcached",
+	[I(NR_SWAPCACHE)]			= "nr_swapcached",
 #endif
 #ifdef CONFIG_NUMA_BALANCING
-	"pgpromote_success",
-	"pgpromote_candidate",
+	[I(PGPROMOTE_SUCCESS)]			= "pgpromote_success",
+	[I(PGPROMOTE_CANDIDATE)]		= "pgpromote_candidate",
+	[I(PGPROMOTE_CANDIDATE_NRL)]		= "pgpromote_candidate_nrl",
 #endif
-	"pgdemote_kswapd",
-	"pgdemote_direct",
-	"pgdemote_khugepaged",
-	"pgdemote_proactive",
+	[I(PGDEMOTE_KSWAPD)]			= "pgdemote_kswapd",
+	[I(PGDEMOTE_DIRECT)]			= "pgdemote_direct",
+	[I(PGDEMOTE_KHUGEPAGED)]		= "pgdemote_khugepaged",
+	[I(PGDEMOTE_PROACTIVE)]			= "pgdemote_proactive",
 #ifdef CONFIG_HUGETLB_PAGE
-	"nr_hugetlb",
+	[I(NR_HUGETLB)]				= "nr_hugetlb",
 #endif
-	"nr_balloon_pages",
+	[I(NR_BALLOON_PAGES)]			= "nr_balloon_pages",
+	[I(NR_KERNEL_FILE_PAGES)]		= "nr_kernel_file_pages",
+#undef I
+
 	/* system-wide enum vm_stat_item counters */
-	"nr_dirty_threshold",
-	"nr_dirty_background_threshold",
-	"nr_memmap_pages",
-	"nr_memmap_boot_pages",
+#define I(x) (NR_VM_ZONE_STAT_ITEMS + NR_VM_NUMA_EVENT_ITEMS + \
+	     NR_VM_NODE_STAT_ITEMS + x)
+	[I(NR_DIRTY_THRESHOLD)]			= "nr_dirty_threshold",
+	[I(NR_DIRTY_BG_THRESHOLD)]		= "nr_dirty_background_threshold",
+	[I(NR_MEMMAP_PAGES)]			= "nr_memmap_pages",
+	[I(NR_MEMMAP_BOOT_PAGES)]		= "nr_memmap_boot_pages",
+#undef I
 
-#if defined(CONFIG_VM_EVENT_COUNTERS) || defined(CONFIG_MEMCG)
+#if defined(CONFIG_VM_EVENT_COUNTERS)
 	/* enum vm_event_item counters */
-	"pgpgin",
-	"pgpgout",
-	"pswpin",
-	"pswpout",
+#define I(x) (NR_VM_ZONE_STAT_ITEMS + NR_VM_NUMA_EVENT_ITEMS + \
+	     NR_VM_NODE_STAT_ITEMS + NR_VM_STAT_ITEMS + x)
 
-	TEXTS_FOR_ZONES("pgalloc")
-	TEXTS_FOR_ZONES("allocstall")
-	TEXTS_FOR_ZONES("pgskip")
+	[I(PGPGIN)]				= "pgpgin",
+	[I(PGPGOUT)]				= "pgpgout",
+	[I(PSWPIN)]				= "pswpin",
+	[I(PSWPOUT)]				= "pswpout",
 
-	"pgfree",
-	"pgactivate",
-	"pgdeactivate",
-	"pglazyfree",
+#define OFF (NR_VM_ZONE_STAT_ITEMS + NR_VM_NUMA_EVENT_ITEMS + \
+	     NR_VM_NODE_STAT_ITEMS + NR_VM_STAT_ITEMS)
+	TEXTS_FOR_ZONES(OFF+PGALLOC, "pgalloc")
+	TEXTS_FOR_ZONES(OFF+ALLOCSTALL, "allocstall")
+	TEXTS_FOR_ZONES(OFF+PGSCAN_SKIP, "pgskip")
+#undef OFF
 
-	"pgfault",
-	"pgmajfault",
-	"pglazyfreed",
+	[I(PGFREE)]				= "pgfree",
+	[I(PGACTIVATE)]				= "pgactivate",
+	[I(PGDEACTIVATE)]			= "pgdeactivate",
+	[I(PGLAZYFREE)]				= "pglazyfree",
 
-	"pgrefill",
-	"pgreuse",
-	"pgsteal_kswapd",
-	"pgsteal_direct",
-	"pgsteal_khugepaged",
-	"pgsteal_proactive",
-	"pgscan_kswapd",
-	"pgscan_direct",
-	"pgscan_khugepaged",
-	"pgscan_proactive",
-	"pgscan_direct_throttle",
-	"pgscan_anon",
-	"pgscan_file",
-	"pgsteal_anon",
-	"pgsteal_file",
+	[I(PGFAULT)]				= "pgfault",
+	[I(PGMAJFAULT)]				= "pgmajfault",
+	[I(PGLAZYFREED)]			= "pglazyfreed",
+
+	[I(PGREFILL)]				= "pgrefill",
+	[I(PGREUSE)]				= "pgreuse",
+	[I(PGSTEAL_KSWAPD)]			= "pgsteal_kswapd",
+	[I(PGSTEAL_DIRECT)]			= "pgsteal_direct",
+	[I(PGSTEAL_KHUGEPAGED)]			= "pgsteal_khugepaged",
+	[I(PGSTEAL_PROACTIVE)]			= "pgsteal_proactive",
+	[I(PGSCAN_KSWAPD)]			= "pgscan_kswapd",
+	[I(PGSCAN_DIRECT)]			= "pgscan_direct",
+	[I(PGSCAN_KHUGEPAGED)]			= "pgscan_khugepaged",
+	[I(PGSCAN_PROACTIVE)]			= "pgscan_proactive",
+	[I(PGSCAN_DIRECT_THROTTLE)]		= "pgscan_direct_throttle",
+	[I(PGSCAN_ANON)]			= "pgscan_anon",
+	[I(PGSCAN_FILE)]			= "pgscan_file",
+	[I(PGSTEAL_ANON)]			= "pgsteal_anon",
+	[I(PGSTEAL_FILE)]			= "pgsteal_file",
 
 #ifdef CONFIG_NUMA
-	"zone_reclaim_success",
-	"zone_reclaim_failed",
+	[I(PGSCAN_ZONE_RECLAIM_SUCCESS)]	= "zone_reclaim_success",
+	[I(PGSCAN_ZONE_RECLAIM_FAILED)]		= "zone_reclaim_failed",
 #endif
-	"pginodesteal",
-	"slabs_scanned",
-	"kswapd_inodesteal",
-	"kswapd_low_wmark_hit_quickly",
-	"kswapd_high_wmark_hit_quickly",
-	"pageoutrun",
+	[I(PGINODESTEAL)]			= "pginodesteal",
+	[I(SLABS_SCANNED)]			= "slabs_scanned",
+	[I(KSWAPD_INODESTEAL)]			= "kswapd_inodesteal",
+	[I(KSWAPD_LOW_WMARK_HIT_QUICKLY)]	= "kswapd_low_wmark_hit_quickly",
+	[I(KSWAPD_HIGH_WMARK_HIT_QUICKLY)]	= "kswapd_high_wmark_hit_quickly",
+	[I(PAGEOUTRUN)]				= "pageoutrun",
 
-	"pgrotated",
+	[I(PGROTATED)]				= "pgrotated",
 
-	"drop_pagecache",
-	"drop_slab",
-	"oom_kill",
+	[I(DROP_PAGECACHE)]			= "drop_pagecache",
+	[I(DROP_SLAB)]				= "drop_slab",
+	[I(OOM_KILL)]				= "oom_kill",
 
 #ifdef CONFIG_NUMA_BALANCING
-	"numa_pte_updates",
-	"numa_huge_pte_updates",
-	"numa_hint_faults",
-	"numa_hint_faults_local",
-	"numa_pages_migrated",
+	[I(NUMA_PTE_UPDATES)]			= "numa_pte_updates",
+	[I(NUMA_HUGE_PTE_UPDATES)]		= "numa_huge_pte_updates",
+	[I(NUMA_HINT_FAULTS)]			= "numa_hint_faults",
+	[I(NUMA_HINT_FAULTS_LOCAL)]		= "numa_hint_faults_local",
+	[I(NUMA_PAGE_MIGRATE)]			= "numa_pages_migrated",
 #endif
 #ifdef CONFIG_MIGRATION
-	"pgmigrate_success",
-	"pgmigrate_fail",
-	"thp_migration_success",
-	"thp_migration_fail",
-	"thp_migration_split",
+	[I(PGMIGRATE_SUCCESS)]			= "pgmigrate_success",
+	[I(PGMIGRATE_FAIL)]			= "pgmigrate_fail",
+	[I(THP_MIGRATION_SUCCESS)]		= "thp_migration_success",
+	[I(THP_MIGRATION_FAIL)]			= "thp_migration_fail",
+	[I(THP_MIGRATION_SPLIT)]		= "thp_migration_split",
 #endif
 #ifdef CONFIG_COMPACTION
-	"compact_migrate_scanned",
-	"compact_free_scanned",
-	"compact_isolated",
-	"compact_stall",
-	"compact_fail",
-	"compact_success",
-	"compact_daemon_wake",
-	"compact_daemon_migrate_scanned",
-	"compact_daemon_free_scanned",
+	[I(COMPACTMIGRATE_SCANNED)]		= "compact_migrate_scanned",
+	[I(COMPACTFREE_SCANNED)]		= "compact_free_scanned",
+	[I(COMPACTISOLATED)]			= "compact_isolated",
+	[I(COMPACTSTALL)]			= "compact_stall",
+	[I(COMPACTFAIL)]			= "compact_fail",
+	[I(COMPACTSUCCESS)]			= "compact_success",
+	[I(KCOMPACTD_WAKE)]			= "compact_daemon_wake",
+	[I(KCOMPACTD_MIGRATE_SCANNED)]		= "compact_daemon_migrate_scanned",
+	[I(KCOMPACTD_FREE_SCANNED)]		= "compact_daemon_free_scanned",
 #endif
 
 #ifdef CONFIG_HUGETLB_PAGE
-	"htlb_buddy_alloc_success",
-	"htlb_buddy_alloc_fail",
+	[I(HTLB_BUDDY_PGALLOC)]			= "htlb_buddy_alloc_success",
+	[I(HTLB_BUDDY_PGALLOC_FAIL)]		= "htlb_buddy_alloc_fail",
 #endif
 #ifdef CONFIG_CMA
-	"cma_alloc_success",
-	"cma_alloc_fail",
+	[I(CMA_ALLOC_SUCCESS)]			= "cma_alloc_success",
+	[I(CMA_ALLOC_FAIL)]			= "cma_alloc_fail",
 #endif
-	"unevictable_pgs_culled",
-	"unevictable_pgs_scanned",
-	"unevictable_pgs_rescued",
-	"unevictable_pgs_mlocked",
-	"unevictable_pgs_munlocked",
-	"unevictable_pgs_cleared",
-	"unevictable_pgs_stranded",
+	[I(UNEVICTABLE_PGCULLED)]		= "unevictable_pgs_culled",
+	[I(UNEVICTABLE_PGSCANNED)]		= "unevictable_pgs_scanned",
+	[I(UNEVICTABLE_PGRESCUED)]		= "unevictable_pgs_rescued",
+	[I(UNEVICTABLE_PGMLOCKED)]		= "unevictable_pgs_mlocked",
+	[I(UNEVICTABLE_PGMUNLOCKED)]		= "unevictable_pgs_munlocked",
+	[I(UNEVICTABLE_PGCLEARED)]		= "unevictable_pgs_cleared",
+	[I(UNEVICTABLE_PGSTRANDED)]		= "unevictable_pgs_stranded",
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
-	"thp_fault_alloc",
-	"thp_fault_fallback",
-	"thp_fault_fallback_charge",
-	"thp_collapse_alloc",
-	"thp_collapse_alloc_failed",
-	"thp_file_alloc",
-	"thp_file_fallback",
-	"thp_file_fallback_charge",
-	"thp_file_mapped",
-	"thp_split_page",
-	"thp_split_page_failed",
-	"thp_deferred_split_page",
-	"thp_underused_split_page",
-	"thp_split_pmd",
-	"thp_scan_exceed_none_pte",
-	"thp_scan_exceed_swap_pte",
-	"thp_scan_exceed_share_pte",
+	[I(THP_FAULT_ALLOC)]			= "thp_fault_alloc",
+	[I(THP_FAULT_FALLBACK)]			= "thp_fault_fallback",
+	[I(THP_FAULT_FALLBACK_CHARGE)]		= "thp_fault_fallback_charge",
+	[I(THP_COLLAPSE_ALLOC)]			= "thp_collapse_alloc",
+	[I(THP_COLLAPSE_ALLOC_FAILED)]		= "thp_collapse_alloc_failed",
+	[I(THP_FILE_ALLOC)]			= "thp_file_alloc",
+	[I(THP_FILE_FALLBACK)]			= "thp_file_fallback",
+	[I(THP_FILE_FALLBACK_CHARGE)]		= "thp_file_fallback_charge",
+	[I(THP_FILE_MAPPED)]			= "thp_file_mapped",
+	[I(THP_SPLIT_PAGE)]			= "thp_split_page",
+	[I(THP_SPLIT_PAGE_FAILED)]		= "thp_split_page_failed",
+	[I(THP_DEFERRED_SPLIT_PAGE)]		= "thp_deferred_split_page",
+	[I(THP_UNDERUSED_SPLIT_PAGE)]		= "thp_underused_split_page",
+	[I(THP_SPLIT_PMD)]			= "thp_split_pmd",
+	[I(THP_SCAN_EXCEED_NONE_PTE)]		= "thp_scan_exceed_none_pte",
+	[I(THP_SCAN_EXCEED_SWAP_PTE)]		= "thp_scan_exceed_swap_pte",
+	[I(THP_SCAN_EXCEED_SHARED_PTE)]		= "thp_scan_exceed_share_pte",
 #ifdef CONFIG_HAVE_ARCH_TRANSPARENT_HUGEPAGE_PUD
-	"thp_split_pud",
+	[I(THP_SPLIT_PUD)]			= "thp_split_pud",
 #endif
-	"thp_zero_page_alloc",
-	"thp_zero_page_alloc_failed",
-	"thp_swpout",
-	"thp_swpout_fallback",
+	[I(THP_ZERO_PAGE_ALLOC)]		= "thp_zero_page_alloc",
+	[I(THP_ZERO_PAGE_ALLOC_FAILED)]		= "thp_zero_page_alloc_failed",
+	[I(THP_SWPOUT)]				= "thp_swpout",
+	[I(THP_SWPOUT_FALLBACK)]		= "thp_swpout_fallback",
 #endif
-#ifdef CONFIG_MEMORY_BALLOON
-	"balloon_inflate",
-	"balloon_deflate",
-#ifdef CONFIG_BALLOON_COMPACTION
-	"balloon_migrate",
-#endif
-#endif /* CONFIG_MEMORY_BALLOON */
+#ifdef CONFIG_BALLOON
+	[I(BALLOON_INFLATE)]			= "balloon_inflate",
+	[I(BALLOON_DEFLATE)]			= "balloon_deflate",
+#ifdef CONFIG_BALLOON_MIGRATION
+	[I(BALLOON_MIGRATE)]			= "balloon_migrate",
+#endif /* CONFIG_BALLOON_MIGRATION */
+#endif /* CONFIG_BALLOON */
 #ifdef CONFIG_DEBUG_TLBFLUSH
-	"nr_tlb_remote_flush",
-	"nr_tlb_remote_flush_received",
-	"nr_tlb_local_flush_all",
-	"nr_tlb_local_flush_one",
+	[I(NR_TLB_REMOTE_FLUSH)]		= "nr_tlb_remote_flush",
+	[I(NR_TLB_REMOTE_FLUSH_RECEIVED)]	= "nr_tlb_remote_flush_received",
+	[I(NR_TLB_LOCAL_FLUSH_ALL)]		= "nr_tlb_local_flush_all",
+	[I(NR_TLB_LOCAL_FLUSH_ONE)]		= "nr_tlb_local_flush_one",
 #endif /* CONFIG_DEBUG_TLBFLUSH */
 
 #ifdef CONFIG_SWAP
-	"swap_ra",
-	"swap_ra_hit",
-	"swpin_zero",
-	"swpout_zero",
+	[I(SWAP_RA)]				= "swap_ra",
+	[I(SWAP_RA_HIT)]			= "swap_ra_hit",
+	[I(SWPIN_ZERO)]				= "swpin_zero",
+	[I(SWPOUT_ZERO)]			= "swpout_zero",
 #ifdef CONFIG_KSM
-	"ksm_swpin_copy",
+	[I(KSM_SWPIN_COPY)]			= "ksm_swpin_copy",
 #endif
 #endif
 #ifdef CONFIG_KSM
-	"cow_ksm",
+	[I(COW_KSM)]				= "cow_ksm",
 #endif
 #ifdef CONFIG_ZSWAP
-	"zswpin",
-	"zswpout",
-	"zswpwb",
+	[I(ZSWPIN)]				= "zswpin",
+	[I(ZSWPOUT)]				= "zswpout",
+	[I(ZSWPWB)]				= "zswpwb",
 #endif
 #ifdef CONFIG_X86
-	"direct_map_level2_splits",
-	"direct_map_level3_splits",
-	"direct_map_level2_collapses",
-	"direct_map_level3_collapses",
+	[I(DIRECT_MAP_LEVEL2_SPLIT)]		= "direct_map_level2_splits",
+	[I(DIRECT_MAP_LEVEL3_SPLIT)]		= "direct_map_level3_splits",
+	[I(DIRECT_MAP_LEVEL2_COLLAPSE)]		= "direct_map_level2_collapses",
+	[I(DIRECT_MAP_LEVEL3_COLLAPSE)]		= "direct_map_level3_collapses",
 #endif
 #ifdef CONFIG_PER_VMA_LOCK_STATS
-	"vma_lock_success",
-	"vma_lock_abort",
-	"vma_lock_retry",
-	"vma_lock_miss",
+	[I(VMA_LOCK_SUCCESS)]			= "vma_lock_success",
+	[I(VMA_LOCK_ABORT)]			= "vma_lock_abort",
+	[I(VMA_LOCK_RETRY)]			= "vma_lock_retry",
+	[I(VMA_LOCK_MISS)]			= "vma_lock_miss",
 #endif
 #ifdef CONFIG_DEBUG_STACK_USAGE
-	"kstack_1k",
+	[I(KSTACK_1K)]				= "kstack_1k",
 #if THREAD_SIZE > 1024
-	"kstack_2k",
+	[I(KSTACK_2K)]				= "kstack_2k",
 #endif
 #if THREAD_SIZE > 2048
-	"kstack_4k",
+	[I(KSTACK_4K)]				= "kstack_4k",
 #endif
 #if THREAD_SIZE > 4096
-	"kstack_8k",
+	[I(KSTACK_8K)]				= "kstack_8k",
 #endif
 #if THREAD_SIZE > 8192
-	"kstack_16k",
+	[I(KSTACK_16K)]				= "kstack_16k",
 #endif
 #if THREAD_SIZE > 16384
-	"kstack_32k",
+	[I(KSTACK_32K)]				= "kstack_32k",
 #endif
 #if THREAD_SIZE > 32768
-	"kstack_64k",
+	[I(KSTACK_64K)]				= "kstack_64k",
 #endif
 #if THREAD_SIZE > 65536
-	"kstack_rest",
+	[I(KSTACK_REST)]			= "kstack_rest",
 #endif
 #endif
-#endif /* CONFIG_VM_EVENT_COUNTERS || CONFIG_MEMCG */
+#undef I
+#endif /* CONFIG_VM_EVENT_COUNTERS */
 };
 #endif /* CONFIG_PROC_FS || CONFIG_SYSFS || CONFIG_NUMA || CONFIG_MEMCG */
 
@@ -1599,7 +1611,7 @@ static void pagetypeinfo_showfree_print(struct seq_file *m,
 	}
 }
 
-/* Print out the free pages at each order for each migatetype */
+/* Print out the free pages at each order for each migratetype */
 static void pagetypeinfo_showfree(struct seq_file *m, void *arg)
 {
 	int order;
@@ -1825,9 +1837,13 @@ static void zoneinfo_show_print(struct seq_file *m, pg_data_t *pgdat,
 	}
 	seq_printf(m,
 		   "\n  node_unreclaimable:  %u"
-		   "\n  start_pfn:           %lu",
-		   pgdat->kswapd_failures >= MAX_RECLAIM_RETRIES,
-		   zone->zone_start_pfn);
+		   "\n  start_pfn:           %lu"
+		   "\n  reserved_highatomic: %lu"
+		   "\n  free_highatomic:     %lu",
+		   kswapd_test_hopeless(pgdat),
+		   zone->zone_start_pfn,
+		   zone->nr_reserved_highatomic,
+		   zone->nr_free_highatomic);
 	seq_putc(m, '\n');
 }
 
@@ -1867,7 +1883,7 @@ static void *vmstat_start(struct seq_file *m, loff_t *pos)
 	if (*pos >= NR_VMSTAT_ITEMS)
 		return NULL;
 
-	BUILD_BUG_ON(ARRAY_SIZE(vmstat_text) < NR_VMSTAT_ITEMS);
+	BUILD_BUG_ON(ARRAY_SIZE(vmstat_text) != NR_VMSTAT_ITEMS);
 	fold_vm_numa_events();
 	v = kmalloc_array(NR_VMSTAT_ITEMS, sizeof(unsigned long), GFP_KERNEL);
 	m->private = v;
@@ -2093,6 +2109,11 @@ static void vmstat_shepherd(struct work_struct *w);
 
 static DECLARE_DEFERRABLE_WORK(shepherd, vmstat_shepherd);
 
+void vmstat_flush_workqueue(void)
+{
+	flush_workqueue(mm_percpu_wq);
+}
+
 static void vmstat_shepherd(struct work_struct *w)
 {
 	int cpu;
@@ -2113,11 +2134,13 @@ static void vmstat_shepherd(struct work_struct *w)
 		 * infrastructure ever noticing. Skip regular flushing from vmstat_shepherd
 		 * for all isolated CPUs to avoid interference with the isolated workload.
 		 */
-		if (cpu_is_isolated(cpu))
-			continue;
+		scoped_guard(rcu) {
+			if (cpu_is_isolated(cpu))
+				continue;
 
-		if (!delayed_work_pending(dw) && need_update(cpu))
-			queue_delayed_work_on(cpu, mm_percpu_wq, dw, 0);
+			if (!delayed_work_pending(dw) && need_update(cpu))
+				queue_delayed_work_on(cpu, mm_percpu_wq, dw, 0);
+		}
 
 		cond_resched();
 	}
@@ -2243,7 +2266,8 @@ void __init init_mm_internals(void)
 {
 	int ret __maybe_unused;
 
-	mm_percpu_wq = alloc_workqueue("mm_percpu_wq", WQ_MEM_RECLAIM, 0);
+	mm_percpu_wq = alloc_workqueue("mm_percpu_wq",
+				       WQ_MEM_RECLAIM | WQ_PERCPU, 0);
 
 #ifdef CONFIG_SMP
 	ret = cpuhp_setup_state_nocalls(CPUHP_MM_VMSTAT_DEAD, "mm/vmstat:dead",

@@ -4,6 +4,7 @@
 #include "vkms_connector.h"
 #include "vkms_drv.h"
 #include <drm/drm_managed.h>
+#include <drm/drm_print.h>
 
 int vkms_output_init(struct vkms_device *vkmsdev)
 {
@@ -19,11 +20,7 @@ int vkms_output_init(struct vkms_device *vkmsdev)
 		return -EINVAL;
 
 	vkms_config_for_each_plane(vkmsdev->config, plane_cfg) {
-		enum drm_plane_type type;
-
-		type = vkms_config_plane_get_type(plane_cfg);
-
-		plane_cfg->plane = vkms_plane_init(vkmsdev, type);
+		plane_cfg->plane = vkms_plane_init(vkmsdev, plane_cfg);
 		if (IS_ERR(plane_cfg->plane)) {
 			DRM_DEV_ERROR(dev->dev, "Failed to init vkms plane\n");
 			return PTR_ERR(plane_cfg->plane);
@@ -77,9 +74,22 @@ int vkms_output_init(struct vkms_device *vkmsdev)
 			return ret;
 		}
 
+		encoder_cfg->encoder->possible_clones |=
+			drm_encoder_mask(encoder_cfg->encoder);
+
 		vkms_config_encoder_for_each_possible_crtc(encoder_cfg, idx, possible_crtc) {
 			encoder_cfg->encoder->possible_crtcs |=
 				drm_crtc_mask(&possible_crtc->crtc->crtc);
+
+			if (vkms_config_crtc_get_writeback(possible_crtc)) {
+				struct drm_encoder *wb_encoder =
+					&possible_crtc->crtc->wb_encoder;
+
+				encoder_cfg->encoder->possible_clones |=
+					drm_encoder_mask(wb_encoder);
+				wb_encoder->possible_clones |=
+					drm_encoder_mask(encoder_cfg->encoder);
+			}
 		}
 	}
 

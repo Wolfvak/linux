@@ -19,6 +19,14 @@ extern "C" {
 #define AMDXDNA_INVALID_BO_HANDLE	0
 #define AMDXDNA_INVALID_FENCE_HANDLE	0
 
+/*
+ * Define hardware context priority
+ */
+#define AMDXDNA_QOS_REALTIME_PRIORITY	0x100
+#define AMDXDNA_QOS_HIGH_PRIORITY	0x180
+#define AMDXDNA_QOS_NORMAL_PRIORITY	0x200
+#define AMDXDNA_QOS_LOW_PRIORITY	0x280
+
 enum amdxdna_device_type {
 	AMDXDNA_DEV_TYPE_UNKNOWN = -1,
 	AMDXDNA_DEV_TYPE_KMQ,
@@ -34,6 +42,7 @@ enum amdxdna_drm_ioctl_id {
 	DRM_AMDXDNA_EXEC_CMD,
 	DRM_AMDXDNA_GET_INFO,
 	DRM_AMDXDNA_SET_STATE,
+	DRM_AMDXDNA_GET_ARRAY = 10,
 };
 
 /**
@@ -151,6 +160,31 @@ enum amdxdna_bo_type {
 	AMDXDNA_BO_DEV_HEAP,
 	AMDXDNA_BO_DEV,
 	AMDXDNA_BO_CMD,
+};
+
+/**
+ * struct amdxdna_drm_va_entry
+ * @vaddr: Virtual address.
+ * @len: Size of entry.
+ */
+struct amdxdna_drm_va_entry {
+	__u64 vaddr;
+	__u64 len;
+};
+
+/**
+ * struct amdxdna_drm_va_tbl
+ * @dmabuf_fd: The fd of dmabuf.
+ * @num_entries: Number of va entries.
+ * @va_entries: Array of va entries.
+ *
+ * The input can be either a dmabuf fd or a virtual address entry table.
+ * When dmabuf_fd is used, num_entries must be zero.
+ */
+struct amdxdna_drm_va_tbl {
+	__s32 dmabuf_fd;
+	__u32 num_entries;
+	struct amdxdna_drm_va_entry va_entries[];
 };
 
 /**
@@ -416,6 +450,52 @@ enum amdxdna_drm_get_param {
 	DRM_AMDXDNA_QUERY_HW_CONTEXTS,
 	DRM_AMDXDNA_QUERY_FIRMWARE_VERSION = 8,
 	DRM_AMDXDNA_GET_POWER_MODE,
+	DRM_AMDXDNA_QUERY_TELEMETRY,
+	DRM_AMDXDNA_GET_FORCE_PREEMPT_STATE,
+	DRM_AMDXDNA_QUERY_RESOURCE_INFO,
+	DRM_AMDXDNA_GET_FRAME_BOUNDARY_PREEMPT_STATE,
+};
+
+/**
+ * struct amdxdna_drm_get_resource_info - Get resource information
+ */
+struct amdxdna_drm_get_resource_info {
+	/** @npu_clk_max: max H-Clocks */
+	__u64 npu_clk_max;
+	/** @npu_tops_max: max TOPs */
+	__u64 npu_tops_max;
+	/** @npu_task_max: max number of tasks */
+	__u64 npu_task_max;
+	/** @npu_tops_curr: current TOPs */
+	__u64 npu_tops_curr;
+	/** @npu_task_curr: current number of tasks */
+	__u64 npu_task_curr;
+};
+
+/**
+ * struct amdxdna_drm_attribute_state - State of an attribute
+ */
+struct amdxdna_drm_attribute_state {
+	/** @state: enabled or disabled */
+	__u8 state;
+	/** @pad: MBZ */
+	__u8 pad[7];
+};
+
+/**
+ * struct amdxdna_drm_query_telemetry_header - Telemetry data header
+ */
+struct amdxdna_drm_query_telemetry_header {
+	/** @major: Firmware telemetry interface major version number */
+	__u32 major;
+	/** @minor: Firmware telemetry interface minor version number */
+	__u32 minor;
+	/** @type: Telemetry query type */
+	__u32 type;
+	/** @map_num_elements: Total number of elements in the map table */
+	__u32 map_num_elements;
+	/** @map: Element map */
+	__u32 map[];
 };
 
 /**
@@ -430,10 +510,131 @@ struct amdxdna_drm_get_info {
 	__u64 buffer; /* in/out */
 };
 
+#define AMDXDNA_HWCTX_STATE_IDLE	0
+#define AMDXDNA_HWCTX_STATE_ACTIVE	1
+
+/**
+ * struct amdxdna_drm_hwctx_entry - The hardware context array entry
+ */
+struct amdxdna_drm_hwctx_entry {
+	/** @context_id: Context ID. */
+	__u32 context_id;
+	/** @start_col: Start AIE array column assigned to context. */
+	__u32 start_col;
+	/** @num_col: Number of AIE array columns assigned to context. */
+	__u32 num_col;
+	/** @hwctx_id: The real hardware context id. */
+	__u32 hwctx_id;
+	/** @pid: ID of process which created this context. */
+	__s64 pid;
+	/** @command_submissions: Number of commands submitted. */
+	__u64 command_submissions;
+	/** @command_completions: Number of commands completed. */
+	__u64 command_completions;
+	/** @migrations: Number of times been migrated. */
+	__u64 migrations;
+	/** @preemptions: Number of times been preempted. */
+	__u64 preemptions;
+	/** @errors: Number of errors happened. */
+	__u64 errors;
+	/** @priority: Context priority. */
+	__u64 priority;
+	/** @heap_usage: Usage of device heap buffer. */
+	__u64 heap_usage;
+	/** @suspensions: Number of times been suspended. */
+	__u64 suspensions;
+	/**
+	 * @state: Context state.
+	 * %AMDXDNA_HWCTX_STATE_IDLE
+	 * %AMDXDNA_HWCTX_STATE_ACTIVE
+	 */
+	__u32 state;
+	/** @pasid: PASID been bound. */
+	__u32 pasid;
+	/** @gops: Giga operations per second. */
+	__u32 gops;
+	/** @fps: Frames per second. */
+	__u32 fps;
+	/** @dma_bandwidth: DMA bandwidth. */
+	__u32 dma_bandwidth;
+	/** @latency: Frame response latency. */
+	__u32 latency;
+	/** @frame_exec_time: Frame execution time. */
+	__u32 frame_exec_time;
+	/** @txn_op_idx: Index of last control code executed. */
+	__u32 txn_op_idx;
+	/** @ctx_pc: Program counter. */
+	__u32 ctx_pc;
+	/** @fatal_error_type: Fatal error type if context crashes. */
+	__u32 fatal_error_type;
+	/** @fatal_error_exception_type: Firmware exception type. */
+	__u32 fatal_error_exception_type;
+	/** @fatal_error_exception_pc: Firmware exception program counter. */
+	__u32 fatal_error_exception_pc;
+	/** @fatal_error_app_module: Exception module name. */
+	__u32 fatal_error_app_module;
+	/** @pad: Structure pad. */
+	__u32 pad;
+};
+
+/**
+ * struct amdxdna_async_error - XDNA async error structure
+ */
+struct amdxdna_async_error {
+	/** @err_code: Error code. */
+	__u64 err_code;
+	/** @ts_us: Timestamp. */
+	__u64 ts_us;
+	/** @ex_err_code: Extra error code */
+	__u64 ex_err_code;
+};
+
+#define DRM_AMDXDNA_HW_CONTEXT_ALL	0
+#define DRM_AMDXDNA_HW_LAST_ASYNC_ERR	2
+
+/**
+ * struct amdxdna_drm_get_array - Get information array.
+ */
+struct amdxdna_drm_get_array {
+	/**
+	 * @param:
+	 *
+	 * Supported params:
+	 *
+	 * %DRM_AMDXDNA_HW_CONTEXT_ALL:
+	 * Returns all created hardware contexts.
+	 */
+	__u32 param;
+	/**
+	 * @element_size:
+	 *
+	 * Specifies maximum element size and returns the actual element size.
+	 */
+	__u32 element_size;
+	/**
+	 * @num_element:
+	 *
+	 * Specifies maximum number of elements and returns the actual number
+	 * of elements.
+	 */
+	__u32 num_element; /* in/out */
+	/** @pad: MBZ */
+	__u32 pad;
+	/**
+	 * @buffer:
+	 *
+	 * Specifies the match conditions and returns the matched information
+	 * array.
+	 */
+	__u64 buffer;
+};
+
 enum amdxdna_drm_set_param {
 	DRM_AMDXDNA_SET_POWER_MODE,
 	DRM_AMDXDNA_WRITE_AIE_MEM,
 	DRM_AMDXDNA_WRITE_AIE_REG,
+	DRM_AMDXDNA_SET_FORCE_PREEMPT,
+	DRM_AMDXDNA_SET_FRAME_BOUNDARY_PREEMPT,
 };
 
 /**
@@ -493,6 +694,10 @@ struct amdxdna_drm_set_power_mode {
 #define DRM_IOCTL_AMDXDNA_SET_STATE \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_AMDXDNA_SET_STATE, \
 		 struct amdxdna_drm_set_state)
+
+#define DRM_IOCTL_AMDXDNA_GET_ARRAY \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_AMDXDNA_GET_ARRAY, \
+		 struct amdxdna_drm_get_array)
 
 #if defined(__cplusplus)
 } /* extern c end */

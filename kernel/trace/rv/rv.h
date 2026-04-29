@@ -17,52 +17,27 @@ struct rv_interface {
 #define rv_create_file			tracefs_create_file
 #define rv_remove			tracefs_remove
 
+DEFINE_FREE(rv_remove, struct dentry *, if (_T) rv_remove(_T));
+
 #define MAX_RV_MONITOR_NAME_SIZE	32
 #define MAX_RV_REACTOR_NAME_SIZE	32
 
 extern struct mutex rv_interface_lock;
 extern struct list_head rv_monitors_list;
 
-#ifdef CONFIG_RV_REACTORS
-struct rv_reactor_def {
-	struct list_head	list;
-	struct rv_reactor	*reactor;
-	/* protected by the monitor interface lock */
-	int			counter;
-};
-#endif
-
-struct rv_monitor_def {
-	struct list_head	list;
-	struct rv_monitor	*monitor;
-	struct rv_monitor	*parent;
-	struct dentry		*root_d;
-#ifdef CONFIG_RV_REACTORS
-	struct rv_reactor_def	*rdef;
-	bool			reacting;
-#endif
-	bool			task_monitor;
-};
-
 struct dentry *get_monitors_root(void);
-int rv_disable_monitor(struct rv_monitor_def *mdef);
-int rv_enable_monitor(struct rv_monitor_def *mdef);
-bool rv_is_container_monitor(struct rv_monitor_def *mdef);
-bool rv_is_nested_monitor(struct rv_monitor_def *mdef);
+int rv_disable_monitor(struct rv_monitor *mon);
+int rv_enable_monitor(struct rv_monitor *mon);
+bool rv_is_container_monitor(struct rv_monitor *mon);
+bool rv_is_nested_monitor(struct rv_monitor *mon);
 
 #ifdef CONFIG_RV_REACTORS
-int reactor_populate_monitor(struct rv_monitor_def *mdef);
-void reactor_cleanup_monitor(struct rv_monitor_def *mdef);
+int reactor_populate_monitor(struct rv_monitor *mon, struct dentry *root);
 int init_rv_reactors(struct dentry *root_dir);
 #else
-static inline int reactor_populate_monitor(struct rv_monitor_def *mdef)
+static inline int reactor_populate_monitor(struct rv_monitor *mon, struct dentry *root)
 {
 	return 0;
-}
-
-static inline void reactor_cleanup_monitor(struct rv_monitor_def *mdef)
-{
-	return;
 }
 
 static inline int init_rv_reactors(struct dentry *root_dir)

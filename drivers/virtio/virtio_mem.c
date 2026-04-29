@@ -1243,7 +1243,7 @@ static int virtio_mem_fake_offline(struct virtio_mem *vm, unsigned long pfn,
 		if (atomic_read(&vm->config_changed))
 			return -EAGAIN;
 
-		rc = alloc_contig_range(pfn, pfn + nr_pages, MIGRATE_MOVABLE,
+		rc = alloc_contig_range(pfn, pfn + nr_pages, ACR_FLAGS_NONE,
 					GFP_KERNEL);
 		if (rc == -ENOMEM)
 			/* whoops, out of memory */
@@ -2940,7 +2940,7 @@ static int virtio_mem_probe(struct virtio_device *vdev)
 	BUILD_BUG_ON(sizeof(struct virtio_mem_req) != 24);
 	BUILD_BUG_ON(sizeof(struct virtio_mem_resp) != 10);
 
-	vdev->priv = vm = kzalloc(sizeof(*vm), GFP_KERNEL);
+	vdev->priv = vm = kzalloc_obj(*vm);
 	if (!vm)
 		return -ENOMEM;
 

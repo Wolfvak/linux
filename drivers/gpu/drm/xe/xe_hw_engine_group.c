@@ -6,20 +6,13 @@
 #include <drm/drm_managed.h>
 
 #include "xe_assert.h"
-#include "xe_device.h"
+#include "xe_device_types.h"
 #include "xe_exec_queue.h"
 #include "xe_gt.h"
+#include "xe_gt_stats.h"
 #include "xe_hw_engine_group.h"
+#include "xe_sync.h"
 #include "xe_vm.h"
-
-static void
-hw_engine_group_free(struct drm_device *drm, void *arg)
-{
-	struct xe_hw_engine_group *group = arg;
-
-	destroy_workqueue(group->resume_wq);
-	kfree(group);
-}
 
 static void
 hw_engine_group_resume_lr_jobs_func(struct work_struct *w)
@@ -29,7 +22,8 @@ hw_engine_group_resume_lr_jobs_func(struct work_struct *w)
 	int err;
 	enum xe_hw_engine_group_execution_mode previous_mode;
 
-	err = xe_hw_engine_group_get_mode(group, EXEC_MODE_LR, &previous_mode);
+	err = xe_hw_engine_group_get_mode(group, EXEC_MODE_LR, &previous_mode,
+					  NULL, 0);
 	if (err)
 		return;
 
@@ -53,7 +47,7 @@ hw_engine_group_alloc(struct xe_device *xe)
 	struct xe_hw_engine_group *group;
 	int err;
 
-	group = kzalloc(sizeof(*group), GFP_KERNEL);
+	group = drmm_kzalloc(&xe->drm, sizeof(*group), GFP_KERNEL);
 	if (!group)
 		return ERR_PTR(-ENOMEM);
 
@@ -61,13 +55,13 @@ hw_engine_group_alloc(struct xe_device *xe)
 	if (!group->resume_wq)
 		return ERR_PTR(-ENOMEM);
 
+	err = drmm_add_action_or_reset(&xe->drm, __drmm_workqueue_release, group->resume_wq);
+	if (err)
+		return ERR_PTR(err);
+
 	init_rwsem(&group->mode_sem);
 	INIT_WORK(&group->resume_work, hw_engine_group_resume_lr_jobs_func);
 	INIT_LIST_HEAD(&group->exec_queue_list);
-
-	err = drmm_add_action_or_reset(&xe->drm, hw_engine_group_free, group);
-	if (err)
-		return ERR_PTR(err);
 
 	return group;
 }
@@ -84,25 +78,18 @@ int xe_hw_engine_setup_groups(struct xe_gt *gt)
 	enum xe_hw_engine_id id;
 	struct xe_hw_engine_group *group_rcs_ccs, *group_bcs, *group_vcs_vecs;
 	struct xe_device *xe = gt_to_xe(gt);
-	int err;
 
 	group_rcs_ccs = hw_engine_group_alloc(xe);
-	if (IS_ERR(group_rcs_ccs)) {
-		err = PTR_ERR(group_rcs_ccs);
-		goto err_group_rcs_ccs;
-	}
+	if (IS_ERR(group_rcs_ccs))
+		return PTR_ERR(group_rcs_ccs);
 
 	group_bcs = hw_engine_group_alloc(xe);
-	if (IS_ERR(group_bcs)) {
-		err = PTR_ERR(group_bcs);
-		goto err_group_bcs;
-	}
+	if (IS_ERR(group_bcs))
+		return PTR_ERR(group_bcs);
 
 	group_vcs_vecs = hw_engine_group_alloc(xe);
-	if (IS_ERR(group_vcs_vecs)) {
-		err = PTR_ERR(group_vcs_vecs);
-		goto err_group_vcs_vecs;
-	}
+	if (IS_ERR(group_vcs_vecs))
+		return PTR_ERR(group_vcs_vecs);
 
 	for_each_hw_engine(hwe, gt, id) {
 		switch (hwe->class) {
@@ -119,21 +106,12 @@ int xe_hw_engine_setup_groups(struct xe_gt *gt)
 			break;
 		case XE_ENGINE_CLASS_OTHER:
 			break;
-		default:
-			drm_warn(&xe->drm, "NOT POSSIBLE");
+		case XE_ENGINE_CLASS_MAX:
+			xe_gt_assert(gt, false);
 		}
 	}
 
 	return 0;
-
-err_group_vcs_vecs:
-	kfree(group_vcs_vecs);
-err_group_bcs:
-	kfree(group_bcs);
-err_group_rcs_ccs:
-	kfree(group_rcs_ccs);
-
-	return err;
 }
 
 /**
@@ -213,23 +191,39 @@ void xe_hw_engine_group_resume_faulting_lr_jobs(struct xe_hw_engine_group *group
 /**
  * xe_hw_engine_group_suspend_faulting_lr_jobs() - Suspend the faulting LR jobs of this group
  * @group: The hw engine group
+ * @has_deps: dma-fence job triggering suspend has dependencies
  *
  * Return: 0 on success, negative error code on error.
  */
-static int xe_hw_engine_group_suspend_faulting_lr_jobs(struct xe_hw_engine_group *group)
+static int xe_hw_engine_group_suspend_faulting_lr_jobs(struct xe_hw_engine_group *group,
+						       bool has_deps)
 {
 	int err;
 	struct xe_exec_queue *q;
+	struct xe_gt *gt = NULL;
 	bool need_resume = false;
+	ktime_t start = xe_gt_stats_ktime_get();
 
 	lockdep_assert_held_write(&group->mode_sem);
 
 	list_for_each_entry(q, &group->exec_queue_list, hw_engine_group_link) {
+		bool idle_skip_suspend;
+
 		if (!xe_vm_in_fault_mode(q->vm))
 			continue;
 
-		need_resume = true;
+		idle_skip_suspend = xe_exec_queue_idle_skip_suspend(q);
+		if (!idle_skip_suspend && has_deps)
+			return -EAGAIN;
+
+		xe_gt_stats_incr(q->gt, XE_GT_STATS_ID_HW_ENGINE_GROUP_SUSPEND_LR_QUEUE_COUNT, 1);
+		if (idle_skip_suspend)
+			xe_gt_stats_incr(q->gt,
+					 XE_GT_STATS_ID_HW_ENGINE_GROUP_SKIP_LR_QUEUE_COUNT, 1);
+
+		need_resume |= !idle_skip_suspend;
 		q->ops->suspend(q);
+		gt = q->gt;
 	}
 
 	list_for_each_entry(q, &group->exec_queue_list, hw_engine_group_link) {
@@ -238,17 +232,19 @@ static int xe_hw_engine_group_suspend_faulting_lr_jobs(struct xe_hw_engine_group
 
 		err = q->ops->suspend_wait(q);
 		if (err)
-			goto err_suspend;
+			return err;
+	}
+
+	if (gt) {
+		xe_gt_stats_incr(gt,
+				 XE_GT_STATS_ID_HW_ENGINE_GROUP_SUSPEND_LR_QUEUE_US,
+				 xe_gt_stats_ktime_us_delta(start));
 	}
 
 	if (need_resume)
 		xe_hw_engine_group_resume_faulting_lr_jobs(group);
 
 	return 0;
-
-err_suspend:
-	up_write(&group->mode_sem);
-	return err;
 }
 
 /**
@@ -265,7 +261,9 @@ static int xe_hw_engine_group_wait_for_dma_fence_jobs(struct xe_hw_engine_group 
 {
 	long timeout;
 	struct xe_exec_queue *q;
+	struct xe_gt *gt = NULL;
 	struct dma_fence *fence;
+	ktime_t start = xe_gt_stats_ktime_get();
 
 	lockdep_assert_held_write(&group->mode_sem);
 
@@ -273,18 +271,26 @@ static int xe_hw_engine_group_wait_for_dma_fence_jobs(struct xe_hw_engine_group 
 		if (xe_vm_in_lr_mode(q->vm))
 			continue;
 
+		xe_gt_stats_incr(q->gt, XE_GT_STATS_ID_HW_ENGINE_GROUP_WAIT_DMA_QUEUE_COUNT, 1);
 		fence = xe_exec_queue_last_fence_get_for_resume(q, q->vm);
 		timeout = dma_fence_wait(fence, false);
 		dma_fence_put(fence);
+		gt = q->gt;
 
 		if (timeout < 0)
 			return -ETIME;
 	}
 
+	if (gt) {
+		xe_gt_stats_incr(gt,
+				 XE_GT_STATS_ID_HW_ENGINE_GROUP_WAIT_DMA_QUEUE_US,
+				 xe_gt_stats_ktime_us_delta(start));
+	}
+
 	return 0;
 }
 
-static int switch_mode(struct xe_hw_engine_group *group)
+static int switch_mode(struct xe_hw_engine_group *group, bool has_deps)
 {
 	int err = 0;
 	enum xe_hw_engine_group_execution_mode new_mode;
@@ -294,7 +300,8 @@ static int switch_mode(struct xe_hw_engine_group *group)
 	switch (group->cur_mode) {
 	case EXEC_MODE_LR:
 		new_mode = EXEC_MODE_DMA_FENCE;
-		err = xe_hw_engine_group_suspend_faulting_lr_jobs(group);
+		err = xe_hw_engine_group_suspend_faulting_lr_jobs(group,
+								  has_deps);
 		break;
 	case EXEC_MODE_DMA_FENCE:
 		new_mode = EXEC_MODE_LR;
@@ -310,19 +317,36 @@ static int switch_mode(struct xe_hw_engine_group *group)
 	return 0;
 }
 
+static int wait_syncs(struct xe_sync_entry *syncs, int num_syncs)
+{
+	int err, i;
+
+	for (i = 0; i < num_syncs; ++i) {
+		err = xe_sync_entry_wait(syncs + i);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 /**
  * xe_hw_engine_group_get_mode() - Get the group to execute in the new mode
  * @group: The hw engine group
  * @new_mode: The new execution mode
  * @previous_mode: Pointer to the previous mode provided for use by caller
+ * @syncs: Syncs from exec IOCTL
+ * @num_syncs: Number of syncs from exec IOCTL
  *
  * Return: 0 if successful, -EINTR if locking failed.
  */
 int xe_hw_engine_group_get_mode(struct xe_hw_engine_group *group,
 				enum xe_hw_engine_group_execution_mode new_mode,
-				enum xe_hw_engine_group_execution_mode *previous_mode)
+				enum xe_hw_engine_group_execution_mode *previous_mode,
+				struct xe_sync_entry *syncs, int num_syncs)
 __acquires(&group->mode_sem)
 {
+	bool has_deps = !!num_syncs;
 	int err = down_read_interruptible(&group->mode_sem);
 
 	if (err)
@@ -332,15 +356,25 @@ __acquires(&group->mode_sem)
 
 	if (new_mode != group->cur_mode) {
 		up_read(&group->mode_sem);
+retry:
 		err = down_write_killable(&group->mode_sem);
 		if (err)
 			return err;
 
 		if (new_mode != group->cur_mode) {
-			err = switch_mode(group);
+			err = switch_mode(group, has_deps);
 			if (err) {
 				up_write(&group->mode_sem);
-				return err;
+
+				if (err != -EAGAIN)
+					return err;
+
+				err = wait_syncs(syncs, num_syncs);
+				if (err)
+					return err;
+
+				has_deps = false;
+				goto retry;
 			}
 		}
 		downgrade_write(&group->mode_sem);

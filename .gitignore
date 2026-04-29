@@ -41,6 +41,7 @@
 *.o.*
 *.patch
 *.pyc
+*.rlib
 *.rmeta
 *.rpm
 *.rsi
@@ -114,6 +115,7 @@ modules.order
 !.gitignore
 !.kunitconfig
 !.mailmap
+!.pylintrc
 !.rustfmt.toml
 
 #
@@ -175,7 +177,7 @@ x509.genkey
 *.kdev4
 
 # Clang's compilation database file
-/compile_commands.json
+compile_commands.json
 
 # Documentation toolchain
 sphinx_*/

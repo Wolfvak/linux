@@ -14,7 +14,7 @@
 #include <linux/ptrace.h>
 #include <asm/debug-monitors.h>
 
-#ifndef	__ASSEMBLY__
+#ifndef	__ASSEMBLER__
 
 static inline void arch_kgdb_breakpoint(void)
 {
@@ -24,7 +24,19 @@ static inline void arch_kgdb_breakpoint(void)
 extern void kgdb_handle_bus_error(void);
 extern int kgdb_fault_expected;
 
-#endif /* !__ASSEMBLY__ */
+int kgdb_brk_handler(struct pt_regs *regs, unsigned long esr);
+int kgdb_compiled_brk_handler(struct pt_regs *regs, unsigned long esr);
+#ifdef CONFIG_KGDB
+int kgdb_single_step_handler(struct pt_regs *regs, unsigned long esr);
+#else
+static inline int kgdb_single_step_handler(struct pt_regs *regs,
+	unsigned long esr)
+{
+	return DBG_HOOK_ERROR;
+}
+#endif
+
+#endif /* !__ASSEMBLER__ */
 
 /*
  * gdb remote procotol (well most versions of it) expects the following

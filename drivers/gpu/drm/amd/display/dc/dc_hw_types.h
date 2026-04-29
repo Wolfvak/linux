@@ -68,7 +68,7 @@ enum dc_plane_addr_type {
 
 struct dc_plane_address {
 	enum dc_plane_addr_type type;
-	bool tmz_surface;
+	uint8_t tmz_surface;
 	union {
 		struct{
 			PHYSICAL_ADDRESS_LOC addr;
@@ -491,6 +491,12 @@ struct dc_cursor_position {
 	 * for each plane.
 	 */
 	bool translate_by_source;
+
+	/**
+	 * @use_viewport_for_clip: Use viewport position for clip_x calculation
+	 * instead of clip_rect. Required to protect against clip being overwritten
+	 */
+	bool use_viewport_for_clip;
 };
 
 struct dc_cursor_mi_param {
@@ -1104,7 +1110,8 @@ enum mpcc_gamut_remap_mode_select {
 enum mpcc_gamut_remap_id {
 	MPCC_OGAM_GAMUT_REMAP,
 	MPCC_MCM_FIRST_GAMUT_REMAP,
-	MPCC_MCM_SECOND_GAMUT_REMAP
+	MPCC_MCM_SECOND_GAMUT_REMAP,
+	MPCC_RMCM_GAMUT_REMAP,
 };
 
 enum cursor_matrix_mode {

@@ -54,12 +54,12 @@ static void guest_msr(struct msr_data *msr)
 
 	if (msr->fault_expected)
 		__GUEST_ASSERT(vector == GP_VECTOR,
-			       "Expected #GP on %sMSR(0x%x), got vector '0x%x'",
-			       msr->write ? "WR" : "RD", msr->idx, vector);
+			       "Expected #GP on %sMSR(0x%x), got %s",
+			       msr->write ? "WR" : "RD", msr->idx, ex_str(vector));
 	else
 		__GUEST_ASSERT(!vector,
-			       "Expected success on %sMSR(0x%x), got vector '0x%x'",
-			       msr->write ? "WR" : "RD", msr->idx, vector);
+			       "Expected success on %sMSR(0x%x), got %s",
+			       msr->write ? "WR" : "RD", msr->idx, ex_str(vector));
 
 	if (vector || is_write_only_msr(msr->idx))
 		goto done;
@@ -94,7 +94,7 @@ static void guest_hcall(vm_vaddr_t pgs_gpa, struct hcall_data *hcall)
 
 	if (!(hcall->control & HV_HYPERCALL_FAST_BIT)) {
 		input = pgs_gpa;
-		output = pgs_gpa + 4096;
+		output = pgs_gpa + PAGE_SIZE;
 	} else {
 		input = output = 0;
 	}
@@ -102,12 +102,12 @@ static void guest_hcall(vm_vaddr_t pgs_gpa, struct hcall_data *hcall)
 	vector = __hyperv_hypercall(hcall->control, input, output, &res);
 	if (hcall->ud_expected) {
 		__GUEST_ASSERT(vector == UD_VECTOR,
-			       "Expected #UD for control '%lu', got vector '0x%x'",
-			       hcall->control, vector);
+			       "Expected #UD for control '%lu', got %s",
+			       hcall->control, ex_str(vector));
 	} else {
 		__GUEST_ASSERT(!vector,
-			       "Expected no exception for control '%lu', got vector '0x%x'",
-			       hcall->control, vector);
+			       "Expected no exception for control '%lu', got %s",
+			       hcall->control, ex_str(vector));
 		GUEST_ASSERT_EQ(res, hcall->expect);
 	}
 

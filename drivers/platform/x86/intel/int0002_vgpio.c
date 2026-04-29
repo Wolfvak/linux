@@ -193,7 +193,7 @@ static int int0002_probe(struct platform_device *pdev)
 	chip->parent = dev;
 	chip->owner = THIS_MODULE;
 	chip->get = int0002_gpio_get;
-	chip->set_rv = int0002_gpio_set;
+	chip->set = int0002_gpio_set;
 	chip->direction_input = int0002_gpio_get;
 	chip->direction_output = int0002_gpio_direction_output;
 	chip->base = -1;
@@ -206,8 +206,8 @@ static int int0002_probe(struct platform_device *pdev)
 	 * FIXME: augment this if we managed to pull handling of shared
 	 * IRQs into gpiolib.
 	 */
-	ret = devm_request_irq(dev, irq, int0002_irq,
-			       IRQF_ONESHOT | IRQF_SHARED, "INT0002", chip);
+	ret = devm_request_irq(dev, irq, int0002_irq, IRQF_SHARED, "INT0002",
+			       chip);
 	if (ret) {
 		dev_err(dev, "Error requesting IRQ %d: %d\n", irq, ret);
 		return ret;

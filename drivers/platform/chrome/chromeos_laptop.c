@@ -726,9 +726,9 @@ static int __init chromeos_laptop_setup_irq(struct i2c_peripheral *i2c_dev)
 		if (irq < 0)
 			return irq;
 
-		i2c_dev->irq_resource  = (struct resource)
-			DEFINE_RES_NAMED(irq, 1, NULL,
-					 IORESOURCE_IRQ | i2c_dev->irqflags);
+		i2c_dev->irq_resource = DEFINE_RES_IRQ(irq);
+		i2c_dev->irq_resource.flags |= i2c_dev->irqflags;
+
 		i2c_dev->board_info.resources = &i2c_dev->irq_resource;
 		i2c_dev->board_info.num_resources = 1;
 	}
@@ -782,8 +782,7 @@ err_out:
 	while (--i >= 0) {
 		i2c_dev = &i2c_peripherals[i];
 		info = &i2c_dev->board_info;
-		if (!IS_ERR_OR_NULL(info->fwnode))
-			fwnode_remove_software_node(info->fwnode);
+		fwnode_remove_software_node(info->fwnode);
 	}
 	kfree(i2c_peripherals);
 	return error;
@@ -808,9 +807,7 @@ chromeos_laptop_prepare_acpi_peripherals(struct chromeos_laptop *cros_laptop,
 	if (!n_peripherals)
 		return 0;
 
-	acpi_peripherals = kcalloc(n_peripherals,
-				   sizeof(*src->acpi_peripherals),
-				   GFP_KERNEL);
+	acpi_peripherals = kzalloc_objs(*src->acpi_peripherals, n_peripherals);
 	if (!acpi_peripherals)
 		return -ENOMEM;
 
@@ -882,7 +879,7 @@ chromeos_laptop_prepare(const struct chromeos_laptop *src)
 	struct chromeos_laptop *cros_laptop;
 	int error;
 
-	cros_laptop = kzalloc(sizeof(*cros_laptop), GFP_KERNEL);
+	cros_laptop = kzalloc_obj(*cros_laptop);
 	if (!cros_laptop)
 		return ERR_PTR(-ENOMEM);
 

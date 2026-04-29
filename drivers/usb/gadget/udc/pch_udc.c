@@ -988,7 +988,7 @@ static void pch_udc_ep_enable(struct pch_udc_ep *ep,
 	pch_udc_ep_fifo_flush(ep, ep->in);
 	/* Configure the endpoint */
 	val = ep->num << UDC_CSR_NE_NUM_SHIFT | ep->in << UDC_CSR_NE_DIR_SHIFT |
-	      ((desc->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK) <<
+	      (usb_endpoint_type(desc) <<
 		UDC_CSR_NE_TYPE_SHIFT) |
 	      (cfg->cur_cfg << UDC_CSR_NE_CFG_SHIFT) |
 	      (cfg->cur_intf << UDC_CSR_NE_INTF_SHIFT) |
@@ -1717,7 +1717,7 @@ static struct usb_request *pch_udc_alloc_request(struct usb_ep *usbep,
 	if (!usbep)
 		return NULL;
 	ep = container_of(usbep, struct pch_udc_ep, ep);
-	req = kzalloc(sizeof *req, gfp);
+	req = kzalloc_obj(*req, gfp);
 	if (!req)
 		return NULL;
 	req->req.dma = DMA_ADDR_INVALID;

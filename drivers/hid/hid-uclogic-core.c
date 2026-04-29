@@ -62,6 +62,30 @@ static const __u8 *uclogic_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 	return rdesc;
 }
 
+/* Buttons considered valid tablet pad inputs. */
+static const unsigned int uclogic_extra_input_mapping[] = {
+	BTN_0,
+	BTN_1,
+	BTN_2,
+	BTN_3,
+	BTN_4,
+	BTN_5,
+	BTN_6,
+	BTN_7,
+	BTN_8,
+	BTN_RIGHT,
+	BTN_MIDDLE,
+	BTN_SIDE,
+	BTN_EXTRA,
+	BTN_FORWARD,
+	BTN_BACK,
+	BTN_B,
+	BTN_A,
+	BTN_BASE,
+	BTN_BASE2,
+	BTN_X
+};
+
 static int uclogic_input_mapping(struct hid_device *hdev,
 				 struct hid_input *hi,
 				 struct hid_field *field,
@@ -72,9 +96,27 @@ static int uclogic_input_mapping(struct hid_device *hdev,
 	struct uclogic_drvdata *drvdata = hid_get_drvdata(hdev);
 	struct uclogic_params *params = &drvdata->params;
 
-	/* Discard invalid pen usages */
-	if (params->pen.usage_invalid && (field->application == HID_DG_PEN))
-		return -1;
+	if (field->application == HID_GD_KEYPAD) {
+		/*
+		 * Remap input buttons to sensible ones that are not invalid.
+		 * This only affects previous behavior for devices with more than ten or so buttons.
+		 */
+		const int key = (usage->hid & HID_USAGE) - 1;
+
+		if (key < ARRAY_SIZE(uclogic_extra_input_mapping)) {
+			hid_map_usage(hi,
+				      usage,
+				      bit,
+				      max,
+				      EV_KEY,
+				      uclogic_extra_input_mapping[key]);
+			return 1;
+		}
+	} else if (field->application == HID_DG_PEN) {
+		/* Discard invalid pen usages */
+		if (params->pen.usage_invalid)
+			return -1;
+	}
 
 	/* Let hid-core decide what to do */
 	return 0;
@@ -226,7 +268,6 @@ failure:
 	return rc;
 }
 
-#ifdef CONFIG_PM
 static int uclogic_resume(struct hid_device *hdev)
 {
 	int rc;
@@ -241,7 +282,6 @@ static int uclogic_resume(struct hid_device *hdev)
 
 	return rc;
 }
-#endif
 
 /**
  * uclogic_exec_event_hook - if the received event is hooked schedules the
@@ -319,6 +359,23 @@ static int uclogic_raw_event_pen(struct uclogic_drvdata *drvdata,
 		/* Place pressure bytes */
 		data[8] = pressure_low_byte;
 		data[9] = pressure_high_byte;
+	}
+	if (size == 12 && pen->fragmented_hires2) {
+		// 00 00 when on the left side, 01 00 in the right
+		// we move these to the end of the x coord (u16) to create a correct x coord (u32)
+		u8 lsb_low_byte = data[10];
+		u8 lsb_high_byte = data[11];
+
+		// shift everything right by 2 bytes, to make space for the moved lsb
+		data[11] = data[9];
+		data[10] = data[8];
+		data[9] = data[7];
+		data[8] = data[6];
+		data[7] = data[5];
+		data[6] = data[4];
+
+		data[4] = lsb_low_byte;
+		data[5] = lsb_high_byte;
 	}
 	/* If we need to emulate in-range detection */
 	if (pen->inrange == UCLOGIC_PARAMS_PEN_INRANGE_NONE) {
@@ -407,8 +464,22 @@ static int uclogic_raw_event_frame(
 
 	/* If need to, and can, transform the bitmap dial reports */
 	if (frame->bitmap_dial_byte > 0 && frame->bitmap_dial_byte < size) {
-		if (data[frame->bitmap_dial_byte] == 2)
+		switch (data[frame->bitmap_dial_byte]) {
+		case 2:
 			data[frame->bitmap_dial_byte] = -1;
+			break;
+
+		/* Everything below here is for tablets that shove multiple dials into 1 byte */
+		case 16:
+			data[frame->bitmap_dial_byte] = 0;
+			data[frame->bitmap_second_dial_destination_byte] = 1;
+			break;
+
+		case 32:
+			data[frame->bitmap_dial_byte] = 0;
+			data[frame->bitmap_second_dial_destination_byte] = -1;
+			break;
+		}
 	}
 
 	return 0;
@@ -546,6 +617,10 @@ static const struct hid_device_id uclogic_devices[] = {
 		.driver_data = UCLOGIC_MOUSE_FRAME_QUIRK | UCLOGIC_BATTERY_QUIRK },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_STAR06) },
+	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
+				USB_DEVICE_ID_UGEE_XPPEN_TABLET_22R_PRO) },
+	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
+				USB_DEVICE_ID_UGEE_XPPEN_TABLET_24_PRO) },
 	{ }
 };
 MODULE_DEVICE_TABLE(hid, uclogic_devices);
@@ -559,10 +634,8 @@ static struct hid_driver uclogic_driver = {
 	.raw_event = uclogic_raw_event,
 	.input_mapping = uclogic_input_mapping,
 	.input_configured = uclogic_input_configured,
-#ifdef CONFIG_PM
-	.resume	          = uclogic_resume,
-	.reset_resume     = uclogic_resume,
-#endif
+	.resume	          = pm_ptr(uclogic_resume),
+	.reset_resume     = pm_ptr(uclogic_resume),
 };
 module_hid_driver(uclogic_driver);
 

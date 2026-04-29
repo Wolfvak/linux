@@ -91,6 +91,8 @@ static int sdw_slave_reg_show(struct seq_file *s_file, void *data)
 		ret += sdw_sprintf(slave, buf, ret, i);
 	for (i = SDW_SCP_DEVID_0; i <= SDW_SCP_DEVID_5; i++)
 		ret += sdw_sprintf(slave, buf, ret, i);
+	for (i = SDW_SCP_SDCA_INT1; i <= SDW_SCP_SDCA_INTMASK4; i++)
+		ret += sdw_sprintf(slave, buf, ret, i);
 	for (i = SDW_SCP_FRAMECTRL_B0; i <= SDW_SCP_BUSCLOCK_SCALE_B0; i++)
 		ret += sdw_sprintf(slave, buf, ret, i);
 	for (i = SDW_SCP_FRAMECTRL_B1; i <= SDW_SCP_BUSCLOCK_SCALE_B1; i++)
@@ -220,15 +222,23 @@ DEFINE_DEBUGFS_ATTRIBUTE(set_num_bytes_fops, NULL,
 static int do_bpt_sequence(struct sdw_slave *slave, bool write, u8 *buffer)
 {
 	struct sdw_bpt_msg msg = {0};
+	struct sdw_bpt_section *sec;
 
-	msg.addr = start_addr;
-	msg.len = num_bytes;
+	sec = kzalloc_objs(*sec, 1);
+	if (!sec)
+		return -ENOMEM;
+	msg.sections = 1;
+
+	sec[0].addr = start_addr;
+	sec[0].len = num_bytes;
+
+	msg.sec = sec;
 	msg.dev_num = slave->dev_num;
 	if (write)
 		msg.flags = SDW_MSG_FLAG_WRITE;
 	else
 		msg.flags = SDW_MSG_FLAG_READ;
-	msg.buf = buffer;
+	sec[0].buf = buffer;
 
 	return sdw_bpt_send_sync(slave->bus, slave, &msg);
 }
@@ -291,15 +301,15 @@ static int cmd_go(void *data, u64 value)
 
 	finish_t = ktime_get();
 
+	dev_dbg(&slave->dev, "command completed, num_byte %zu status %d, time %lld ms\n",
+		num_bytes, ret, div_u64(finish_t - start_t, NSEC_PER_MSEC));
+
 out:
 	if (fw)
 		release_firmware(fw);
 
 	pm_runtime_mark_last_busy(&slave->dev);
 	pm_runtime_put(&slave->dev);
-
-	dev_dbg(&slave->dev, "command completed, num_byte %zu status %d, time %lld ms\n",
-		num_bytes, ret, div_u64(finish_t - start_t, NSEC_PER_MSEC));
 
 	return ret;
 }

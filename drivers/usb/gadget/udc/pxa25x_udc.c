@@ -508,7 +508,7 @@ pxa25x_ep_alloc_request (struct usb_ep *_ep, gfp_t gfp_flags)
 {
 	struct pxa25x_request *req;
 
-	req = kzalloc(sizeof(*req), gfp_flags);
+	req = kzalloc_obj(*req, gfp_flags);
 	if (!req)
 		return NULL;
 
@@ -2348,15 +2348,14 @@ static int pxa25x_udc_probe(struct platform_device *pdev)
 	dev->transceiver = devm_usb_get_phy(&pdev->dev, USB_PHY_TYPE_USB2);
 
 	if (gpio_is_valid(dev->mach->gpio_pullup)) {
-		retval = devm_gpio_request(&pdev->dev, dev->mach->gpio_pullup,
-					   "pca25x_udc GPIO PULLUP");
+		retval = devm_gpio_request_one(&pdev->dev, dev->mach->gpio_pullup,
+					       GPIOF_OUT_INIT_LOW, "pca25x_udc GPIO PULLUP");
 		if (retval) {
 			dev_dbg(&pdev->dev,
 				"can't get pullup gpio %d, err: %d\n",
 				dev->mach->gpio_pullup, retval);
 			goto err;
 		}
-		gpio_direction_output(dev->mach->gpio_pullup, 0);
 	}
 
 	timer_setup(&dev->timer, udc_watchdog, 0);

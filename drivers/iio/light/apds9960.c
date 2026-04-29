@@ -25,7 +25,6 @@
 #include <linux/iio/kfifo_buf.h>
 #include <linux/iio/sysfs.h>
 
-#define APDS9960_REGMAP_NAME	"apds9960_regmap"
 #define APDS9960_DRV_NAME	"apds9960"
 
 #define APDS9960_REG_RAM_START	0x00
@@ -221,7 +220,7 @@ static const struct regmap_access_table apds9960_writeable_table = {
 };
 
 static const struct regmap_config apds9960_regmap_config = {
-	.name = APDS9960_REGMAP_NAME,
+	.name = "apds9960_regmap",
 	.reg_bits = 8,
 	.val_bits = 8,
 	.use_single_read = true,
@@ -235,7 +234,7 @@ static const struct regmap_config apds9960_regmap_config = {
 	.reg_defaults = apds9960_reg_defaults,
 	.num_reg_defaults = ARRAY_SIZE(apds9960_reg_defaults),
 	.max_register = APDS9960_REG_GFIFO_DIR(RIGHT),
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 };
 
 static const struct iio_event_spec apds9960_pxs_event_spec[] = {
@@ -496,7 +495,6 @@ static int apds9960_set_power_state(struct apds9960_data *data, bool on)
 			usleep_range(data->als_adc_int_us,
 				     APDS9960_MAX_INT_TIME_IN_US);
 	} else {
-		pm_runtime_mark_last_busy(dev);
 		ret = pm_runtime_put_autosuspend(dev);
 	}
 

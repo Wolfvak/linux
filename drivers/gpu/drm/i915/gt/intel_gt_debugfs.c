@@ -5,6 +5,8 @@
 
 #include <linux/debugfs.h>
 
+#include <drm/drm_print.h>
+
 #include "i915_drv.h"
 #include "intel_gt.h"
 #include "intel_gt_debugfs.h"
@@ -73,8 +75,8 @@ DEFINE_INTEL_GT_DEBUGFS_ATTRIBUTE(steering);
 static void gt_debugfs_register(struct intel_gt *gt, struct dentry *root)
 {
 	static const struct intel_gt_debugfs_file files[] = {
-		{ "reset", &reset_fops, NULL },
-		{ "steering", &steering_fops },
+		{ .name = "reset", .fops = &reset_fops },
+		{ .name = "steering", .fops = &steering_fops },
 	};
 
 	intel_gt_debugfs_register_files(root, files, ARRAY_SIZE(files), gt);
@@ -82,14 +84,15 @@ static void gt_debugfs_register(struct intel_gt *gt, struct dentry *root)
 
 void intel_gt_debugfs_register(struct intel_gt *gt)
 {
+	struct dentry *debugfs_root = gt->i915->drm.debugfs_root;
 	struct dentry *root;
 	char gtname[4];
 
-	if (!gt->i915->drm.primary->debugfs_root)
+	if (!debugfs_root)
 		return;
 
 	snprintf(gtname, sizeof(gtname), "gt%u", gt->info.id);
-	root = debugfs_create_dir(gtname, gt->i915->drm.primary->debugfs_root);
+	root = debugfs_create_dir(gtname, debugfs_root);
 	if (IS_ERR(root))
 		return;
 

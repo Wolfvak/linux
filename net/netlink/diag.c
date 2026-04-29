@@ -107,7 +107,7 @@ static int __netlink_diag_dump(struct sk_buff *skb, struct netlink_callback *cb,
 	num--;
 
 	if (!hti) {
-		hti = kmalloc(sizeof(*hti), GFP_KERNEL);
+		hti = kmalloc_obj(*hti);
 		if (!hti)
 			return -ENOMEM;
 
@@ -168,7 +168,7 @@ mc_list:
 				 NETLINK_CB(cb->skb).portid,
 				 cb->nlh->nlmsg_seq,
 				 NLM_F_MULTI,
-				 __sock_i_ino(sk)) < 0) {
+				 sock_i_ino(sk)) < 0) {
 			ret = 1;
 			break;
 		}

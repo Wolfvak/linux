@@ -8,6 +8,7 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_gem_dma_helper.h>
+#include <drm/drm_print.h>
 #include <drm/drm_vblank.h>
 
 #include "tidss_crtc.h"
@@ -91,10 +92,8 @@ static int tidss_crtc_atomic_check(struct drm_crtc *crtc,
 	struct dispc_device *dispc = tidss->dispc;
 	struct tidss_crtc *tcrtc = to_tidss_crtc(crtc);
 	u32 hw_videoport = tcrtc->hw_videoport;
-	const struct drm_display_mode *mode;
+	struct drm_display_mode *mode;
 	enum drm_mode_status ok;
-
-	dev_dbg(ddev->dev, "%s\n", __func__);
 
 	if (!crtc_state->enable)
 		return 0;
@@ -103,10 +102,13 @@ static int tidss_crtc_atomic_check(struct drm_crtc *crtc,
 
 	ok = dispc_vp_mode_valid(dispc, hw_videoport, mode);
 	if (ok != MODE_OK) {
-		dev_dbg(ddev->dev, "%s: bad mode: %ux%u pclk %u kHz\n",
+		drm_dbg(ddev, "%s: bad mode: %ux%u pclk %u kHz\n",
 			__func__, mode->hdisplay, mode->vdisplay, mode->clock);
 		return -EINVAL;
 	}
+
+	if (drm_atomic_crtc_needs_modeset(crtc_state))
+		drm_mode_set_crtcinfo(mode, 0);
 
 	return dispc_vp_bus_check(dispc, hw_videoport, crtc_state);
 }
@@ -130,7 +132,7 @@ static void tidss_crtc_position_planes(struct tidss_device *tidss,
 	    !to_tidss_crtc_state(cstate)->plane_pos_changed)
 		return;
 
-	for (layer = 0; layer < tidss->feat->num_planes; layer++) {
+	for (layer = 0; layer < tidss->feat->num_vids ; layer++) {
 		struct drm_plane_state *pstate;
 		struct drm_plane *plane;
 		bool layer_active = false;
@@ -169,7 +171,7 @@ static void tidss_crtc_atomic_flush(struct drm_crtc *crtc,
 	struct tidss_device *tidss = to_tidss(ddev);
 	unsigned long flags;
 
-	dev_dbg(ddev->dev, "%s: %s is %sactive, %s modeset, event %p\n",
+	drm_dbg(ddev, "%s: %s is %sactive, %s modeset, event %p\n",
 		__func__, crtc->name, crtc->state->active ? "" : "not ",
 		drm_atomic_crtc_needs_modeset(crtc->state) ? "needs" : "doesn't need",
 		crtc->state->event);
@@ -225,7 +227,7 @@ static void tidss_crtc_atomic_enable(struct drm_crtc *crtc,
 	tidss_runtime_get(tidss);
 
 	r = dispc_vp_set_clk_rate(tidss->dispc, tcrtc->hw_videoport,
-				  mode->clock * 1000);
+				  mode->crtc_clock * 1000);
 	if (r != 0)
 		return;
 
@@ -241,11 +243,15 @@ static void tidss_crtc_atomic_enable(struct drm_crtc *crtc,
 
 	dispc_vp_prepare(tidss->dispc, tcrtc->hw_videoport, crtc->state);
 
-	dispc_vp_enable(tidss->dispc, tcrtc->hw_videoport, crtc->state);
-
 	spin_lock_irqsave(&ddev->event_lock, flags);
 
+	dispc_vp_enable(tidss->dispc, tcrtc->hw_videoport);
+
 	if (crtc->state->event) {
+		struct drm_vblank_crtc *vblank = drm_crtc_vblank_crtc(crtc);
+
+		vblank->time = ktime_get();
+
 		drm_crtc_send_vblank_event(crtc, crtc->state->event);
 		crtc->state->event = NULL;
 	}
@@ -271,7 +277,7 @@ static void tidss_crtc_atomic_disable(struct drm_crtc *crtc,
 	 * another videoport, the DSS will report sync lost issues. Disable all
 	 * the layers here as a work-around.
 	 */
-	for (u32 layer = 0; layer < tidss->feat->num_planes; layer++)
+	for (u32 layer = 0; layer < tidss->feat->num_vids; layer++)
 		dispc_ovr_enable_layer(tidss->dispc, tcrtc->hw_videoport, layer,
 				       false);
 
@@ -325,8 +331,6 @@ static int tidss_crtc_enable_vblank(struct drm_crtc *crtc)
 	struct drm_device *ddev = crtc->dev;
 	struct tidss_device *tidss = to_tidss(ddev);
 
-	dev_dbg(ddev->dev, "%s\n", __func__);
-
 	tidss_runtime_get(tidss);
 
 	tidss_irq_enable_vblank(crtc);
@@ -339,29 +343,34 @@ static void tidss_crtc_disable_vblank(struct drm_crtc *crtc)
 	struct drm_device *ddev = crtc->dev;
 	struct tidss_device *tidss = to_tidss(ddev);
 
-	dev_dbg(ddev->dev, "%s\n", __func__);
-
 	tidss_irq_disable_vblank(crtc);
 
 	tidss_runtime_put(tidss);
 }
 
+static void tidss_crtc_destroy_state(struct drm_crtc *crtc,
+				     struct drm_crtc_state *state)
+{
+	struct tidss_crtc_state *tstate = to_tidss_crtc_state(state);
+
+	__drm_atomic_helper_crtc_destroy_state(&tstate->base);
+	kfree(tstate);
+}
+
 static void tidss_crtc_reset(struct drm_crtc *crtc)
 {
-	struct tidss_crtc_state *tcrtc;
+	struct tidss_crtc_state *tstate;
 
 	if (crtc->state)
-		__drm_atomic_helper_crtc_destroy_state(crtc->state);
+		tidss_crtc_destroy_state(crtc, crtc->state);
 
-	kfree(crtc->state);
-
-	tcrtc = kzalloc(sizeof(*tcrtc), GFP_KERNEL);
-	if (!tcrtc) {
+	tstate = kzalloc_obj(*tstate);
+	if (!tstate) {
 		crtc->state = NULL;
 		return;
 	}
 
-	__drm_atomic_helper_crtc_reset(crtc, &tcrtc->base);
+	__drm_atomic_helper_crtc_reset(crtc, &tstate->base);
 }
 
 static struct drm_crtc_state *tidss_crtc_duplicate_state(struct drm_crtc *crtc)
@@ -373,7 +382,7 @@ static struct drm_crtc_state *tidss_crtc_duplicate_state(struct drm_crtc *crtc)
 
 	current_state = to_tidss_crtc_state(crtc->state);
 
-	state = kmalloc(sizeof(*state), GFP_KERNEL);
+	state = kmalloc_obj(*state);
 	if (!state)
 		return NULL;
 
@@ -401,7 +410,7 @@ static const struct drm_crtc_funcs tidss_crtc_funcs = {
 	.set_config = drm_atomic_helper_set_config,
 	.page_flip = drm_atomic_helper_page_flip,
 	.atomic_duplicate_state = tidss_crtc_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
+	.atomic_destroy_state = tidss_crtc_destroy_state,
 	.enable_vblank = tidss_crtc_enable_vblank,
 	.disable_vblank = tidss_crtc_disable_vblank,
 };
@@ -416,7 +425,7 @@ struct tidss_crtc *tidss_crtc_create(struct tidss_device *tidss,
 	bool has_ctm = tidss->feat->vp_feat.color.has_ctm;
 	int ret;
 
-	tcrtc = kzalloc(sizeof(*tcrtc), GFP_KERNEL);
+	tcrtc = kzalloc_obj(*tcrtc);
 	if (!tcrtc)
 		return ERR_PTR(-ENOMEM);
 

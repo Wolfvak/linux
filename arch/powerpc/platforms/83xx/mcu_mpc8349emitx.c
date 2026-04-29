@@ -123,10 +123,12 @@ static int mcu_gpiochip_add(struct mcu *mcu)
 
 	gc->owner = THIS_MODULE;
 	gc->label = kasprintf(GFP_KERNEL, "%pfw", dev_fwnode(dev));
+	if (!gc->label)
+		return -ENOMEM;
 	gc->can_sleep = 1;
 	gc->ngpio = MCU_NUM_GPIO;
 	gc->base = -1;
-	gc->set_rv = mcu_gpio_set;
+	gc->set = mcu_gpio_set;
 	gc->direction_output = mcu_gpio_dir_out;
 	gc->parent = dev;
 
@@ -144,7 +146,7 @@ static int mcu_probe(struct i2c_client *client)
 	struct mcu *mcu;
 	int ret;
 
-	mcu = kzalloc(sizeof(*mcu), GFP_KERNEL);
+	mcu = kzalloc_obj(*mcu);
 	if (!mcu)
 		return -ENOMEM;
 

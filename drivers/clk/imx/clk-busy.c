@@ -46,12 +46,12 @@ static unsigned long clk_busy_divider_recalc_rate(struct clk_hw *hw,
 	return busy->div_ops->recalc_rate(&busy->div.hw, parent_rate);
 }
 
-static long clk_busy_divider_round_rate(struct clk_hw *hw, unsigned long rate,
-					unsigned long *prate)
+static int clk_busy_divider_determine_rate(struct clk_hw *hw,
+					   struct clk_rate_request *req)
 {
 	struct clk_busy_divider *busy = to_clk_busy_divider(hw);
 
-	return busy->div_ops->round_rate(&busy->div.hw, rate, prate);
+	return busy->div_ops->determine_rate(&busy->div.hw, req);
 }
 
 static int clk_busy_divider_set_rate(struct clk_hw *hw, unsigned long rate,
@@ -69,7 +69,7 @@ static int clk_busy_divider_set_rate(struct clk_hw *hw, unsigned long rate,
 
 static const struct clk_ops clk_busy_divider_ops = {
 	.recalc_rate = clk_busy_divider_recalc_rate,
-	.round_rate = clk_busy_divider_round_rate,
+	.determine_rate = clk_busy_divider_determine_rate,
 	.set_rate = clk_busy_divider_set_rate,
 };
 
@@ -82,7 +82,7 @@ struct clk_hw *imx_clk_hw_busy_divider(const char *name, const char *parent_name
 	struct clk_init_data init;
 	int ret;
 
-	busy = kzalloc(sizeof(*busy), GFP_KERNEL);
+	busy = kzalloc_obj(*busy);
 	if (!busy)
 		return ERR_PTR(-ENOMEM);
 
@@ -162,7 +162,7 @@ struct clk_hw *imx_clk_hw_busy_mux(const char *name, void __iomem *reg, u8 shift
 	struct clk_init_data init;
 	int ret;
 
-	busy = kzalloc(sizeof(*busy), GFP_KERNEL);
+	busy = kzalloc_obj(*busy);
 	if (!busy)
 		return ERR_PTR(-ENOMEM);
 

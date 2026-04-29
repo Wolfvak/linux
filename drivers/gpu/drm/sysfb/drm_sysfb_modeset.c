@@ -11,7 +11,6 @@
 #include <drm/drm_edid.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
-#include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_panic.h>
 #include <drm/drm_print.h>
@@ -47,6 +46,242 @@ EXPORT_SYMBOL(drm_sysfb_mode);
  * Plane
  */
 
+static u32 to_nonalpha_fourcc(u32 fourcc)
+{
+	/* only handle formats with depth != 0 and alpha channel */
+	switch (fourcc) {
+	case DRM_FORMAT_ARGB1555:
+		return DRM_FORMAT_XRGB1555;
+	case DRM_FORMAT_ABGR1555:
+		return DRM_FORMAT_XBGR1555;
+	case DRM_FORMAT_RGBA5551:
+		return DRM_FORMAT_RGBX5551;
+	case DRM_FORMAT_BGRA5551:
+		return DRM_FORMAT_BGRX5551;
+	case DRM_FORMAT_ARGB8888:
+		return DRM_FORMAT_XRGB8888;
+	case DRM_FORMAT_ABGR8888:
+		return DRM_FORMAT_XBGR8888;
+	case DRM_FORMAT_RGBA8888:
+		return DRM_FORMAT_RGBX8888;
+	case DRM_FORMAT_BGRA8888:
+		return DRM_FORMAT_BGRX8888;
+	case DRM_FORMAT_ARGB2101010:
+		return DRM_FORMAT_XRGB2101010;
+	case DRM_FORMAT_ABGR2101010:
+		return DRM_FORMAT_XBGR2101010;
+	case DRM_FORMAT_RGBA1010102:
+		return DRM_FORMAT_RGBX1010102;
+	case DRM_FORMAT_BGRA1010102:
+		return DRM_FORMAT_BGRX1010102;
+	}
+
+	return fourcc;
+}
+
+static bool is_listed_fourcc(const u32 *fourccs, size_t nfourccs, u32 fourcc)
+{
+	const u32 *fourccs_end = fourccs + nfourccs;
+
+	while (fourccs < fourccs_end) {
+		if (*fourccs == fourcc)
+			return true;
+		++fourccs;
+	}
+	return false;
+}
+
+/**
+ * drm_sysfb_build_fourcc_list - Filters a list of supported color formats against
+ *                               the device's native formats
+ * @dev: DRM device
+ * @native_fourccs: 4CC codes of natively supported color formats
+ * @native_nfourccs: The number of entries in @native_fourccs
+ * @fourccs_out: Returns 4CC codes of supported color formats
+ * @nfourccs_out: The number of available entries in @fourccs_out
+ *
+ * This function create a list of supported color format from natively
+ * supported formats and additional emulated formats.
+ * At a minimum, most userspace programs expect at least support for
+ * XRGB8888 on the primary plane. Sysfb devices that have to emulate
+ * the format should use drm_sysfb_build_fourcc_list() to create a list
+ * of supported color formats. The returned list can be handed over to
+ * drm_universal_plane_init() et al. Native formats will go before
+ * emulated formats. Native formats with alpha channel will be replaced
+ * by equal formats without alpha channel, as primary planes usually
+ * don't support alpha. Other heuristics might be applied to optimize
+ * the sorting order. Formats near the beginning of the list are usually
+ * preferred over formats near the end of the list.
+ *
+ * Returns:
+ * The number of color-formats 4CC codes returned in @fourccs_out.
+ */
+size_t drm_sysfb_build_fourcc_list(struct drm_device *dev,
+				   const u32 *native_fourccs, size_t native_nfourccs,
+				   u32 *fourccs_out, size_t nfourccs_out)
+{
+	/*
+	 * XRGB8888 is the default fallback format for most of userspace
+	 * and it's currently the only format that should be emulated for
+	 * the primary plane. Only if there's ever another default fallback,
+	 * it should be added here.
+	 */
+	static const u32 extra_fourccs[] = {
+		DRM_FORMAT_XRGB8888,
+	};
+	static const size_t extra_nfourccs = ARRAY_SIZE(extra_fourccs);
+
+	u32 *fourccs = fourccs_out;
+	const u32 *fourccs_end = fourccs_out + nfourccs_out;
+	size_t i;
+
+	/*
+	 * The device's native formats go first.
+	 */
+
+	for (i = 0; i < native_nfourccs; ++i) {
+		/*
+		 * Several DTs, boot loaders and firmware report native
+		 * alpha formats that are non-alpha formats instead. So
+		 * replace alpha formats by non-alpha formats.
+		 */
+		u32 fourcc = to_nonalpha_fourcc(native_fourccs[i]);
+
+		if (is_listed_fourcc(fourccs_out, fourccs - fourccs_out, fourcc)) {
+			continue; /* skip duplicate entries */
+		} else if (fourccs == fourccs_end) {
+			drm_warn(dev, "Ignoring native format %p4cc\n", &fourcc);
+			continue; /* end of available output buffer */
+		}
+
+		drm_dbg_kms(dev, "adding native format %p4cc\n", &fourcc);
+
+		*fourccs = fourcc;
+		++fourccs;
+	}
+
+	/*
+	 * The extra formats, emulated by the driver, go second.
+	 */
+
+	for (i = 0; (i < extra_nfourccs) && (fourccs < fourccs_end); ++i) {
+		u32 fourcc = extra_fourccs[i];
+
+		if (is_listed_fourcc(fourccs_out, fourccs - fourccs_out, fourcc)) {
+			continue; /* skip duplicate and native entries */
+		} else if (fourccs == fourccs_end) {
+			drm_warn(dev, "Ignoring emulated format %p4cc\n", &fourcc);
+			continue; /* end of available output buffer */
+		}
+
+		drm_dbg_kms(dev, "adding emulated format %p4cc\n", &fourcc);
+
+		*fourccs = fourcc;
+		++fourccs;
+	}
+
+	return fourccs - fourccs_out;
+}
+EXPORT_SYMBOL(drm_sysfb_build_fourcc_list);
+
+static void drm_sysfb_plane_state_destroy(struct drm_sysfb_plane_state *sysfb_plane_state)
+{
+	__drm_gem_destroy_shadow_plane_state(&sysfb_plane_state->base);
+
+	kfree(sysfb_plane_state);
+}
+
+static void drm_sysfb_memcpy(struct iosys_map *dst, const unsigned int *dst_pitch,
+			     const struct iosys_map *src, const struct drm_framebuffer *fb,
+			     const struct drm_rect *clip, struct drm_format_conv_state *state)
+{
+	drm_fb_memcpy(dst, dst_pitch, src, fb, clip);
+}
+
+static drm_sysfb_blit_func drm_sysfb_get_blit_func(u32 dst_format, u32 src_format)
+{
+	if (src_format == dst_format) {
+		return drm_sysfb_memcpy;
+	} else if (src_format == DRM_FORMAT_XRGB8888) {
+		switch (dst_format) {
+		case DRM_FORMAT_RGB565:
+			return drm_fb_xrgb8888_to_rgb565;
+		case DRM_FORMAT_RGB565 | DRM_FORMAT_BIG_ENDIAN:
+			return drm_fb_xrgb8888_to_rgb565be;
+		case DRM_FORMAT_XRGB1555:
+			return drm_fb_xrgb8888_to_xrgb1555;
+		case DRM_FORMAT_ARGB1555:
+			return drm_fb_xrgb8888_to_argb1555;
+		case DRM_FORMAT_RGBA5551:
+			return drm_fb_xrgb8888_to_rgba5551;
+		case DRM_FORMAT_RGB888:
+			return drm_fb_xrgb8888_to_rgb888;
+		case DRM_FORMAT_BGR888:
+			return drm_fb_xrgb8888_to_bgr888;
+		case DRM_FORMAT_ARGB8888:
+			return drm_fb_xrgb8888_to_argb8888;
+		case DRM_FORMAT_XBGR8888:
+			return drm_fb_xrgb8888_to_xbgr8888;
+		case DRM_FORMAT_ABGR8888:
+			return drm_fb_xrgb8888_to_abgr8888;
+		case DRM_FORMAT_XRGB2101010:
+			return drm_fb_xrgb8888_to_xrgb2101010;
+		case DRM_FORMAT_ARGB2101010:
+			return drm_fb_xrgb8888_to_argb2101010;
+		case DRM_FORMAT_BGRX8888:
+			return drm_fb_xrgb8888_to_bgrx8888;
+		case DRM_FORMAT_RGB332:
+			return drm_fb_xrgb8888_to_rgb332;
+		}
+	}
+
+	return NULL;
+}
+
+int drm_sysfb_plane_helper_begin_fb_access(struct drm_plane *plane,
+					   struct drm_plane_state *plane_state)
+{
+	struct drm_device *dev = plane->dev;
+	struct drm_sysfb_plane_state *sysfb_plane_state = to_drm_sysfb_plane_state(plane_state);
+	struct drm_framebuffer *fb = plane_state->fb;
+	struct drm_crtc_state *crtc_state;
+	struct drm_sysfb_crtc_state *sysfb_crtc_state;
+	drm_sysfb_blit_func blit_to_crtc;
+	int ret;
+
+	ret = drm_gem_begin_shadow_fb_access(plane, plane_state);
+	if (ret)
+		return ret;
+
+	if (!fb)
+		return 0;
+
+	ret = -EINVAL;
+
+	crtc_state = drm_atomic_get_new_crtc_state(plane_state->state, plane_state->crtc);
+	if (drm_WARN_ON_ONCE(dev, !crtc_state))
+		goto err_drm_gem_end_shadow_fb_access;
+	sysfb_crtc_state = to_drm_sysfb_crtc_state(crtc_state);
+
+	if (drm_WARN_ON_ONCE(dev, !sysfb_crtc_state->format))
+		goto err_drm_gem_end_shadow_fb_access;
+	blit_to_crtc = drm_sysfb_get_blit_func(sysfb_crtc_state->format->format,
+					       fb->format->format);
+	if (!blit_to_crtc) {
+		drm_warn_once(dev, "No blit helper from %p4cc to %p4cc found.\n",
+			      &fb->format->format, &sysfb_crtc_state->format->format);
+		goto err_drm_gem_end_shadow_fb_access;
+	}
+	sysfb_plane_state->blit_to_crtc = blit_to_crtc;
+
+	return 0;
+
+err_drm_gem_end_shadow_fb_access:
+	drm_gem_end_shadow_fb_access(plane, plane_state);
+	return ret;
+}
+EXPORT_SYMBOL(drm_sysfb_plane_helper_begin_fb_access);
+
 int drm_sysfb_plane_helper_atomic_check(struct drm_plane *plane,
 					struct drm_atomic_state *new_state)
 {
@@ -72,7 +307,12 @@ int drm_sysfb_plane_helper_atomic_check(struct drm_plane *plane,
 	else if (!new_plane_state->visible)
 		return 0;
 
-	if (new_fb->format != sysfb->fb_format) {
+	new_crtc_state = drm_atomic_get_new_crtc_state(new_state, new_plane_state->crtc);
+
+	new_sysfb_crtc_state = to_drm_sysfb_crtc_state(new_crtc_state);
+	new_sysfb_crtc_state->format = sysfb->fb_format;
+
+	if (new_fb->format != new_sysfb_crtc_state->format) {
 		void *buf;
 
 		/* format conversion necessary; reserve buffer */
@@ -81,11 +321,6 @@ int drm_sysfb_plane_helper_atomic_check(struct drm_plane *plane,
 		if (!buf)
 			return -ENOMEM;
 	}
-
-	new_crtc_state = drm_atomic_get_new_crtc_state(new_state, new_plane_state->crtc);
-
-	new_sysfb_crtc_state = to_drm_sysfb_crtc_state(new_crtc_state);
-	new_sysfb_crtc_state->format = new_fb->format;
 
 	return 0;
 }
@@ -97,10 +332,14 @@ void drm_sysfb_plane_helper_atomic_update(struct drm_plane *plane, struct drm_at
 	struct drm_sysfb_device *sysfb = to_drm_sysfb_device(dev);
 	struct drm_plane_state *plane_state = drm_atomic_get_new_plane_state(state, plane);
 	struct drm_plane_state *old_plane_state = drm_atomic_get_old_plane_state(state, plane);
-	struct drm_shadow_plane_state *shadow_plane_state = to_drm_shadow_plane_state(plane_state);
+	struct drm_sysfb_plane_state *sysfb_plane_state = to_drm_sysfb_plane_state(plane_state);
+	struct drm_shadow_plane_state *shadow_plane_state = &sysfb_plane_state->base;
 	struct drm_framebuffer *fb = plane_state->fb;
 	unsigned int dst_pitch = sysfb->fb_pitch;
-	const struct drm_format_info *dst_format = sysfb->fb_format;
+	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, plane_state->crtc);
+	struct drm_sysfb_crtc_state *sysfb_crtc_state = to_drm_sysfb_crtc_state(crtc_state);
+	const struct drm_format_info *dst_format = sysfb_crtc_state->format;
+	drm_sysfb_blit_func blit_to_crtc = sysfb_plane_state->blit_to_crtc;
 	struct drm_atomic_helper_damage_iter iter;
 	struct drm_rect damage;
 	int ret, idx;
@@ -121,8 +360,8 @@ void drm_sysfb_plane_helper_atomic_update(struct drm_plane *plane, struct drm_at
 			continue;
 
 		iosys_map_incr(&dst, drm_fb_clip_offset(dst_pitch, dst_format, &dst_clip));
-		drm_fb_blit(&dst, &dst_pitch, dst_format->format, shadow_plane_state->data, fb,
-			    &damage, &shadow_plane_state->fmtcnv_state);
+		blit_to_crtc(&dst, &dst_pitch, shadow_plane_state->data, fb, &damage,
+			     &shadow_plane_state->fmtcnv_state);
 	}
 
 	drm_dev_exit(idx);
@@ -181,6 +420,52 @@ int drm_sysfb_plane_helper_get_scanout_buffer(struct drm_plane *plane,
 }
 EXPORT_SYMBOL(drm_sysfb_plane_helper_get_scanout_buffer);
 
+void drm_sysfb_plane_reset(struct drm_plane *plane)
+{
+	struct drm_sysfb_plane_state *sysfb_plane_state;
+
+	if (plane->state)
+		drm_sysfb_plane_state_destroy(to_drm_sysfb_plane_state(plane->state));
+
+	sysfb_plane_state = kzalloc_obj(*sysfb_plane_state);
+	if (sysfb_plane_state)
+		__drm_gem_reset_shadow_plane(plane, &sysfb_plane_state->base);
+	else
+		__drm_gem_reset_shadow_plane(plane, NULL);
+}
+EXPORT_SYMBOL(drm_sysfb_plane_reset);
+
+struct drm_plane_state *drm_sysfb_plane_atomic_duplicate_state(struct drm_plane *plane)
+{
+	struct drm_device *dev = plane->dev;
+	struct drm_plane_state *plane_state = plane->state;
+	struct drm_sysfb_plane_state *sysfb_plane_state;
+	struct drm_sysfb_plane_state *new_sysfb_plane_state;
+	struct drm_shadow_plane_state *new_shadow_plane_state;
+
+	if (drm_WARN_ON(dev, !plane_state))
+		return NULL;
+	sysfb_plane_state = to_drm_sysfb_plane_state(plane_state);
+
+	new_sysfb_plane_state = kzalloc_obj(*new_sysfb_plane_state);
+	if (!new_sysfb_plane_state)
+		return NULL;
+	new_shadow_plane_state = &new_sysfb_plane_state->base;
+
+	__drm_gem_duplicate_shadow_plane_state(plane, new_shadow_plane_state);
+	new_sysfb_plane_state->blit_to_crtc = sysfb_plane_state->blit_to_crtc;
+
+	return &new_shadow_plane_state->base;
+}
+EXPORT_SYMBOL(drm_sysfb_plane_atomic_duplicate_state);
+
+void drm_sysfb_plane_atomic_destroy_state(struct drm_plane *plane,
+					  struct drm_plane_state *plane_state)
+{
+	drm_sysfb_plane_state_destroy(to_drm_sysfb_plane_state(plane_state));
+}
+EXPORT_SYMBOL(drm_sysfb_plane_atomic_destroy_state);
+
 /*
  * CRTC
  */
@@ -232,16 +517,19 @@ EXPORT_SYMBOL(drm_sysfb_crtc_helper_atomic_check);
 
 void drm_sysfb_crtc_reset(struct drm_crtc *crtc)
 {
+	struct drm_sysfb_device *sysfb = to_drm_sysfb_device(crtc->dev);
 	struct drm_sysfb_crtc_state *sysfb_crtc_state;
 
 	if (crtc->state)
 		drm_sysfb_crtc_state_destroy(to_drm_sysfb_crtc_state(crtc->state));
 
-	sysfb_crtc_state = kzalloc(sizeof(*sysfb_crtc_state), GFP_KERNEL);
-	if (sysfb_crtc_state)
+	sysfb_crtc_state = kzalloc_obj(*sysfb_crtc_state);
+	if (sysfb_crtc_state) {
+		sysfb_crtc_state->format = sysfb->fb_format;
 		__drm_atomic_helper_crtc_reset(crtc, &sysfb_crtc_state->base);
-	else
+	} else {
 		__drm_atomic_helper_crtc_reset(crtc, NULL);
+	}
 }
 EXPORT_SYMBOL(drm_sysfb_crtc_reset);
 
@@ -255,7 +543,7 @@ struct drm_crtc_state *drm_sysfb_crtc_atomic_duplicate_state(struct drm_crtc *cr
 	if (drm_WARN_ON(dev, !crtc_state))
 		return NULL;
 
-	new_sysfb_crtc_state = kzalloc(sizeof(*new_sysfb_crtc_state), GFP_KERNEL);
+	new_sysfb_crtc_state = kzalloc_obj(*new_sysfb_crtc_state);
 	if (!new_sysfb_crtc_state)
 		return NULL;
 

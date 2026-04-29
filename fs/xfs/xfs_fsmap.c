@@ -3,7 +3,7 @@
  * Copyright (C) 2017 Oracle.  All Rights Reserved.
  * Author: Darrick J. Wong <darrick.wong@oracle.com>
  */
-#include "xfs.h"
+#include "xfs_platform.h"
 #include "xfs_fs.h"
 #include "xfs_shared.h"
 #include "xfs_format.h"
@@ -1270,9 +1270,7 @@ xfs_getfsmap(
 		 * buffer locking abilities to detect cycles in the rmapbt
 		 * without deadlocking.
 		 */
-		error = xfs_trans_alloc_empty(mp, &tp);
-		if (error)
-			break;
+		tp = xfs_trans_alloc_empty(mp);
 
 		info.dev = handlers[i].dev;
 		info.last = false;
@@ -1328,11 +1326,11 @@ xfs_ioc_getfsmap(
 	 */
 	count = min_t(unsigned int, head.fmh_count,
 			131072 / sizeof(struct fsmap));
-	recs = kvcalloc(count, sizeof(struct fsmap), GFP_KERNEL);
+	recs = kvzalloc_objs(struct fsmap, count);
 	if (!recs) {
 		count = min_t(unsigned int, head.fmh_count,
 				PAGE_SIZE / sizeof(struct fsmap));
-		recs = kvcalloc(count, sizeof(struct fsmap), GFP_KERNEL);
+		recs = kvzalloc_objs(struct fsmap, count);
 		if (!recs)
 			return -ENOMEM;
 	}

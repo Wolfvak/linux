@@ -40,7 +40,8 @@ int hashtab_init(struct hashtab *h, u32 nel_hint)
 	h->htable = NULL;
 
 	if (size) {
-		h->htable = kcalloc(size, sizeof(*h->htable), GFP_KERNEL);
+		h->htable = kzalloc_objs(*h->htable, size,
+					 GFP_KERNEL | __GFP_NOWARN);
 		if (!h->htable)
 			return -ENOMEM;
 		h->size = size;
@@ -148,7 +149,7 @@ int hashtab_duplicate(struct hashtab *new, const struct hashtab *orig,
 
 	memset(new, 0, sizeof(*new));
 
-	new->htable = kcalloc(orig->size, sizeof(*new->htable), GFP_KERNEL);
+	new->htable = kzalloc_objs(*new->htable, orig->size);
 	if (!new->htable)
 		return -ENOMEM;
 

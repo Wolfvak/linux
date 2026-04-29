@@ -1708,7 +1708,7 @@ void efx_farch_dimension_resources(struct efx_nic *efx, unsigned sram_lim_qw)
 
 			if (efx->vf_count > vf_limit) {
 				netif_err(efx, probe, efx->net_dev,
-					  "Reducing VF count from from %d to %d\n",
+					  "Reducing VF count from %d to %d\n",
 					  efx->vf_count, vf_limit);
 				efx->vf_count = vf_limit;
 			}
@@ -2790,7 +2790,7 @@ int efx_farch_filter_table_probe(struct efx_nic *efx)
 	struct efx_farch_filter_table *table;
 	unsigned table_id;
 
-	state = kzalloc(sizeof(struct efx_farch_filter_state), GFP_KERNEL);
+	state = kzalloc_obj(struct efx_farch_filter_state);
 	if (!state)
 		return -ENOMEM;
 	efx->filter_state = state;

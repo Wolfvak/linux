@@ -320,6 +320,38 @@ static const u8 mtk_smi_larb_mt6893_ostd[][SMI_LARB_PORT_NR_MAX] = {
 	[20] = {0x9, 0x9, 0x5, 0x5, 0x1, 0x1},
 };
 
+static const u8 mtk_smi_larb_mt8186_ostd[][SMI_LARB_PORT_NR_MAX] = {
+	[0] = {0x2, 0x1, 0x8, 0x1,},
+	[1] = {0x1, 0x3, 0x1, 0x1,},
+	[2] = {0x6, 0x1, 0x4, 0x1,},
+	[3] = {},
+	[4] = {0xf, 0x1, 0x5, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1,
+	       0x1, 0x1, 0x1,},
+	[5] = {},
+	[6] = {},
+	[7] = {0x1, 0x3, 0x1, 0x1, 0x1, 0x3, 0x2, 0xd, 0x7, 0x5, 0x3,
+	       0x1, 0x5,},
+	[8] = {0x1, 0x2, 0x2,},
+	[9] = {0x9, 0x7, 0xf, 0x8, 0x1, 0x8, 0x9, 0x3, 0x3, 0xb, 0x7, 0x4,
+	       0x9, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1,
+	       0x1, 0x1, 0x1, 0x1, 0x1,},
+	[10] = {},
+	[11] = {0x9, 0x7, 0xf, 0x8, 0x1, 0x8, 0x9, 0x3, 0x3, 0xb, 0x7, 0x4,
+		0x9, 0x1, 0x1, 0x1, 0x1, 0x1, 0x8, 0x7, 0x7, 0x1, 0x6, 0x2,
+		0xf, 0x8, 0x1, 0x1, 0x1,},
+	[12] = {},
+	[13] = {0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x6, 0x6, 0x6, 0x1, 0x1, 0x1,},
+	[14] = {0x1, 0x1, 0x1, 0x1, 0x1, 0x1,},
+	[15] = {},
+	[16] = {0x28, 0x14, 0x2, 0xc, 0x18, 0x1, 0x14, 0x1, 0x4, 0x4, 0x4,
+		0x2, 0x4, 0x2, 0x8, 0x4, 0x4,},
+	[17] = {0x28, 0x14, 0x2, 0xc, 0x18, 0x1, 0x14, 0x1, 0x4, 0x4, 0x4,
+		0x2, 0x4, 0x2, 0x8, 0x4, 0x4,},
+	[18] = {},
+	[19] = {0x1, 0x1, 0x1, 0x1,},
+	[20] = {0x2, 0x2, 0x2, 0x2, 0x1, 0x1,},
+};
+
 static const u8 mtk_smi_larb_mt8188_ostd[][SMI_LARB_PORT_NR_MAX] = {
 	[0] = {0x02, 0x18, 0x22, 0x22, 0x01, 0x02, 0x0a,},
 	[1] = {0x12, 0x02, 0x14, 0x14, 0x01, 0x18, 0x0a,},
@@ -491,6 +523,7 @@ static const struct mtk_smi_larb_gen mtk_smi_larb_mt8183 = {
 static const struct mtk_smi_larb_gen mtk_smi_larb_mt8186 = {
 	.config_port                = mtk_smi_larb_config_port_gen2_general,
 	.flags_general	            = MTK_SMI_FLAG_SLEEP_CTL,
+	.ostd			    = mtk_smi_larb_mt8186_ostd,
 };
 
 static const struct mtk_smi_larb_gen mtk_smi_larb_mt8188 = {
@@ -562,25 +595,28 @@ static int mtk_smi_device_link_common(struct device *dev, struct device **com_de
 
 	smi_com_pdev = of_find_device_by_node(smi_com_node);
 	of_node_put(smi_com_node);
-	if (smi_com_pdev) {
-		/* smi common is the supplier, Make sure it is ready before */
-		if (!platform_get_drvdata(smi_com_pdev)) {
-			put_device(&smi_com_pdev->dev);
-			return -EPROBE_DEFER;
-		}
-		smi_com_dev = &smi_com_pdev->dev;
-		link = device_link_add(dev, smi_com_dev,
-				       DL_FLAG_PM_RUNTIME | DL_FLAG_STATELESS);
-		if (!link) {
-			dev_err(dev, "Unable to link smi-common dev\n");
-			put_device(&smi_com_pdev->dev);
-			return -ENODEV;
-		}
-		*com_dev = smi_com_dev;
-	} else {
+	if (!smi_com_pdev) {
 		dev_err(dev, "Failed to get the smi_common device\n");
 		return -EINVAL;
 	}
+
+	/* smi common is the supplier, Make sure it is ready before */
+	if (!platform_get_drvdata(smi_com_pdev)) {
+		put_device(&smi_com_pdev->dev);
+		return -EPROBE_DEFER;
+	}
+
+	smi_com_dev = &smi_com_pdev->dev;
+	link = device_link_add(dev, smi_com_dev,
+			       DL_FLAG_PM_RUNTIME | DL_FLAG_STATELESS);
+	if (!link) {
+		dev_err(dev, "Unable to link smi-common dev\n");
+		put_device(&smi_com_pdev->dev);
+		return -ENODEV;
+	}
+
+	*com_dev = smi_com_dev;
+
 	return 0;
 }
 
@@ -641,6 +677,7 @@ static int mtk_smi_larb_probe(struct platform_device *pdev)
 err_pm_disable:
 	pm_runtime_disable(dev);
 	device_link_remove(dev, larb->smi_common_dev);
+	put_device(larb->smi_common_dev);
 	return ret;
 }
 
@@ -651,6 +688,7 @@ static void mtk_smi_larb_remove(struct platform_device *pdev)
 	device_link_remove(&pdev->dev, larb->smi_common_dev);
 	pm_runtime_disable(&pdev->dev);
 	component_del(&pdev->dev, &mtk_smi_larb_component_ops);
+	put_device(larb->smi_common_dev);
 }
 
 static int __maybe_unused mtk_smi_larb_resume(struct device *dev)
@@ -884,6 +922,7 @@ static void mtk_smi_common_remove(struct platform_device *pdev)
 	if (common->plat->type == MTK_SMI_GEN2_SUB_COMM)
 		device_link_remove(&pdev->dev, common->smi_common_dev);
 	pm_runtime_disable(&pdev->dev);
+	put_device(common->smi_common_dev);
 }
 
 static int __maybe_unused mtk_smi_common_resume(struct device *dev)

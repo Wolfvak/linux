@@ -77,6 +77,10 @@ enum reg2_op {
 	iocsrwrh_op     = 0x19205,
 	iocsrwrw_op     = 0x19206,
 	iocsrwrd_op     = 0x19207,
+	llacqw_op	= 0xe15e0,
+	screlw_op	= 0xe15e1,
+	llacqd_op	= 0xe15e2,
+	screld_op	= 0xe15e3,
 };
 
 enum reg2i5_op {
@@ -189,6 +193,7 @@ enum reg3_op {
 	fldxd_op	= 0x7068,
 	fstxs_op	= 0x7070,
 	fstxd_op	= 0x7078,
+	scq_op		= 0x70ae,
 	amswapw_op	= 0x70c0,
 	amswapd_op	= 0x70c1,
 	amaddw_op	= 0x70c2,
@@ -433,8 +438,10 @@ static inline bool is_branch_ins(union loongarch_instruction *ip)
 
 static inline bool is_ra_save_ins(union loongarch_instruction *ip)
 {
-	/* st.d $ra, $sp, offset */
-	return ip->reg2i12_format.opcode == std_op &&
+	const u32 opcode = IS_ENABLED(CONFIG_32BIT) ? stw_op : std_op;
+
+	/* st.w / st.d $ra, $sp, offset */
+	return ip->reg2i12_format.opcode == opcode &&
 		ip->reg2i12_format.rj == LOONGARCH_GPR_SP &&
 		ip->reg2i12_format.rd == LOONGARCH_GPR_RA &&
 		!is_imm12_negative(ip->reg2i12_format.immediate);
@@ -442,8 +449,10 @@ static inline bool is_ra_save_ins(union loongarch_instruction *ip)
 
 static inline bool is_stack_alloc_ins(union loongarch_instruction *ip)
 {
-	/* addi.d $sp, $sp, -imm */
-	return ip->reg2i12_format.opcode == addid_op &&
+	const u32 opcode = IS_ENABLED(CONFIG_32BIT) ? addiw_op : addid_op;
+
+	/* addi.w / addi.d $sp, $sp, -imm */
+	return ip->reg2i12_format.opcode == opcode &&
 		ip->reg2i12_format.rj == LOONGARCH_GPR_SP &&
 		ip->reg2i12_format.rd == LOONGARCH_GPR_SP &&
 		is_imm12_negative(ip->reg2i12_format.immediate);
@@ -497,6 +506,7 @@ void arch_simulate_insn(union loongarch_instruction insn, struct pt_regs *regs);
 int larch_insn_read(void *addr, u32 *insnp);
 int larch_insn_write(void *addr, u32 insn);
 int larch_insn_patch_text(void *addr, u32 insn);
+int larch_insn_text_copy(void *dst, void *src, size_t len);
 
 u32 larch_insn_gen_nop(void);
 u32 larch_insn_gen_b(unsigned long pc, unsigned long dest);
@@ -510,6 +520,8 @@ u32 larch_insn_gen_move(enum loongarch_gpr rd, enum loongarch_gpr rj);
 u32 larch_insn_gen_lu12iw(enum loongarch_gpr rd, int imm);
 u32 larch_insn_gen_lu32id(enum loongarch_gpr rd, int imm);
 u32 larch_insn_gen_lu52id(enum loongarch_gpr rd, enum loongarch_gpr rj, int imm);
+u32 larch_insn_gen_beq(enum loongarch_gpr rd, enum loongarch_gpr rj, int imm);
+u32 larch_insn_gen_bne(enum loongarch_gpr rd, enum loongarch_gpr rj, int imm);
 u32 larch_insn_gen_jirl(enum loongarch_gpr rd, enum loongarch_gpr rj, int imm);
 
 static inline bool signed_imm_check(long val, unsigned int bit)

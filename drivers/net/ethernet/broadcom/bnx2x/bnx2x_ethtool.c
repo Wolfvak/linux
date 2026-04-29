@@ -1243,9 +1243,9 @@ static int bnx2x_get_eeprom_len(struct net_device *dev)
  * pf B succeeds in taking the same lock since they are from the same port.
  * pf A takes the per pf misc lock. Performs eeprom access.
  * pf A finishes. Unlocks the per pf misc lock.
- * Pf B takes the lock and proceeds to perform it's own access.
+ * Pf B takes the lock and proceeds to perform its own access.
  * pf A unlocks the per port lock, while pf B is still working (!).
- * mcp takes the per port lock and corrupts pf B's access (and/or has it's own
+ * mcp takes the per port lock and corrupts pf B's access (and/or has its own
  * access corrupted by pf B)
  */
 static int bnx2x_acquire_nvram_lock(struct bnx2x *bp)
@@ -3318,8 +3318,11 @@ static int bnx2x_set_phys_id(struct net_device *dev,
 	return 0;
 }
 
-static int bnx2x_get_rss_flags(struct bnx2x *bp, struct ethtool_rxnfc *info)
+static int bnx2x_get_rxfh_fields(struct net_device *dev,
+				 struct ethtool_rxfh_fields *info)
 {
+	struct bnx2x *bp = netdev_priv(dev);
+
 	switch (info->flow_type) {
 	case TCP_V4_FLOW:
 	case TCP_V6_FLOW:
@@ -3352,29 +3355,22 @@ static int bnx2x_get_rss_flags(struct bnx2x *bp, struct ethtool_rxnfc *info)
 	return 0;
 }
 
-static int bnx2x_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *info,
-			   u32 *rules __always_unused)
+static u32 bnx2x_get_rx_ring_count(struct net_device *dev)
 {
 	struct bnx2x *bp = netdev_priv(dev);
 
-	switch (info->cmd) {
-	case ETHTOOL_GRXRINGS:
-		info->data = BNX2X_NUM_ETH_QUEUES(bp);
-		return 0;
-	case ETHTOOL_GRXFH:
-		return bnx2x_get_rss_flags(bp, info);
-	default:
-		DP(BNX2X_MSG_ETHTOOL, "Command parameters not supported\n");
-		return -EOPNOTSUPP;
-	}
+	return BNX2X_NUM_ETH_QUEUES(bp);
 }
 
-static int bnx2x_set_rss_flags(struct bnx2x *bp, struct ethtool_rxnfc *info)
+static int bnx2x_set_rxfh_fields(struct net_device *dev,
+				 const struct ethtool_rxfh_fields *info,
+				 struct netlink_ext_ack *extack)
 {
+	struct bnx2x *bp = netdev_priv(dev);
 	int udp_rss_requested;
 
 	DP(BNX2X_MSG_ETHTOOL,
-	   "Set rss flags command parameters: flow type = %d, data = %llu\n",
+	   "Set rss flags command parameters: flow type = %d, data = %u\n",
 	   info->flow_type, info->data);
 
 	switch (info->flow_type) {
@@ -3457,19 +3453,6 @@ static int bnx2x_set_rss_flags(struct bnx2x *bp, struct ethtool_rxnfc *info)
 
 	default:
 		return -EINVAL;
-	}
-}
-
-static int bnx2x_set_rxnfc(struct net_device *dev, struct ethtool_rxnfc *info)
-{
-	struct bnx2x *bp = netdev_priv(dev);
-
-	switch (info->cmd) {
-	case ETHTOOL_SRXFH:
-		return bnx2x_set_rss_flags(bp, info);
-	default:
-		DP(BNX2X_MSG_ETHTOOL, "Command parameters not supported\n");
-		return -EOPNOTSUPP;
 	}
 }
 
@@ -3683,11 +3666,12 @@ static const struct ethtool_ops bnx2x_ethtool_ops = {
 	.get_strings		= bnx2x_get_strings,
 	.set_phys_id		= bnx2x_set_phys_id,
 	.get_ethtool_stats	= bnx2x_get_ethtool_stats,
-	.get_rxnfc		= bnx2x_get_rxnfc,
-	.set_rxnfc		= bnx2x_set_rxnfc,
+	.get_rx_ring_count	= bnx2x_get_rx_ring_count,
 	.get_rxfh_indir_size	= bnx2x_get_rxfh_indir_size,
 	.get_rxfh		= bnx2x_get_rxfh,
 	.set_rxfh		= bnx2x_set_rxfh,
+	.get_rxfh_fields	= bnx2x_get_rxfh_fields,
+	.set_rxfh_fields	= bnx2x_set_rxfh_fields,
 	.get_channels		= bnx2x_get_channels,
 	.set_channels		= bnx2x_set_channels,
 	.get_module_info	= bnx2x_get_module_info,
@@ -3710,11 +3694,12 @@ static const struct ethtool_ops bnx2x_vf_ethtool_ops = {
 	.get_sset_count		= bnx2x_get_sset_count,
 	.get_strings		= bnx2x_get_strings,
 	.get_ethtool_stats	= bnx2x_get_ethtool_stats,
-	.get_rxnfc		= bnx2x_get_rxnfc,
-	.set_rxnfc		= bnx2x_set_rxnfc,
+	.get_rx_ring_count	= bnx2x_get_rx_ring_count,
 	.get_rxfh_indir_size	= bnx2x_get_rxfh_indir_size,
 	.get_rxfh		= bnx2x_get_rxfh,
 	.set_rxfh		= bnx2x_set_rxfh,
+	.get_rxfh_fields	= bnx2x_get_rxfh_fields,
+	.set_rxfh_fields	= bnx2x_set_rxfh_fields,
 	.get_channels		= bnx2x_get_channels,
 	.set_channels		= bnx2x_set_channels,
 	.get_link_ksettings	= bnx2x_get_vf_link_ksettings,

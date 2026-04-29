@@ -37,7 +37,7 @@ static void vmw_gem_object_free(struct drm_gem_object *gobj)
 {
 	struct ttm_buffer_object *bo = drm_gem_ttm_of_gem(gobj);
 	if (bo)
-		ttm_bo_put(bo);
+		ttm_bo_fini(bo);
 }
 
 static int vmw_gem_object_open(struct drm_gem_object *obj,
@@ -284,11 +284,10 @@ static void vmw_bo_print_info(int id, struct vmw_bo *bo, struct seq_file *m)
 
 	seq_printf(m, "\t\t0x%08x: %12zu bytes %s, type = %s",
 		   id, bo->tbo.base.size, placement, type);
-	seq_printf(m, ", priority = %u, pin_count = %u, GEM refs = %d, TTM refs = %d",
+	seq_printf(m, ", priority = %u, pin_count = %u, GEM refs = %d",
 		   bo->tbo.priority,
 		   bo->tbo.pin_count,
-		   kref_read(&bo->tbo.base.refcount),
-		   kref_read(&bo->tbo.kref));
+		   kref_read(&bo->tbo.base.refcount));
 	seq_puts(m, "\n");
 }
 

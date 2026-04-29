@@ -34,8 +34,6 @@
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 
-#include "i915_irq.h"
-#include "i915_reg.h"
 #include "intel_connector.h"
 #include "intel_crt.h"
 #include "intel_crt_regs.h"
@@ -44,6 +42,7 @@
 #include "intel_ddi_buf_trans.h"
 #include "intel_de.h"
 #include "intel_display_driver.h"
+#include "intel_display_regs.h"
 #include "intel_display_types.h"
 #include "intel_fdi.h"
 #include "intel_fdi_regs.h"
@@ -51,6 +50,7 @@
 #include "intel_gmbus.h"
 #include "intel_hotplug.h"
 #include "intel_hotplug_irq.h"
+#include "intel_link_bw.h"
 #include "intel_load_detect.h"
 #include "intel_pch_display.h"
 #include "intel_pch_refclk.h"
@@ -109,7 +109,7 @@ static bool intel_crt_get_hw_state(struct intel_encoder *encoder,
 {
 	struct intel_display *display = to_intel_display(encoder);
 	struct intel_crt *crt = intel_encoder_to_crt(encoder);
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 	bool ret;
 
 	wakeref = intel_display_power_get_if_enabled(display,
@@ -422,7 +422,7 @@ static int pch_crt_compute_config(struct intel_encoder *encoder,
 		return -EINVAL;
 
 	crtc_state->has_pch_encoder = true;
-	if (!intel_fdi_compute_pipe_bpp(crtc_state))
+	if (!intel_link_bw_compute_pipe_bpp(crtc_state))
 		return -EINVAL;
 
 	crtc_state->output_format = INTEL_OUTPUT_FORMAT_RGB;
@@ -447,7 +447,7 @@ static int hsw_crt_compute_config(struct intel_encoder *encoder,
 		return -EINVAL;
 
 	crtc_state->has_pch_encoder = true;
-	if (!intel_fdi_compute_pipe_bpp(crtc_state))
+	if (!intel_link_bw_compute_pipe_bpp(crtc_state))
 		return -EINVAL;
 
 	crtc_state->output_format = INTEL_OUTPUT_FORMAT_RGB;
@@ -498,10 +498,10 @@ static bool ilk_crt_detect_hotplug(struct drm_connector *connector)
 
 		intel_de_write(display, crt->adpa_reg, adpa);
 
-		if (intel_de_wait_for_clear(display,
-					    crt->adpa_reg,
-					    ADPA_CRT_HOTPLUG_FORCE_TRIGGER,
-					    1000))
+		if (intel_de_wait_for_clear_ms(display,
+					       crt->adpa_reg,
+					       ADPA_CRT_HOTPLUG_FORCE_TRIGGER,
+					       1000))
 			drm_dbg_kms(display->drm,
 				    "timed out waiting for FORCE_TRIGGER");
 
@@ -553,8 +553,8 @@ static bool valleyview_crt_detect_hotplug(struct drm_connector *connector)
 
 	intel_de_write(display, crt->adpa_reg, adpa);
 
-	if (intel_de_wait_for_clear(display, crt->adpa_reg,
-				    ADPA_CRT_HOTPLUG_FORCE_TRIGGER, 1000)) {
+	if (intel_de_wait_for_clear_ms(display, crt->adpa_reg,
+				       ADPA_CRT_HOTPLUG_FORCE_TRIGGER, 1000)) {
 		drm_dbg_kms(display->drm,
 			    "timed out waiting for FORCE_TRIGGER");
 		intel_de_write(display, crt->adpa_reg, save_adpa);
@@ -604,8 +604,8 @@ static bool intel_crt_detect_hotplug(struct drm_connector *connector)
 					      CRT_HOTPLUG_FORCE_DETECT,
 					      CRT_HOTPLUG_FORCE_DETECT);
 		/* wait for FORCE_DETECT to go off */
-		if (intel_de_wait_for_clear(display, PORT_HOTPLUG_EN(display),
-					    CRT_HOTPLUG_FORCE_DETECT, 1000))
+		if (intel_de_wait_for_clear_ms(display, PORT_HOTPLUG_EN(display),
+					       CRT_HOTPLUG_FORCE_DETECT, 1000))
 			drm_dbg_kms(display->drm,
 				    "timed out waiting for FORCE_DETECT to go off");
 	}
@@ -847,7 +847,7 @@ intel_crt_detect(struct drm_connector *connector,
 	struct intel_crt *crt = intel_attached_crt(to_intel_connector(connector));
 	struct intel_encoder *encoder = &crt->base;
 	struct drm_atomic_state *state;
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 	int status;
 
 	drm_dbg_kms(display->drm, "[CONNECTOR:%d:%s] force=%d\n",
@@ -936,7 +936,7 @@ static int intel_crt_get_modes(struct drm_connector *connector)
 	struct intel_display *display = to_intel_display(connector->dev);
 	struct intel_crt *crt = intel_attached_crt(to_intel_connector(connector));
 	struct intel_encoder *encoder = &crt->base;
-	intel_wakeref_t wakeref;
+	struct ref_tracker *wakeref;
 	struct i2c_adapter *ddc;
 	int ret;
 
@@ -1037,7 +1037,7 @@ void intel_crt_init(struct intel_display *display)
 		intel_de_write(display, adpa_reg, adpa);
 	}
 
-	crt = kzalloc(sizeof(struct intel_crt), GFP_KERNEL);
+	crt = kzalloc_obj(struct intel_crt);
 	if (!crt)
 		return;
 

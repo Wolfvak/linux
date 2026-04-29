@@ -176,43 +176,6 @@ again:
 
 EXPORT_SYMBOL(t3_l2t_send_slow);
 
-void t3_l2t_send_event(struct t3cdev *dev, struct l2t_entry *e)
-{
-again:
-	switch (e->state) {
-	case L2T_STATE_STALE:	/* entry is stale, kick off revalidation */
-		neigh_event_send(e->neigh, NULL);
-		spin_lock_bh(&e->lock);
-		if (e->state == L2T_STATE_STALE) {
-			e->state = L2T_STATE_VALID;
-		}
-		spin_unlock_bh(&e->lock);
-		return;
-	case L2T_STATE_VALID:	/* fast-path, send the packet on */
-		return;
-	case L2T_STATE_RESOLVING:
-		spin_lock_bh(&e->lock);
-		if (e->state != L2T_STATE_RESOLVING) {
-			/* ARP already completed */
-			spin_unlock_bh(&e->lock);
-			goto again;
-		}
-		spin_unlock_bh(&e->lock);
-
-		/*
-		 * Only the first packet added to the arpq should kick off
-		 * resolution.  However, because the alloc_skb below can fail,
-		 * we allow each packet added to the arpq to retry resolution
-		 * as a way of recovering from transient memory exhaustion.
-		 * A better way would be to use a work request to retry L2T
-		 * entries when there's no memory.
-		 */
-		neigh_event_send(e->neigh, NULL);
-	}
-}
-
-EXPORT_SYMBOL(t3_l2t_send_event);
-
 /*
  * Allocate a free L2T entry.  Must be called with l2t_data.lock held.
  */
@@ -445,7 +408,7 @@ struct l2t_data *t3_init_l2t(unsigned int l2t_capacity)
 	struct l2t_data *d;
 	int i;
 
-	d = kvzalloc(struct_size(d, l2tab, l2t_capacity), GFP_KERNEL);
+	d = kvzalloc_flex(*d, l2tab, l2t_capacity);
 	if (!d)
 		return NULL;
 

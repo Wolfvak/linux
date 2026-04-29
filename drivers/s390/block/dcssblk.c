@@ -5,8 +5,7 @@
  * Authors: Carsten Otte, Stefan Weinhuber, Gerald Schaefer
  */
 
-#define KMSG_COMPONENT "dcssblk"
-#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
+#define pr_fmt(fmt) "dcssblk: " fmt
 
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -17,7 +16,6 @@
 #include <linux/blkdev.h>
 #include <linux/completion.h>
 #include <linux/interrupt.h>
-#include <linux/pfn_t.h>
 #include <linux/uio.h>
 #include <linux/dax.h>
 #include <linux/io.h>
@@ -33,7 +31,7 @@ static void dcssblk_release(struct gendisk *disk);
 static void dcssblk_submit_bio(struct bio *bio);
 static long dcssblk_dax_direct_access(struct dax_device *dax_dev, pgoff_t pgoff,
 		long nr_pages, enum dax_access_mode mode, void **kaddr,
-		pfn_t *pfn);
+		unsigned long *pfn);
 
 static char dcssblk_segments[DCSSBLK_PARM_LEN] = "\0";
 
@@ -80,6 +78,8 @@ struct dcssblk_dev_info {
 	int num_of_segments;
 	struct list_head seg_list;
 	struct dax_device *dax_dev;
+	struct dev_pagemap pgmap;
+	void *pgmap_addr;
 };
 
 struct segment_info {
@@ -240,9 +240,7 @@ dcssblk_is_continuous(struct dcssblk_dev_info *dev_info)
 	if (dev_info->num_of_segments <= 1)
 		return 0;
 
-	sort_list = kcalloc(dev_info->num_of_segments,
-			    sizeof(struct segment_info),
-			    GFP_KERNEL);
+	sort_list = kzalloc_objs(struct segment_info, dev_info->num_of_segments);
 	if (sort_list == NULL)
 		return -ENOMEM;
 	i = 0;
@@ -310,7 +308,7 @@ dcssblk_load_segment(char *name, struct segment_info **seg_info)
 		return -EEXIST;
 
 	/* get a struct segment_info */
-	*seg_info = kzalloc(sizeof(struct segment_info), GFP_KERNEL);
+	*seg_info = kzalloc_obj(struct segment_info);
 	if (*seg_info == NULL)
 		return -ENOMEM;
 
@@ -416,6 +414,8 @@ removeseg:
 	dax_remove_host(dev_info->gd);
 	kill_dax(dev_info->dax_dev);
 	put_dax(dev_info->dax_dev);
+	if (dev_info->pgmap_addr)
+		devm_memunmap_pages(&dev_info->dev, &dev_info->pgmap);
 	del_gendisk(dev_info->gd);
 	put_disk(dev_info->gd);
 
@@ -538,9 +538,6 @@ static int dcssblk_setup_dax(struct dcssblk_dev_info *dev_info)
 {
 	struct dax_device *dax_dev;
 
-	if (!IS_ENABLED(CONFIG_DCSSBLK_DAX))
-		return 0;
-
 	dax_dev = alloc_dax(dev_info, &dcssblk_dax_ops);
 	if (IS_ERR(dax_dev))
 		return PTR_ERR(dax_dev);
@@ -563,6 +560,7 @@ dcssblk_add_store(struct device *dev, struct device_attribute *attr, const char 
 	struct dcssblk_dev_info *dev_info;
 	struct segment_info *seg_info, *temp;
 	char *local_buf;
+	void *addr;
 	unsigned long seg_byte_size;
 
 	dev_info = NULL;
@@ -606,8 +604,7 @@ dcssblk_add_store(struct device *dev, struct device_attribute *attr, const char 
 		 * get a struct dcssblk_dev_info
 		 */
 		if (num_of_segments == 0) {
-			dev_info = kzalloc(sizeof(struct dcssblk_dev_info),
-					GFP_KERNEL);
+			dev_info = kzalloc_obj(struct dcssblk_dev_info);
 			if (dev_info == NULL) {
 				rc = -ENOMEM;
 				goto out;
@@ -673,8 +670,8 @@ dcssblk_add_store(struct device *dev, struct device_attribute *attr, const char 
 	rc = dcssblk_assign_free_minor(dev_info);
 	if (rc)
 		goto release_gd;
-	sprintf(dev_info->gd->disk_name, "dcssblk%d",
-		dev_info->gd->first_minor);
+	scnprintf(dev_info->gd->disk_name, sizeof(dev_info->gd->disk_name),
+		  "dcssblk%d", dev_info->gd->first_minor);
 	list_add_tail(&dev_info->lh, &dcssblk_devices);
 
 	if (!try_module_get(THIS_MODULE)) {
@@ -688,9 +685,26 @@ dcssblk_add_store(struct device *dev, struct device_attribute *attr, const char 
 	if (rc)
 		goto put_dev;
 
-	rc = dcssblk_setup_dax(dev_info);
-	if (rc)
-		goto out_dax;
+	if (!IS_ALIGNED(dev_info->start, SUBSECTION_SIZE) ||
+	    !IS_ALIGNED(dev_info->end + 1, SUBSECTION_SIZE)) {
+		pr_info("DCSS %s is not aligned to %lu bytes, DAX support disabled\n",
+			local_buf, SUBSECTION_SIZE);
+	} else {
+		dev_info->pgmap.type		= MEMORY_DEVICE_FS_DAX;
+		dev_info->pgmap.range.start	= dev_info->start;
+		dev_info->pgmap.range.end	= dev_info->end;
+		dev_info->pgmap.nr_range	= 1;
+		addr = devm_memremap_pages(&dev_info->dev, &dev_info->pgmap);
+		if (IS_ERR(addr)) {
+			rc = PTR_ERR(addr);
+			goto put_dev;
+		}
+		dev_info->pgmap_addr = addr;
+		rc = dcssblk_setup_dax(dev_info);
+		if (rc)
+			goto out_dax;
+		pr_info("DAX support enabled for DCSS %s\n", local_buf);
+	}
 
 	get_device(&dev_info->dev);
 	rc = device_add_disk(&dev_info->dev, dev_info->gd, NULL);
@@ -717,6 +731,8 @@ out_dax_host:
 out_dax:
 	kill_dax(dev_info->dax_dev);
 	put_dax(dev_info->dax_dev);
+	if (dev_info->pgmap_addr)
+		devm_memunmap_pages(&dev_info->dev, &dev_info->pgmap);
 put_dev:
 	list_del(&dev_info->lh);
 	put_disk(dev_info->gd);
@@ -802,6 +818,8 @@ dcssblk_remove_store(struct device *dev, struct device_attribute *attr, const ch
 	dax_remove_host(dev_info->gd);
 	kill_dax(dev_info->dax_dev);
 	put_dax(dev_info->dax_dev);
+	if (dev_info->pgmap_addr)
+		devm_memunmap_pages(&dev_info->dev, &dev_info->pgmap);
 	del_gendisk(dev_info->gd);
 	put_disk(dev_info->gd);
 
@@ -914,7 +932,7 @@ fail:
 
 static long
 __dcssblk_direct_access(struct dcssblk_dev_info *dev_info, pgoff_t pgoff,
-		long nr_pages, void **kaddr, pfn_t *pfn)
+		long nr_pages, void **kaddr, unsigned long *pfn)
 {
 	resource_size_t offset = pgoff * PAGE_SIZE;
 	unsigned long dev_sz;
@@ -923,8 +941,7 @@ __dcssblk_direct_access(struct dcssblk_dev_info *dev_info, pgoff_t pgoff,
 	if (kaddr)
 		*kaddr = __va(dev_info->start + offset);
 	if (pfn)
-		*pfn = __pfn_to_pfn_t(PFN_DOWN(dev_info->start + offset),
-				      PFN_DEV);
+		*pfn = PFN_DOWN(dev_info->start + offset);
 
 	return (dev_sz - offset) / PAGE_SIZE;
 }
@@ -932,7 +949,7 @@ __dcssblk_direct_access(struct dcssblk_dev_info *dev_info, pgoff_t pgoff,
 static long
 dcssblk_dax_direct_access(struct dax_device *dax_dev, pgoff_t pgoff,
 		long nr_pages, enum dax_access_mode mode, void **kaddr,
-		pfn_t *pfn)
+		unsigned long *pfn)
 {
 	struct dcssblk_dev_info *dev_info = dax_get_private(dax_dev);
 

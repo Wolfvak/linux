@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: ((GPL-2.0 WITH Linux-syscall-note) OR BSD-3-Clause)
-
+---
 name: dpll
 
 doc: DPLL subsystem.
@@ -240,6 +240,20 @@ definitions:
       integer part of a measured phase offset value.
       Value of (DPLL_A_PHASE_OFFSET % DPLL_PHASE_OFFSET_DIVIDER) is a
       fractional part of a measured phase offset value.
+  -
+    type: enum
+    name: feature-state
+    doc: |
+      Allow control (enable/disable) and status checking over features.
+    entries:
+      -
+        name: disable
+        doc: |
+          feature shall be disabled
+      -
+        name: enable
+        doc: |
+          feature shall be enabled
 
 attribute-sets:
   -
@@ -293,6 +307,18 @@ attribute-sets:
           be put to message multiple times to indicate possible parallel
           quality levels (e.g. one specified by ITU option 1 and another
           one specified by option 2).
+      -
+        name: phase-offset-monitor
+        type: u32
+        enum: feature-state
+        doc: Receive or request state of phase offset monitor feature.
+          If enabled, dpll device shall monitor and notify all currently
+          available inputs for changes of their phase offset against the
+          dpll device.
+      -
+        name: phase-offset-avg-factor
+        type: u32
+        doc: Averaging factor applied to calculation of reported phase offset.
   -
     name: pin
     enum-name: dpll_a_pin
@@ -406,6 +432,31 @@ attribute-sets:
         doc: |
           A ratio of high to low state of a SYNC signal pulse embedded
           into base clock frequency. Value is in percents.
+      -
+        name: reference-sync
+        type: nest
+        multi-attr: true
+        nested-attributes: reference-sync
+        doc: |
+          Capable pin provides list of pins that can be bound to create a
+          reference-sync pin pair.
+      -
+        name: phase-adjust-gran
+        type: u32
+        doc: |
+          Granularity of phase adjustment, in picoseconds. The value of
+          phase adjustment must be a multiple of this granularity.
+      -
+        name: fractional-frequency-offset-ppt
+        type: sint
+        doc: |
+          The FFO (Fractional Frequency Offset) of the pin with respect to
+          the nominal frequency.
+          Value = (frequency_measured - frequency_nominal) / frequency_nominal
+          Value is in PPT (parts per trillion, 10^-12).
+          Note: This attribute provides higher resolution than the standard
+          fractional-frequency-offset (which is in PPM).
+
   -
     name: pin-parent-device
     subset-of: pin
@@ -436,6 +487,14 @@ attribute-sets:
         name: frequency-min
       -
         name: frequency-max
+  -
+    name: reference-sync
+    subset-of: pin
+    attributes:
+      -
+        name: id
+      -
+        name: state
 
 operations:
   enum-name: dpll_cmd
@@ -445,7 +504,7 @@ operations:
       doc: |
         Get id of dpll device that matches given attributes
       attribute-set: dpll
-      flags: [ admin-perm ]
+      flags: [admin-perm]
 
       do:
         pre: dpll-lock-doit
@@ -464,7 +523,7 @@ operations:
       doc: |
         Get list of DPLL devices (dump) or attributes of a single dpll device
       attribute-set: dpll
-      flags: [ admin-perm ]
+      flags: [admin-perm]
 
       do:
         pre: dpll-pre-doit
@@ -483,6 +542,8 @@ operations:
             - temp
             - clock-id
             - type
+            - phase-offset-monitor
+            - phase-offset-avg-factor
 
       dump:
         reply: *dev-attrs
@@ -491,7 +552,7 @@ operations:
       name: device-set
       doc: Set attributes for a DPLL device
       attribute-set: dpll
-      flags: [ admin-perm ]
+      flags: [admin-perm]
 
       do:
         pre: dpll-pre-doit
@@ -499,6 +560,9 @@ operations:
         request:
           attributes:
             - id
+            - mode
+            - phase-offset-monitor
+            - phase-offset-avg-factor
     -
       name: device-create-ntf
       doc: Notification about device appearing
@@ -519,7 +583,7 @@ operations:
       doc: |
         Get id of a pin that matches given attributes
       attribute-set: pin
-      flags: [ admin-perm ]
+      flags: [admin-perm]
 
       do:
         pre: dpll-lock-doit
@@ -547,7 +611,7 @@ operations:
           a given dpll device
         - do request with target dpll and target pin - single pin attributes
       attribute-set: pin
-      flags: [ admin-perm ]
+      flags: [admin-perm]
 
       do:
         pre: dpll-pin-pre-doit
@@ -558,6 +622,8 @@ operations:
         reply: &pin-attrs
           attributes:
             - id
+            - module-name
+            - clock-id
             - board-label
             - panel-label
             - package-label
@@ -567,13 +633,16 @@ operations:
             - capabilities
             - parent-device
             - parent-pin
+            - phase-adjust-gran
             - phase-adjust-min
             - phase-adjust-max
             - phase-adjust
             - fractional-frequency-offset
+            - fractional-frequency-offset-ppt
             - esync-frequency
             - esync-frequency-supported
             - esync-pulse
+            - reference-sync
 
       dump:
         request:
@@ -585,7 +654,7 @@ operations:
       name: pin-set
       doc: Set attributes of a target pin
       attribute-set: pin
-      flags: [ admin-perm ]
+      flags: [admin-perm]
 
       do:
         pre: dpll-pin-pre-doit
@@ -601,6 +670,7 @@ operations:
             - parent-pin
             - phase-adjust
             - esync-frequency
+            - reference-sync
     -
       name: pin-create-ntf
       doc: Notification about pin appearing

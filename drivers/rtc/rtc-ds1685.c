@@ -3,7 +3,7 @@
  * An rtc driver for the Dallas/Maxim DS1685/DS1687 and related real-time
  * chips.
  *
- * Copyright (C) 2011-2014 Joshua Kinard <kumba@gentoo.org>.
+ * Copyright (C) 2011-2014 Joshua Kinard <linux@kumba.dev>.
  * Copyright (C) 2009 Matthias Fuchs <matthias.fuchs@esd-electronics.com>.
  *
  * References:
@@ -1268,9 +1268,6 @@ ds1685_rtc_probe(struct platform_device *pdev)
 	rtc_dev->range_min = RTC_TIMESTAMP_BEGIN_2000;
 	rtc_dev->range_max = RTC_TIMESTAMP_END_2099;
 
-	/* Maximum periodic rate is 8192Hz (0.122070ms). */
-	rtc_dev->max_user_freq = RTC_MAX_USER_FREQ;
-
 	/* See if the platform doesn't support UIE. */
 	if (pdata->uie_unsupported)
 		clear_bit(RTC_FEATURE_UPDATE_INTERRUPT, rtc_dev->features);
@@ -1436,7 +1433,7 @@ EXPORT_SYMBOL_GPL(ds1685_rtc_poweroff);
 /* ----------------------------------------------------------------------- */
 
 
-MODULE_AUTHOR("Joshua Kinard <kumba@gentoo.org>");
+MODULE_AUTHOR("Joshua Kinard <linux@kumba.dev>");
 MODULE_AUTHOR("Matthias Fuchs <matthias.fuchs@esd-electronics.com>");
 MODULE_DESCRIPTION("Dallas/Maxim DS1685/DS1687-series RTC driver");
 MODULE_LICENSE("GPL");

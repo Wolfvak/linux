@@ -194,8 +194,7 @@ static ssize_t write_hw(struct file *file, struct kobject *kobj,
 	int length = min(sizeof(struct atto_ioctl), count);
 
 	if (!a->local_atto_ioctl) {
-		a->local_atto_ioctl = kmalloc(sizeof(struct atto_ioctl),
-					      GFP_KERNEL);
+		a->local_atto_ioctl = kmalloc_obj(struct atto_ioctl);
 		if (a->local_atto_ioctl == NULL) {
 			esas2r_log(ESAS2R_LOG_WARN,
 				   "write_hw kzalloc failed for %zu bytes",
@@ -215,8 +214,8 @@ static ssize_t write_hw(struct file *file, struct kobject *kobj,
 		.attr	= \
 		{ .name = __stringify(_name), .mode  = S_IRUSR | S_IWUSR }, \
 		.size	= 0, \
-		.read_new	= read_ ## _name, \
-		.write_new	= write_ ## _name }
+		.read	= read_ ## _name, \
+		.write	= write_ ## _name }
 
 ESAS2R_RW_BIN_ATTR(fw);
 ESAS2R_RW_BIN_ATTR(fs);
@@ -227,7 +226,7 @@ ESAS2R_RW_BIN_ATTR(live_nvram);
 const struct bin_attribute bin_attr_default_nvram = {
 	.attr	= { .name = "default_nvram", .mode = S_IRUGO },
 	.size	= 0,
-	.read_new	= read_default_nvram,
+	.read	= read_default_nvram,
 	.write	= NULL
 };
 
@@ -818,7 +817,8 @@ static u32 get_physaddr_from_sgc(struct esas2r_sg_context *sgc, u64 *addr)
 	return len;
 }
 
-int esas2r_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *cmd)
+enum scsi_qc_status esas2r_queuecommand(struct Scsi_Host *host,
+					struct scsi_cmnd *cmd)
 {
 	struct esas2r_adapter *a =
 		(struct esas2r_adapter *)cmd->device->host->hostdata;
@@ -1830,7 +1830,7 @@ void esas2r_queue_fw_event(struct esas2r_adapter *a,
 	struct esas2r_fw_event_work *fw_event;
 	unsigned long flags;
 
-	fw_event = kzalloc(sizeof(struct esas2r_fw_event_work), GFP_ATOMIC);
+	fw_event = kzalloc_obj(struct esas2r_fw_event_work, GFP_ATOMIC);
 	if (!fw_event) {
 		esas2r_log(ESAS2R_LOG_WARN,
 			   "esas2r_queue_fw_event failed to alloc");

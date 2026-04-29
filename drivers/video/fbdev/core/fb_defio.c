@@ -11,6 +11,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
+#include <linux/export.h>
 #include <linux/string.h>
 #include <linux/mm.h>
 #include <linux/vmalloc.h>
@@ -306,7 +307,7 @@ int fb_deferred_io_init(struct fb_info *info)
 	npagerefs = DIV_ROUND_UP(info->fix.smem_len, PAGE_SIZE);
 
 	/* alloc a page ref for each page of the display memory */
-	pagerefs = kvcalloc(npagerefs, sizeof(*pagerefs), GFP_KERNEL);
+	pagerefs = kvzalloc_objs(*pagerefs, npagerefs);
 	if (!pagerefs) {
 		ret = -ENOMEM;
 		goto err;

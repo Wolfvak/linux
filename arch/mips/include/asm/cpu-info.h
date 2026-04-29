@@ -80,9 +80,7 @@ struct cpuinfo_mips {
 	int			srsets; /* Shadow register sets */
 	int			package;/* physical package number */
 	unsigned int		globalnumber;
-#ifdef CONFIG_64BIT
 	int			vmbits; /* Virtual memory size in bits */
-#endif
 	void			*data;	/* Additional data */
 	unsigned int		watch_reg_count;   /* Number that exist */
 	unsigned int		watch_reg_use_cnt; /* Usable by ptrace */
@@ -123,6 +121,7 @@ extern struct cpuinfo_mips cpu_data[];
 
 extern void cpu_probe(void);
 extern void cpu_report(void);
+extern void cpu_disable_mmid(void);
 
 extern const char *__cpu_name[];
 #define cpu_name_string()	__cpu_name[raw_smp_processor_id()]

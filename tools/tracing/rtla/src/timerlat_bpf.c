@@ -7,6 +7,10 @@
 
 static struct timerlat_bpf *bpf;
 
+/* BPF object and program for action program */
+static struct bpf_object *obj;
+static struct bpf_program *prog;
+
 /*
  * timerlat_bpf_init - load and initialize BPF program to collect timerlat data
  */
@@ -21,20 +25,20 @@ int timerlat_bpf_init(struct timerlat_params *params)
 		return 1;
 
 	/* Pass common options */
-	bpf->rodata->output_divisor = params->output_divisor;
-	bpf->rodata->entries = params->entries;
-	bpf->rodata->irq_threshold = params->stop_us;
-	bpf->rodata->thread_threshold = params->stop_total_us;
-	bpf->rodata->aa_only = params->aa_only;
+	bpf->rodata->output_divisor = params->common.output_divisor;
+	bpf->rodata->entries = params->common.hist.entries;
+	bpf->rodata->irq_threshold = params->common.stop_us;
+	bpf->rodata->thread_threshold = params->common.stop_total_us;
+	bpf->rodata->aa_only = params->common.aa_only;
 
-	if (params->entries != 0) {
+	if (params->common.hist.entries != 0) {
 		/* Pass histogram options */
-		bpf->rodata->bucket_size = params->bucket_size;
+		bpf->rodata->bucket_size = params->common.hist.bucket_size;
 
 		/* Set histogram array sizes */
-		bpf_map__set_max_entries(bpf->maps.hist_irq, params->entries);
-		bpf_map__set_max_entries(bpf->maps.hist_thread, params->entries);
-		bpf_map__set_max_entries(bpf->maps.hist_user, params->entries);
+		bpf_map__set_max_entries(bpf->maps.hist_irq, params->common.hist.entries);
+		bpf_map__set_max_entries(bpf->maps.hist_thread, params->common.hist.entries);
+		bpf_map__set_max_entries(bpf->maps.hist_user, params->common.hist.entries);
 	} else {
 		/* No entries, disable histogram */
 		bpf_map__set_autocreate(bpf->maps.hist_irq, false);
@@ -42,7 +46,7 @@ int timerlat_bpf_init(struct timerlat_params *params)
 		bpf_map__set_autocreate(bpf->maps.hist_user, false);
 	}
 
-	if (params->aa_only) {
+	if (params->common.aa_only) {
 		/* Auto-analysis only, disable summary */
 		bpf_map__set_autocreate(bpf->maps.summary_irq, false);
 		bpf_map__set_autocreate(bpf->maps.summary_thread, false);
@@ -57,6 +61,19 @@ int timerlat_bpf_init(struct timerlat_params *params)
 	}
 
 	return 0;
+}
+
+/*
+ * timerlat_bpf_set_action - set action on threshold executed on BPF side
+ */
+static int timerlat_bpf_set_action(struct bpf_program *prog)
+{
+	unsigned int key = 0, value = bpf_program__fd(prog);
+
+	return bpf_map__update_elem(bpf->maps.bpf_action,
+				    &key, sizeof(key),
+				    &value, sizeof(value),
+				    BPF_ANY);
 }
 
 /*
@@ -83,6 +100,11 @@ void timerlat_bpf_detach(void)
 void timerlat_bpf_destroy(void)
 {
 	timerlat_bpf__destroy(bpf);
+	bpf = NULL;
+	if (obj)
+		bpf_object__close(obj);
+	obj = NULL;
+	prog = NULL;
 }
 
 static int handle_rb_event(void *ctx, void *data, size_t data_sz)
@@ -104,6 +126,19 @@ int timerlat_bpf_wait(int timeout)
 	ring_buffer__free(rb);
 
 	return retval;
+}
+
+/*
+ * timerlat_bpf_restart_tracing - restart stopped tracing
+ */
+int timerlat_bpf_restart_tracing(void)
+{
+	unsigned int key = 0;
+	unsigned long long value = 0;
+
+	return bpf_map__update_elem(bpf->maps.stop_tracing,
+				    &key, sizeof(key),
+				    &value, sizeof(value), BPF_ANY);
 }
 
 static int get_value(struct bpf_map *map_irq,
@@ -164,4 +199,48 @@ int timerlat_bpf_get_summary_value(enum summary_field key,
 			 bpf->maps.summary_user,
 			 key, value_irq, value_thread, value_user, cpus);
 }
+
+/*
+ * timerlat_load_bpf_action_program - load and register a BPF action program
+ */
+int timerlat_load_bpf_action_program(const char *program_path)
+{
+	int err;
+
+	obj = bpf_object__open_file(program_path, NULL);
+	if (!obj) {
+		err_msg("Failed to open BPF action program: %s\n", program_path);
+		goto out_err;
+	}
+
+	err = bpf_object__load(obj);
+	if (err) {
+		err_msg("Failed to load BPF action program: %s\n", program_path);
+		goto out_obj_err;
+	}
+
+	prog = bpf_object__find_program_by_name(obj, "action_handler");
+	if (!prog) {
+		err_msg("BPF action program must have 'action_handler' function: %s\n",
+			program_path);
+		goto out_obj_err;
+	}
+
+	err = timerlat_bpf_set_action(prog);
+	if (err) {
+		err_msg("Failed to register BPF action program: %s\n", program_path);
+		goto out_prog_err;
+	}
+
+	return 0;
+
+out_prog_err:
+	prog = NULL;
+out_obj_err:
+	bpf_object__close(obj);
+	obj = NULL;
+out_err:
+	return 1;
+}
+
 #endif /* HAVE_BPF_SKEL */

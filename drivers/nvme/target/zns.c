@@ -73,7 +73,7 @@ void nvmet_execute_identify_ctrl_zns(struct nvmet_req *req)
 	struct nvme_id_ctrl_zns *id;
 	u16 status;
 
-	id = kzalloc(sizeof(*id), GFP_KERNEL);
+	id = kzalloc_obj(*id);
 	if (!id) {
 		status = NVME_SC_INTERNAL;
 		goto out;
@@ -104,7 +104,7 @@ void nvmet_execute_identify_ns_zns(struct nvmet_req *req)
 		goto out;
 	}
 
-	id_zns = kzalloc(sizeof(*id_zns), GFP_KERNEL);
+	id_zns = kzalloc_obj(*id_zns);
 	if (!id_zns) {
 		status = NVME_SC_INTERNAL;
 		goto out;
@@ -541,7 +541,7 @@ void nvmet_bdev_execute_zone_append(struct nvmet_req *req)
 	struct bio *bio;
 	int sg_cnt;
 
-	/* Request is completed on len mismatch in nvmet_check_transter_len() */
+	/* Request is completed on len mismatch in nvmet_check_transfer_len() */
 	if (!nvmet_check_transfer_len(req, nvmet_rw_data_len(req)))
 		return;
 

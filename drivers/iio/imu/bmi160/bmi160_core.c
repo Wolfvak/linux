@@ -161,7 +161,7 @@ struct bmi160_regs {
 	u8 pmu_cmd_suspend;
 };
 
-static struct bmi160_regs bmi160_regs[] = {
+static const struct bmi160_regs bmi160_regs[] = {
 	[BMI160_ACCEL] = {
 		.data	= BMI160_REG_DATA_ACCEL_XOUT_L,
 		.config	= BMI160_REG_ACCEL_CONFIG,
@@ -573,12 +573,16 @@ static int bmi160_config_pin(struct regmap *regmap, enum bmi160_int_pin pin,
 		int_out_ctrl_shift = BMI160_INT1_OUT_CTRL_SHIFT;
 		int_latch_mask = BMI160_INT1_LATCH_MASK;
 		int_map_mask = BMI160_INT1_MAP_DRDY_EN;
+		pin_name = "INT1";
 		break;
 	case BMI160_PIN_INT2:
 		int_out_ctrl_shift = BMI160_INT2_OUT_CTRL_SHIFT;
 		int_latch_mask = BMI160_INT2_LATCH_MASK;
 		int_map_mask = BMI160_INT2_MAP_DRDY_EN;
+		pin_name = "INT2";
 		break;
+	default:
+		return -EINVAL;
 	}
 	int_out_ctrl_mask = BMI160_INT_OUT_CTRL_MASK << int_out_ctrl_shift;
 
@@ -612,17 +616,8 @@ static int bmi160_config_pin(struct regmap *regmap, enum bmi160_int_pin pin,
 	ret = bmi160_write_conf_reg(regmap, BMI160_REG_INT_MAP,
 				    int_map_mask, int_map_mask,
 				    write_usleep);
-	if (ret) {
-		switch (pin) {
-		case BMI160_PIN_INT1:
-			pin_name = "INT1";
-			break;
-		case BMI160_PIN_INT2:
-			pin_name = "INT2";
-			break;
-		}
+	if (ret)
 		dev_err(dev, "Failed to configure %s IRQ pin", pin_name);
-	}
 
 	return ret;
 }
@@ -889,6 +884,25 @@ int bmi160_core_probe(struct device *dev, struct regmap *regmap,
 	return devm_iio_device_register(dev, indio_dev);
 }
 EXPORT_SYMBOL_NS_GPL(bmi160_core_probe, "IIO_BMI160");
+
+static int bmi160_core_runtime_suspend(struct device *dev)
+{
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
+
+	return iio_device_suspend_triggering(indio_dev);
+}
+
+static int bmi160_core_runtime_resume(struct device *dev)
+{
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
+
+	return iio_device_resume_triggering(indio_dev);
+}
+
+const struct dev_pm_ops bmi160_core_pm_ops = {
+	RUNTIME_PM_OPS(bmi160_core_runtime_suspend, bmi160_core_runtime_resume, NULL)
+};
+EXPORT_SYMBOL_NS_GPL(bmi160_core_pm_ops, "IIO_BMI160");
 
 MODULE_AUTHOR("Daniel Baluta <daniel.baluta@intel.com>");
 MODULE_DESCRIPTION("Bosch BMI160 driver");

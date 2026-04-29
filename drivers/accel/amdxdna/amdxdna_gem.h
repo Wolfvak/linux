@@ -7,6 +7,7 @@
 #define _AMDXDNA_GEM_H_
 
 #include <linux/hmm.h>
+#include "amdxdna_pci_drv.h"
 
 struct amdxdna_umap {
 	struct vm_area_struct		*vma;
@@ -41,7 +42,6 @@ struct amdxdna_gem_obj {
 
 	/* Below members is uninitialized when needed */
 	struct drm_mm			mm; /* For AMDXDNA_BO_DEV_HEAP */
-	struct amdxdna_gem_obj		*dev_heap; /* For AMDXDNA_BO_DEV */
 	struct drm_mm_node		mm_node; /* For AMDXDNA_BO_DEV */
 	u32				assigned_hwctx;
 	struct dma_buf			*dma_buf;
@@ -63,6 +63,11 @@ static inline void amdxdna_gem_put_obj(struct amdxdna_gem_obj *abo)
 	drm_gem_object_put(to_gobj(abo));
 }
 
+static inline u64 amdxdna_dev_bo_offset(struct amdxdna_gem_obj *abo)
+{
+	return abo->mem.dev_addr - abo->client->dev_heap->mem.dev_addr;
+}
+
 void amdxdna_umap_put(struct amdxdna_umap *mapp);
 
 struct drm_gem_object *
@@ -72,7 +77,7 @@ amdxdna_gem_prime_import(struct drm_device *dev, struct dma_buf *dma_buf);
 struct amdxdna_gem_obj *
 amdxdna_drm_alloc_dev_bo(struct drm_device *dev,
 			 struct amdxdna_drm_create_bo *args,
-			 struct drm_file *filp, bool use_vmap);
+			 struct drm_file *filp);
 
 int amdxdna_gem_pin_nolock(struct amdxdna_gem_obj *abo);
 int amdxdna_gem_pin(struct amdxdna_gem_obj *abo);

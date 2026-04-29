@@ -45,6 +45,27 @@ struct vkms_frame_info {
 	unsigned int rotation;
 };
 
+struct pixel_argb_s32 {
+	s32 a, r, g, b;
+};
+
+/**
+ * struct pixel_argb_u16 - Internal representation of a pixel color.
+ * @a: Alpha component value, stored in 16 bits, without padding, using
+ *     machine endianness
+ * @r: Red component value, stored in 16 bits, without padding, using
+ *     machine endianness
+ * @g: Green component value, stored in 16 bits, without padding, using
+ *     machine endianness
+ * @b: Blue component value, stored in 16 bits, without padding, using
+ *     machine endianness
+ *
+ * The goal of this structure is to keep enough precision to ensure
+ * correct composition results in VKMS and simplifying color
+ * manipulation by splitting each component into its own field.
+ * Caution: the byte ordering of this structure is machine-dependent,
+ * you can't cast it directly to AR48 or xR48.
+ */
 struct pixel_argb_u16 {
 	u16 a, r, g, b;
 };
@@ -103,16 +124,34 @@ typedef void (*pixel_read_line_t)(const struct vkms_plane_state *plane, int x_st
 				  struct pixel_argb_u16 out_pixel[]);
 
 /**
+ * struct conversion_matrix - Matrix to use for a specific encoding and range
+ *
+ * @matrix: Conversion matrix from yuv to rgb. The matrix is stored in a row-major manner and is
+ * used to compute rgb values from yuv values:
+ *     [[r],[g],[b]] = @matrix * [[y],[u],[v]]
+ *   OR for yvu formats:
+ *     [[r],[g],[b]] = @matrix * [[y],[v],[u]]
+ *  The values of the matrix are signed fixed-point values with 32 bits fractional part.
+ * @y_offset: Offset to apply on the y value.
+ */
+struct conversion_matrix {
+	s64 matrix[3][3];
+	int y_offset;
+};
+
+/**
  * struct vkms_plane_state - Driver specific plane state
  * @base: base plane state
  * @frame_info: data required for composing computation
  * @pixel_read_line: function to read a pixel line in this plane. The creator of a
  *		     struct vkms_plane_state must ensure that this pointer is valid
+ * @conversion_matrix: matrix used for yuv formats to convert to rgb
  */
 struct vkms_plane_state {
 	struct drm_shadow_plane_state base;
 	struct vkms_frame_info *frame_info;
 	pixel_read_line_t pixel_read_line;
+	struct conversion_matrix conversion_matrix;
 };
 
 struct vkms_plane {
@@ -180,8 +219,6 @@ struct vkms_output {
 	struct drm_crtc crtc;
 	struct drm_writeback_connector wb_connector;
 	struct drm_encoder wb_encoder;
-	struct hrtimer vblank_hrtimer;
-	ktime_t period_ns;
 	struct workqueue_struct *composer_workq;
 	spinlock_t lock;
 
@@ -192,18 +229,19 @@ struct vkms_output {
 };
 
 struct vkms_config;
+struct vkms_config_plane;
 
 /**
  * struct vkms_device - Description of a VKMS device
  *
  * @drm - Base device in DRM
- * @platform - Associated platform device
+ * @faux_dev - Associated faux device
  * @output - Configuration and sub-components of the VKMS device
  * @config: Configuration used in this VKMS device
  */
 struct vkms_device {
 	struct drm_device drm;
-	struct platform_device *platform;
+	struct faux_device *faux_dev;
 	const struct vkms_config *config;
 };
 
@@ -222,6 +260,26 @@ struct vkms_device {
 
 #define to_vkms_plane_state(target)\
 	container_of(target, struct vkms_plane_state, base.base)
+
+/**
+ * vkms_create() - Create a device from a configuration
+ * @config: Config used to configure the new device
+ *
+ * A pointer to the created vkms_device is stored in @config
+ *
+ * Returns:
+ * 0 on success or an error.
+ */
+int vkms_create(struct vkms_config *config);
+
+/**
+ * vkms_destroy() - Destroy a device
+ * @config: Config from which the device was created
+ *
+ * The device is completely removed, but the @config is not freed. It can be
+ * reused or destroyed with vkms_config_destroy().
+ */
+void vkms_destroy(struct vkms_config *config);
 
 /**
  * vkms_crtc_init() - Initialize a CRTC for VKMS
@@ -245,10 +303,10 @@ int vkms_output_init(struct vkms_device *vkmsdev);
  * vkms_plane_init() - Initialize a plane
  *
  * @vkmsdev: VKMS device containing the plane
- * @type: type of plane to initialize
+ * @plane_cfg: plane configuration
  */
 struct vkms_plane *vkms_plane_init(struct vkms_device *vkmsdev,
-				   enum drm_plane_type type);
+				   struct vkms_config_plane *plane_cfg);
 
 /* CRC Support */
 const char *const *vkms_get_crc_sources(struct drm_crtc *crtc,
@@ -264,5 +322,8 @@ void vkms_writeback_row(struct vkms_writeback_job *wb, const struct line_buffer 
 
 /* Writeback */
 int vkms_enable_writeback_connector(struct vkms_device *vkmsdev, struct vkms_output *vkms_out);
+
+/* Colorops */
+int vkms_initialize_colorops(struct drm_plane *plane);
 
 #endif /* _VKMS_DRV_H_ */

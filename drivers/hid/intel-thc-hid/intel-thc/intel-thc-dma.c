@@ -232,6 +232,7 @@ static int setup_dma_buffers(struct thc_device *dev,
 		return 0;
 
 	memset(config->sgls, 0, sizeof(config->sgls));
+	memset(config->sgls_nent_pages, 0, sizeof(config->sgls_nent_pages));
 	memset(config->sgls_nent, 0, sizeof(config->sgls_nent));
 
 	cpu_addr = dma_alloc_coherent(dev->dev, prd_tbls_size,
@@ -254,6 +255,7 @@ static int setup_dma_buffers(struct thc_device *dev,
 		}
 		count = dma_map_sg(dev->dev, config->sgls[i], nent, dir);
 
+		config->sgls_nent_pages[i] = nent;
 		config->sgls_nent[i] = count;
 	}
 
@@ -299,7 +301,7 @@ static void release_dma_buffers(struct thc_device *dev,
 			continue;
 
 		dma_unmap_sg(dev->dev, config->sgls[i],
-			     config->sgls_nent[i],
+			     config->sgls_nent_pages[i],
 			     config->dir);
 
 		sgl_free(config->sgls[i]);
@@ -573,6 +575,11 @@ static int read_dma_buffer(struct thc_device *dev,
 		return -EINVAL;
 	}
 
+	if (!read_config->prd_tbls || !read_config->sgls[prd_table_index]) {
+		dev_err_once(dev->dev, "PRD tables are not ready yet\n");
+		return -EINVAL;
+	}
+
 	prd_tbl = &read_config->prd_tbls[prd_table_index];
 	mes_len = calc_message_len(prd_tbl, &nent);
 	if (mes_len > read_config->max_packet_size) {
@@ -712,6 +719,28 @@ static int thc_swdma_read_start(struct thc_device *dev, void *write_buff,
 
 	thc_reset_dma_settings(dev);
 
+	/*
+	 * Max input size control feature is only available for RxDMA, it must keep disabled
+	 * during SWDMA operation, and restore to previous state after SWDMA is done.
+	 * Max input size variables in THC device context track hardware state, and keep change
+	 * when feature state was changed, so those variables cannot be used to record feature
+	 * state after state was changed during SWDMA operation. Here have to use a temp variable
+	 * in DMA context to record feature state before SWDMA operation.
+	 */
+	if (dev->i2c_max_rx_size_en) {
+		thc_i2c_rx_max_size_enable(dev, false);
+		dev->dma_ctx->rx_max_size_en = true;
+	}
+
+	/*
+	 * Interrupt delay feature is in the same situation with max input size control feature,
+	 * needs record feature state before SWDMA.
+	 */
+	if (dev->i2c_int_delay_en) {
+		thc_i2c_rx_int_delay_enable(dev, false);
+		dev->dma_ctx->rx_int_delay_en = true;
+	}
+
 	mask = THC_M_PRT_RPRD_CNTRL_SW_THC_SWDMA_I2C_WBC |
 	       THC_M_PRT_RPRD_CNTRL_SW_THC_SWDMA_I2C_RX_DLEN_EN;
 	val = FIELD_PREP(THC_M_PRT_RPRD_CNTRL_SW_THC_SWDMA_I2C_WBC, write_len) |
@@ -753,6 +782,24 @@ static int thc_swdma_read_completion(struct thc_device *dev)
 	ret = thc_wait_for_dma_pause(dev, THC_SWDMA);
 	if (ret)
 		return ret;
+
+	/*
+	 * Restore max input size control feature to previous state after SWDMA if it was
+	 * enabled before SWDMA, and reset temp rx_max_size_en variable for next time.
+	 */
+	if (dev->dma_ctx->rx_max_size_en) {
+		thc_i2c_rx_max_size_enable(dev, true);
+		dev->dma_ctx->rx_max_size_en = false;
+	}
+
+	/*
+	 * Restore input interrupt delay feature to previous state after SWDMA if it was
+	 * enabled before SWDMA, and reset temp rx_int_delay_en variable for next time.
+	 */
+	if (dev->dma_ctx->rx_int_delay_en) {
+		thc_i2c_rx_int_delay_enable(dev, true);
+		dev->dma_ctx->rx_int_delay_en = false;
+	}
 
 	thc_reset_dma_settings(dev);
 

@@ -17,6 +17,7 @@
 #include <linux/can/skb.h>
 #include <linux/errqueue.h>
 #include <linux/if_arp.h>
+#include <net/can.h>
 
 #include "j1939-priv.h"
 
@@ -311,6 +312,7 @@ static void j1939_sk_recv_one(struct j1939_sock *jsk, struct sk_buff *oskb)
 {
 	const struct j1939_sk_buff_cb *oskcb = j1939_skb_to_cb(oskb);
 	struct j1939_sk_buff_cb *skcb;
+	enum skb_drop_reason reason;
 	struct sk_buff *skb;
 
 	if (oskb->sk == &jsk->sk)
@@ -331,8 +333,8 @@ static void j1939_sk_recv_one(struct j1939_sock *jsk, struct sk_buff *oskb)
 	if (skb->sk)
 		skcb->msg_flags |= MSG_DONTROUTE;
 
-	if (sock_queue_rcv_skb(&jsk->sk, skb) < 0)
-		kfree_skb(skb);
+	if (sock_queue_rcv_skb_reason(&jsk->sk, skb, &reason) < 0)
+		sk_skb_reason_drop(&jsk->sk, skb, reason);
 }
 
 bool j1939_sk_recv_match(struct j1939_priv *priv, struct j1939_sk_buff_cb *skcb)
@@ -439,7 +441,7 @@ static int j1939_sk_sanity_check(struct sockaddr_can *addr, int len)
 	return 0;
 }
 
-static int j1939_sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
+static int j1939_sk_bind(struct socket *sock, struct sockaddr_unsized *uaddr, int len)
 {
 	struct sockaddr_can *addr = (struct sockaddr_can *)uaddr;
 	struct j1939_sock *jsk = j1939_sk(sock->sk);
@@ -477,6 +479,12 @@ static int j1939_sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 
 		ndev = dev_get_by_index(net, addr->can_ifindex);
 		if (!ndev) {
+			ret = -ENODEV;
+			goto out_release_sock;
+		}
+
+		if (ndev->reg_state != NETREG_REGISTERED) {
+			dev_put(ndev);
 			ret = -ENODEV;
 			goto out_release_sock;
 		}
@@ -520,6 +528,9 @@ static int j1939_sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 	ret = j1939_local_ecu_get(priv, jsk->addr.src_name, jsk->addr.sa);
 	if (ret) {
 		j1939_netdev_stop(priv);
+		jsk->priv = NULL;
+		synchronize_rcu();
+		j1939_priv_put(priv);
 		goto out_release_sock;
 	}
 
@@ -531,7 +542,7 @@ static int j1939_sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 	return ret;
 }
 
-static int j1939_sk_connect(struct socket *sock, struct sockaddr *uaddr,
+static int j1939_sk_connect(struct socket *sock, struct sockaddr_unsized *uaddr,
 			    int len, int flags)
 {
 	struct sockaddr_can *addr = (struct sockaddr_can *)uaddr;
@@ -874,20 +885,25 @@ static struct sk_buff *j1939_sk_alloc_skb(struct net_device *ndev,
 	struct j1939_sock *jsk = j1939_sk(sk);
 	struct j1939_sk_buff_cb *skcb;
 	struct sk_buff *skb;
+	struct can_skb_ext *csx;
 	int ret;
 
 	skb = sock_alloc_send_skb(sk,
 				  size +
 				  sizeof(struct can_frame) -
-				  sizeof(((struct can_frame *)NULL)->data) +
-				  sizeof(struct can_skb_priv),
+				  sizeof(((struct can_frame *)NULL)->data),
 				  msg->msg_flags & MSG_DONTWAIT, &ret);
 	if (!skb)
 		goto failure;
 
-	can_skb_reserve(skb);
-	can_skb_prv(skb)->ifindex = ndev->ifindex;
-	can_skb_prv(skb)->skbcnt = 0;
+	csx = can_skb_ext_add(skb);
+	if (!csx) {
+		kfree_skb(skb);
+		ret = -ENOMEM;
+		goto failure;
+	}
+
+	csx->can_iif = ndev->ifindex;
 	skb_reserve(skb, offsetof(struct can_frame, data));
 
 	ret = memcpy_from_msg(skb_put(skb, size), msg, size);
@@ -1297,6 +1313,55 @@ void j1939_sk_netdev_event_netdown(struct j1939_priv *priv)
 		j1939_sk_queue_drop_all(priv, jsk, error_code);
 	}
 	read_unlock_bh(&priv->j1939_socks_lock);
+}
+
+void j1939_sk_netdev_event_unregister(struct j1939_priv *priv)
+{
+	struct sock *sk;
+	struct j1939_sock *jsk;
+	bool wait_rcu = false;
+
+rescan: /* The caller is holding a ref on this "priv" via j1939_priv_get_by_ndev(). */
+	read_lock_bh(&priv->j1939_socks_lock);
+	list_for_each_entry(jsk, &priv->j1939_socks, list) {
+		/* Skip if j1939_jsk_add() is not called on this socket. */
+		if (!(jsk->state & J1939_SOCK_BOUND))
+			continue;
+		sk = &jsk->sk;
+		sock_hold(sk);
+		read_unlock_bh(&priv->j1939_socks_lock);
+		/* Check if j1939_jsk_del() is not yet called on this socket after holding
+		 * socket's lock, for both j1939_sk_bind() and j1939_sk_release() call
+		 * j1939_jsk_del() with socket's lock held.
+		 */
+		lock_sock(sk);
+		if (jsk->state & J1939_SOCK_BOUND) {
+			/* Neither j1939_sk_bind() nor j1939_sk_release() called j1939_jsk_del().
+			 * Make this socket no longer bound, by pretending as if j1939_sk_bind()
+			 * dropped old references but did not get new references.
+			 */
+			j1939_jsk_del(priv, jsk);
+			j1939_local_ecu_put(priv, jsk->addr.src_name, jsk->addr.sa);
+			j1939_netdev_stop(priv);
+			/* Call j1939_priv_put() now and prevent j1939_sk_sock_destruct() from
+			 * calling the corresponding j1939_priv_put().
+			 *
+			 * j1939_sk_sock_destruct() is supposed to call j1939_priv_put() after
+			 * an RCU grace period. But since the caller is holding a ref on this
+			 * "priv", we can defer synchronize_rcu() until immediately before
+			 * the caller calls j1939_priv_put().
+			 */
+			j1939_priv_put(priv);
+			jsk->priv = NULL;
+			wait_rcu = true;
+		}
+		release_sock(sk);
+		sock_put(sk);
+		goto rescan;
+	}
+	read_unlock_bh(&priv->j1939_socks_lock);
+	if (wait_rcu)
+		synchronize_rcu();
 }
 
 static int j1939_sk_no_ioctlcmd(struct socket *sock, unsigned int cmd,

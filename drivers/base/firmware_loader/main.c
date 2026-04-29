@@ -127,7 +127,7 @@ static struct fw_priv *__allocate_fw_priv(const char *fw_name,
 	if (offset != 0 && !(opt_flags & FW_OPT_PARTIAL))
 		return NULL;
 
-	fw_priv = kzalloc(sizeof(*fw_priv), GFP_ATOMIC);
+	fw_priv = kzalloc_obj(*fw_priv, GFP_ATOMIC);
 	if (!fw_priv)
 		return NULL;
 
@@ -747,7 +747,7 @@ _request_firmware_prepare(struct firmware **firmware_p, const char *name,
 	struct fw_priv *fw_priv;
 	int ret;
 
-	*firmware_p = firmware = kzalloc(sizeof(*firmware), GFP_KERNEL);
+	*firmware_p = firmware = kzalloc_obj(*firmware);
 	if (!firmware) {
 		dev_err(device, "%s: kmalloc(struct firmware) failed\n",
 			__func__);
@@ -822,26 +822,6 @@ static void fw_log_firmware_info(const struct firmware *fw, const char *name,
 {}
 #endif
 
-/*
- * Reject firmware file names with ".." path components.
- * There are drivers that construct firmware file names from device-supplied
- * strings, and we don't want some device to be able to tell us "I would like to
- * be sent my firmware from ../../../etc/shadow, please".
- *
- * Search for ".." surrounded by either '/' or start/end of string.
- *
- * This intentionally only looks at the firmware name, not at the firmware base
- * directory or at symlink contents.
- */
-static bool name_contains_dotdot(const char *name)
-{
-	size_t name_len = strlen(name);
-
-	return strcmp(name, "..") == 0 || strncmp(name, "../", 3) == 0 ||
-	       strstr(name, "/../") != NULL ||
-	       (name_len >= 3 && strcmp(name+name_len-3, "/..") == 0);
-}
-
 /* called from request_firmware() and request_firmware_work_func() */
 static int
 _request_firmware(const struct firmware **firmware_p, const char *name,
@@ -849,8 +829,6 @@ _request_firmware(const struct firmware **firmware_p, const char *name,
 		  size_t offset, u32 opt_flags)
 {
 	struct firmware *fw = NULL;
-	struct cred *kern_cred = NULL;
-	const struct cred *old_cred;
 	bool nondirect = false;
 	int ret;
 
@@ -862,6 +840,17 @@ _request_firmware(const struct firmware **firmware_p, const char *name,
 		goto out;
 	}
 
+
+	/*
+	 * Reject firmware file names with ".." path components.
+	 * There are drivers that construct firmware file names from
+	 * device-supplied strings, and we don't want some device to be
+	 * able to tell us "I would like to be sent my firmware from
+	 * ../../../etc/shadow, please".
+	 *
+	 * This intentionally only looks at the firmware name, not at
+	 * the firmware base directory or at symlink contents.
+	 */
 	if (name_contains_dotdot(name)) {
 		dev_warn(device,
 			 "Firmware load for '%s' refused, path contains '..' component\n",
@@ -880,45 +869,38 @@ _request_firmware(const struct firmware **firmware_p, const char *name,
 	 * called by a driver when serving an unrelated request from userland, we use
 	 * the kernel credentials to read the file.
 	 */
-	kern_cred = prepare_kernel_cred(&init_task);
-	if (!kern_cred) {
-		ret = -ENOMEM;
-		goto out;
-	}
-	old_cred = override_creds(kern_cred);
+	scoped_with_kernel_creds() {
+		ret = fw_get_filesystem_firmware(device, fw->priv, "", NULL);
 
-	ret = fw_get_filesystem_firmware(device, fw->priv, "", NULL);
-
-	/* Only full reads can support decompression, platform, and sysfs. */
-	if (!(opt_flags & FW_OPT_PARTIAL))
-		nondirect = true;
+		/* Only full reads can support decompression, platform, and sysfs. */
+		if (!(opt_flags & FW_OPT_PARTIAL))
+			nondirect = true;
 
 #ifdef CONFIG_FW_LOADER_COMPRESS_ZSTD
-	if (ret == -ENOENT && nondirect)
-		ret = fw_get_filesystem_firmware(device, fw->priv, ".zst",
-						 fw_decompress_zstd);
+		if (ret == -ENOENT && nondirect)
+			ret = fw_get_filesystem_firmware(device, fw->priv, ".zst",
+							 fw_decompress_zstd);
 #endif
 #ifdef CONFIG_FW_LOADER_COMPRESS_XZ
-	if (ret == -ENOENT && nondirect)
-		ret = fw_get_filesystem_firmware(device, fw->priv, ".xz",
-						 fw_decompress_xz);
+		if (ret == -ENOENT && nondirect)
+			ret = fw_get_filesystem_firmware(device, fw->priv, ".xz",
+							 fw_decompress_xz);
 #endif
-	if (ret == -ENOENT && nondirect)
-		ret = firmware_fallback_platform(fw->priv);
+		if (ret == -ENOENT && nondirect)
+			ret = firmware_fallback_platform(fw->priv);
 
-	if (ret) {
-		if (!(opt_flags & FW_OPT_NO_WARN))
-			dev_warn(device,
-				 "Direct firmware load for %s failed with error %d\n",
-				 name, ret);
-		if (nondirect)
-			ret = firmware_fallback_sysfs(fw, name, device,
-						      opt_flags, ret);
-	} else
-		ret = assign_fw(fw, device);
-
-	revert_creds(old_cred);
-	put_cred(kern_cred);
+		if (ret) {
+			if (!(opt_flags & FW_OPT_NO_WARN))
+				dev_warn(device,
+					 "Direct firmware load for %s failed with error %d\n",
+					 name, ret);
+			if (nondirect)
+				ret = firmware_fallback_sysfs(fw, name, device,
+							      opt_flags, ret);
+		} else {
+			ret = assign_fw(fw, device);
+		}
+	}
 
 out:
 	if (ret < 0) {
@@ -1183,7 +1165,7 @@ static int _request_firmware_nowait(
 {
 	struct firmware_work *fw_work;
 
-	fw_work = kzalloc(sizeof(struct firmware_work), gfp);
+	fw_work = kzalloc_obj(struct firmware_work, gfp);
 	if (!fw_work)
 		return -ENOMEM;
 
@@ -1356,7 +1338,7 @@ static struct fw_cache_entry *alloc_fw_cache_entry(const char *name)
 {
 	struct fw_cache_entry *fce;
 
-	fce = kzalloc(sizeof(*fce), GFP_ATOMIC);
+	fce = kzalloc_obj(*fce, GFP_ATOMIC);
 	if (!fce)
 		goto exit;
 
@@ -1594,14 +1576,18 @@ static int fw_pm_notify(struct notifier_block *notify_block,
 }
 
 /* stop caching firmware once syscore_suspend is reached */
-static int fw_suspend(void)
+static int fw_suspend(void *data)
 {
 	fw_cache.state = FW_LOADER_NO_CACHE;
 	return 0;
 }
 
-static struct syscore_ops fw_syscore_ops = {
+static const struct syscore_ops fw_syscore_ops = {
 	.suspend = fw_suspend,
+};
+
+static struct syscore fw_syscore = {
+	.ops = &fw_syscore_ops,
 };
 
 static int __init register_fw_pm_ops(void)
@@ -1619,14 +1605,14 @@ static int __init register_fw_pm_ops(void)
 	if (ret)
 		return ret;
 
-	register_syscore_ops(&fw_syscore_ops);
+	register_syscore(&fw_syscore);
 
 	return ret;
 }
 
 static inline void unregister_fw_pm_ops(void)
 {
-	unregister_syscore_ops(&fw_syscore_ops);
+	unregister_syscore(&fw_syscore);
 	unregister_pm_notifier(&fw_cache.pm_notify);
 }
 #else

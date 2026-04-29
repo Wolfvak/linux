@@ -83,6 +83,7 @@ struct default_config_case {
 	bool enable_cursor;
 	bool enable_writeback;
 	bool enable_overlay;
+	bool enable_plane_pipeline;
 };
 
 static void vkms_config_test_empty_config(struct kunit *test)
@@ -108,14 +109,22 @@ static void vkms_config_test_empty_config(struct kunit *test)
 }
 
 static struct default_config_case default_config_cases[] = {
-	{ false, false, false },
-	{ true, false, false },
-	{ true, true, false },
-	{ true, false, true },
-	{ false, true, false },
-	{ false, true, true },
-	{ false, false, true },
-	{ true, true, true },
+	{ false, false, false, false },
+	{ true, false, false, false },
+	{ true, true, false, false },
+	{ true, false, true, false },
+	{ false, true, false, false },
+	{ false, true, true, false },
+	{ false, false, true, false },
+	{ true, true, true, false },
+	{ false, false, false, true },
+	{ true, false, false, true },
+	{ true, true, false, true },
+	{ true, false, true, true },
+	{ false, true, false, true },
+	{ false, true, true, true },
+	{ false, false, true, true },
+	{ true, true, true, true },
 };
 
 KUNIT_ARRAY_PARAM(default_config, default_config_cases, NULL);
@@ -132,11 +141,15 @@ static void vkms_config_test_default_config(struct kunit *test)
 
 	config = vkms_config_default_create(params->enable_cursor,
 					    params->enable_writeback,
-					    params->enable_overlay);
+					    params->enable_overlay,
+					    params->enable_plane_pipeline);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, config);
 
 	/* Planes */
 	vkms_config_for_each_plane(config, plane_cfg) {
+		KUNIT_EXPECT_EQ(test,
+				vkms_config_plane_get_default_pipeline(plane_cfg),
+				params->enable_plane_pipeline);
 		switch (vkms_config_plane_get_type(plane_cfg)) {
 		case DRM_PLANE_TYPE_PRIMARY:
 			n_primaries++;
@@ -200,6 +213,7 @@ static void vkms_config_test_get_planes(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, n_planes, 0);
 
 	plane_cfg1 = vkms_config_create_plane(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_cfg1);
 	vkms_config_for_each_plane(config, plane_cfg) {
 		n_planes++;
 		if (plane_cfg != plane_cfg1)
@@ -209,6 +223,7 @@ static void vkms_config_test_get_planes(struct kunit *test)
 	n_planes = 0;
 
 	plane_cfg2 = vkms_config_create_plane(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_cfg2);
 	vkms_config_for_each_plane(config, plane_cfg) {
 		n_planes++;
 		if (plane_cfg != plane_cfg1 && plane_cfg != plane_cfg2)
@@ -242,6 +257,7 @@ static void vkms_config_test_get_crtcs(struct kunit *test)
 		KUNIT_FAIL(test, "Unexpected CRTC");
 
 	crtc_cfg1 = vkms_config_create_crtc(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, crtc_cfg1);
 	KUNIT_ASSERT_EQ(test, vkms_config_get_num_crtcs(config), 1);
 	vkms_config_for_each_crtc(config, crtc_cfg) {
 		if (crtc_cfg != crtc_cfg1)
@@ -249,6 +265,7 @@ static void vkms_config_test_get_crtcs(struct kunit *test)
 	}
 
 	crtc_cfg2 = vkms_config_create_crtc(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, crtc_cfg2);
 	KUNIT_ASSERT_EQ(test, vkms_config_get_num_crtcs(config), 2);
 	vkms_config_for_each_crtc(config, crtc_cfg) {
 		if (crtc_cfg != crtc_cfg1 && crtc_cfg != crtc_cfg2)
@@ -280,6 +297,7 @@ static void vkms_config_test_get_encoders(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, n_encoders, 0);
 
 	encoder_cfg1 = vkms_config_create_encoder(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, encoder_cfg1);
 	vkms_config_for_each_encoder(config, encoder_cfg) {
 		n_encoders++;
 		if (encoder_cfg != encoder_cfg1)
@@ -289,6 +307,7 @@ static void vkms_config_test_get_encoders(struct kunit *test)
 	n_encoders = 0;
 
 	encoder_cfg2 = vkms_config_create_encoder(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, encoder_cfg2);
 	vkms_config_for_each_encoder(config, encoder_cfg) {
 		n_encoders++;
 		if (encoder_cfg != encoder_cfg1 && encoder_cfg != encoder_cfg2)
@@ -324,6 +343,7 @@ static void vkms_config_test_get_connectors(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, n_connectors, 0);
 
 	connector_cfg1 = vkms_config_create_connector(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, connector_cfg1);
 	vkms_config_for_each_connector(config, connector_cfg) {
 		n_connectors++;
 		if (connector_cfg != connector_cfg1)
@@ -333,6 +353,7 @@ static void vkms_config_test_get_connectors(struct kunit *test)
 	n_connectors = 0;
 
 	connector_cfg2 = vkms_config_create_connector(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, connector_cfg2);
 	vkms_config_for_each_connector(config, connector_cfg) {
 		n_connectors++;
 		if (connector_cfg != connector_cfg1 &&
@@ -360,7 +381,7 @@ static void vkms_config_test_invalid_plane_number(struct kunit *test)
 	struct vkms_config_plane *plane_cfg;
 	int n;
 
-	config = vkms_config_default_create(false, false, false);
+	config = vkms_config_default_create(false, false, false, false);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, config);
 
 	/* Invalid: No planes */
@@ -370,7 +391,7 @@ static void vkms_config_test_invalid_plane_number(struct kunit *test)
 
 	/* Invalid: Too many planes */
 	for (n = 0; n <= 32; n++)
-		vkms_config_create_plane(config);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vkms_config_create_plane(config));
 
 	KUNIT_EXPECT_FALSE(test, vkms_config_is_valid(config));
 
@@ -385,7 +406,7 @@ static void vkms_config_test_valid_plane_type(struct kunit *test)
 	struct vkms_config_encoder *encoder_cfg;
 	int err;
 
-	config = vkms_config_default_create(false, false, false);
+	config = vkms_config_default_create(false, false, false, false);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, config);
 
 	plane_cfg = get_first_plane(config);
@@ -395,6 +416,7 @@ static void vkms_config_test_valid_plane_type(struct kunit *test)
 
 	/* Invalid: No primary plane */
 	plane_cfg = vkms_config_create_plane(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_cfg);
 	vkms_config_plane_set_type(plane_cfg, DRM_PLANE_TYPE_OVERLAY);
 	err = vkms_config_plane_attach_crtc(plane_cfg, crtc_cfg);
 	KUNIT_EXPECT_EQ(test, err, 0);
@@ -402,11 +424,13 @@ static void vkms_config_test_valid_plane_type(struct kunit *test)
 
 	/* Invalid: Multiple primary planes */
 	plane_cfg = vkms_config_create_plane(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_cfg);
 	vkms_config_plane_set_type(plane_cfg, DRM_PLANE_TYPE_PRIMARY);
 	err = vkms_config_plane_attach_crtc(plane_cfg, crtc_cfg);
 	KUNIT_EXPECT_EQ(test, err, 0);
 
 	plane_cfg = vkms_config_create_plane(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_cfg);
 	vkms_config_plane_set_type(plane_cfg, DRM_PLANE_TYPE_PRIMARY);
 	err = vkms_config_plane_attach_crtc(plane_cfg, crtc_cfg);
 	KUNIT_EXPECT_EQ(test, err, 0);
@@ -419,11 +443,13 @@ static void vkms_config_test_valid_plane_type(struct kunit *test)
 
 	/* Invalid: Multiple cursor planes */
 	plane_cfg = vkms_config_create_plane(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_cfg);
 	vkms_config_plane_set_type(plane_cfg, DRM_PLANE_TYPE_CURSOR);
 	err = vkms_config_plane_attach_crtc(plane_cfg, crtc_cfg);
 	KUNIT_EXPECT_EQ(test, err, 0);
 
 	plane_cfg = vkms_config_create_plane(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_cfg);
 	vkms_config_plane_set_type(plane_cfg, DRM_PLANE_TYPE_CURSOR);
 	err = vkms_config_plane_attach_crtc(plane_cfg, crtc_cfg);
 	KUNIT_EXPECT_EQ(test, err, 0);
@@ -437,12 +463,16 @@ static void vkms_config_test_valid_plane_type(struct kunit *test)
 	/* Invalid: Second CRTC without primary plane */
 	crtc_cfg = vkms_config_create_crtc(config);
 	encoder_cfg = vkms_config_create_encoder(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, crtc_cfg);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, encoder_cfg);
+
 	err = vkms_config_encoder_attach_crtc(encoder_cfg, crtc_cfg);
 	KUNIT_EXPECT_EQ(test, err, 0);
 	KUNIT_EXPECT_FALSE(test, vkms_config_is_valid(config));
 
 	/* Valid: Second CRTC with a primary plane */
 	plane_cfg = vkms_config_create_plane(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_cfg);
 	vkms_config_plane_set_type(plane_cfg, DRM_PLANE_TYPE_PRIMARY);
 	err = vkms_config_plane_attach_crtc(plane_cfg, crtc_cfg);
 	KUNIT_EXPECT_EQ(test, err, 0);
@@ -457,7 +487,7 @@ static void vkms_config_test_valid_plane_possible_crtcs(struct kunit *test)
 	struct vkms_config_plane *plane_cfg;
 	struct vkms_config_crtc *crtc_cfg;
 
-	config = vkms_config_default_create(false, false, false);
+	config = vkms_config_default_create(false, false, false, false);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, config);
 
 	plane_cfg = get_first_plane(config);
@@ -476,7 +506,7 @@ static void vkms_config_test_invalid_crtc_number(struct kunit *test)
 	struct vkms_config_crtc *crtc_cfg;
 	int n;
 
-	config = vkms_config_default_create(false, false, false);
+	config = vkms_config_default_create(false, false, false, false);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, config);
 
 	/* Invalid: No CRTCs */
@@ -486,7 +516,7 @@ static void vkms_config_test_invalid_crtc_number(struct kunit *test)
 
 	/* Invalid: Too many CRTCs */
 	for (n = 0; n <= 32; n++)
-		vkms_config_create_crtc(config);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vkms_config_create_crtc(config));
 
 	KUNIT_EXPECT_FALSE(test, vkms_config_is_valid(config));
 
@@ -499,7 +529,7 @@ static void vkms_config_test_invalid_encoder_number(struct kunit *test)
 	struct vkms_config_encoder *encoder_cfg;
 	int n;
 
-	config = vkms_config_default_create(false, false, false);
+	config = vkms_config_default_create(false, false, false, false);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, config);
 
 	/* Invalid: No encoders */
@@ -509,7 +539,7 @@ static void vkms_config_test_invalid_encoder_number(struct kunit *test)
 
 	/* Invalid: Too many encoders */
 	for (n = 0; n <= 32; n++)
-		vkms_config_create_encoder(config);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vkms_config_create_encoder(config));
 
 	KUNIT_EXPECT_FALSE(test, vkms_config_is_valid(config));
 
@@ -524,19 +554,22 @@ static void vkms_config_test_valid_encoder_possible_crtcs(struct kunit *test)
 	struct vkms_config_encoder *encoder_cfg;
 	int err;
 
-	config = vkms_config_default_create(false, false, false);
+	config = vkms_config_default_create(false, false, false, false);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, config);
 
 	crtc_cfg1 = get_first_crtc(config);
 
 	/* Invalid: Encoder without a possible CRTC */
 	encoder_cfg = vkms_config_create_encoder(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, encoder_cfg);
 	KUNIT_EXPECT_FALSE(test, vkms_config_is_valid(config));
 
 	/* Valid: Second CRTC with shared encoder */
 	crtc_cfg2 = vkms_config_create_crtc(config);
-
 	plane_cfg = vkms_config_create_plane(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, crtc_cfg2);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_cfg);
+
 	vkms_config_plane_set_type(plane_cfg, DRM_PLANE_TYPE_PRIMARY);
 	err = vkms_config_plane_attach_crtc(plane_cfg, crtc_cfg2);
 	KUNIT_EXPECT_EQ(test, err, 0);
@@ -567,7 +600,7 @@ static void vkms_config_test_invalid_connector_number(struct kunit *test)
 	struct vkms_config_connector *connector_cfg;
 	int n;
 
-	config = vkms_config_default_create(false, false, false);
+	config = vkms_config_default_create(false, false, false, false);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, config);
 
 	/* Invalid: No connectors */
@@ -577,7 +610,7 @@ static void vkms_config_test_invalid_connector_number(struct kunit *test)
 
 	/* Invalid: Too many connectors */
 	for (n = 0; n <= 32; n++)
-		connector_cfg = vkms_config_create_connector(config);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, vkms_config_create_connector(config));
 
 	KUNIT_EXPECT_FALSE(test, vkms_config_is_valid(config));
 
@@ -590,7 +623,7 @@ static void vkms_config_test_valid_connector_possible_encoders(struct kunit *tes
 	struct vkms_config_encoder *encoder_cfg;
 	struct vkms_config_connector *connector_cfg;
 
-	config = vkms_config_default_create(false, false, false);
+	config = vkms_config_default_create(false, false, false, false);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, config);
 
 	encoder_cfg = get_first_encoder(config);
@@ -669,13 +702,19 @@ static void vkms_config_test_plane_attach_crtc(struct kunit *test)
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, config);
 
 	overlay_cfg = vkms_config_create_plane(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, overlay_cfg);
 	vkms_config_plane_set_type(overlay_cfg, DRM_PLANE_TYPE_OVERLAY);
+
 	primary_cfg = vkms_config_create_plane(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, primary_cfg);
 	vkms_config_plane_set_type(primary_cfg, DRM_PLANE_TYPE_PRIMARY);
+
 	cursor_cfg = vkms_config_create_plane(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cursor_cfg);
 	vkms_config_plane_set_type(cursor_cfg, DRM_PLANE_TYPE_CURSOR);
 
 	crtc_cfg = vkms_config_create_crtc(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, crtc_cfg);
 
 	/* No primary or cursor planes */
 	KUNIT_EXPECT_NULL(test, vkms_config_crtc_primary_plane(config, crtc_cfg));
@@ -734,6 +773,11 @@ static void vkms_config_test_plane_get_possible_crtcs(struct kunit *test)
 	plane_cfg2 = vkms_config_create_plane(config);
 	crtc_cfg1 = vkms_config_create_crtc(config);
 	crtc_cfg2 = vkms_config_create_crtc(config);
+
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_cfg1);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, plane_cfg2);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, crtc_cfg1);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, crtc_cfg2);
 
 	/* No possible CRTCs */
 	vkms_config_plane_for_each_possible_crtc(plane_cfg1, idx, possible_crtc)
@@ -799,6 +843,11 @@ static void vkms_config_test_encoder_get_possible_crtcs(struct kunit *test)
 	crtc_cfg1 = vkms_config_create_crtc(config);
 	crtc_cfg2 = vkms_config_create_crtc(config);
 
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, encoder_cfg1);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, encoder_cfg2);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, crtc_cfg1);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, crtc_cfg2);
+
 	/* No possible CRTCs */
 	vkms_config_encoder_for_each_possible_crtc(encoder_cfg1, idx, possible_crtc)
 		KUNIT_FAIL(test, "Unexpected possible CRTC");
@@ -863,6 +912,11 @@ static void vkms_config_test_connector_get_possible_encoders(struct kunit *test)
 	encoder_cfg1 = vkms_config_create_encoder(config);
 	encoder_cfg2 = vkms_config_create_encoder(config);
 
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, connector_cfg1);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, connector_cfg2);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, encoder_cfg1);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, encoder_cfg2);
+
 	/* No possible encoders */
 	vkms_config_connector_for_each_possible_encoder(connector_cfg1, idx,
 							possible_encoder)
@@ -916,6 +970,29 @@ static void vkms_config_test_connector_get_possible_encoders(struct kunit *test)
 	vkms_config_destroy(config);
 }
 
+static void vkms_config_test_connector_status(struct kunit *test)
+{
+	struct vkms_config *config;
+	struct vkms_config_connector *connector_cfg;
+	enum drm_connector_status status;
+
+	config = vkms_config_create("test");
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, config);
+
+	connector_cfg = vkms_config_create_connector(config);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, connector_cfg);
+
+	status = vkms_config_connector_get_status(connector_cfg);
+	KUNIT_EXPECT_EQ(test, status, connector_status_connected);
+
+	vkms_config_connector_set_status(connector_cfg,
+					 connector_status_disconnected);
+	status = vkms_config_connector_get_status(connector_cfg);
+	KUNIT_EXPECT_EQ(test, status, connector_status_disconnected);
+
+	vkms_config_destroy(config);
+}
+
 static struct kunit_case vkms_config_test_cases[] = {
 	KUNIT_CASE(vkms_config_test_empty_config),
 	KUNIT_CASE_PARAM(vkms_config_test_default_config,
@@ -937,6 +1014,7 @@ static struct kunit_case vkms_config_test_cases[] = {
 	KUNIT_CASE(vkms_config_test_plane_get_possible_crtcs),
 	KUNIT_CASE(vkms_config_test_encoder_get_possible_crtcs),
 	KUNIT_CASE(vkms_config_test_connector_get_possible_encoders),
+	KUNIT_CASE(vkms_config_test_connector_status),
 	{}
 };
 

@@ -32,6 +32,7 @@
 #include <linux/memcontrol.h>
 #include <linux/mm_inline.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 #include <linux/random.h>
 #include <linux/reboot.h>
 #include <linux/notifier.h>
@@ -114,19 +115,9 @@ struct kmem_cache *drbd_al_ext_cache;	/* activity log extents */
 mempool_t drbd_request_mempool;
 mempool_t drbd_ee_mempool;
 mempool_t drbd_md_io_page_pool;
+mempool_t drbd_buffer_page_pool;
 struct bio_set drbd_md_io_bio_set;
 struct bio_set drbd_io_bio_set;
-
-/* I do not use a standard mempool, because:
-   1) I want to hand out the pre-allocated objects first.
-   2) I want to be able to interrupt sleeping allocation with a signal.
-   Note: This is a single linked list, the next pointer is the private
-	 member of struct page.
- */
-struct page *drbd_pp_pool;
-DEFINE_SPINLOCK(drbd_pp_lock);
-int          drbd_pp_vacant;
-wait_queue_head_t drbd_pp_wait;
 
 DEFINE_RATELIMIT_STATE(drbd_ratelimit_state, 5 * HZ, 5);
 
@@ -742,9 +733,9 @@ int drbd_send_sync_param(struct drbd_peer_device *peer_device)
 	}
 
 	if (apv >= 88)
-		strcpy(p->verify_alg, nc->verify_alg);
+		strscpy(p->verify_alg, nc->verify_alg);
 	if (apv >= 89)
-		strcpy(p->csums_alg, nc->csums_alg);
+		strscpy(p->csums_alg, nc->csums_alg);
 	rcu_read_unlock();
 
 	return drbd_send_command(peer_device, sock, cmd, size, NULL, 0);
@@ -755,6 +746,7 @@ int __drbd_send_protocol(struct drbd_connection *connection, enum drbd_packet cm
 	struct drbd_socket *sock;
 	struct p_protocol *p;
 	struct net_conf *nc;
+	size_t integrity_alg_len;
 	int size, cf;
 
 	sock = &connection->data;
@@ -772,8 +764,10 @@ int __drbd_send_protocol(struct drbd_connection *connection, enum drbd_packet cm
 	}
 
 	size = sizeof(*p);
-	if (connection->agreed_pro_version >= 87)
-		size += strlen(nc->integrity_alg) + 1;
+	if (connection->agreed_pro_version >= 87) {
+		integrity_alg_len = strlen(nc->integrity_alg) + 1;
+		size += integrity_alg_len;
+	}
 
 	p->protocol      = cpu_to_be32(nc->wire_protocol);
 	p->after_sb_0p   = cpu_to_be32(nc->after_sb_0p);
@@ -788,7 +782,7 @@ int __drbd_send_protocol(struct drbd_connection *connection, enum drbd_packet cm
 	p->conn_flags    = cpu_to_be32(cf);
 
 	if (connection->agreed_pro_version >= 87)
-		strcpy(p->integrity_alg, nc->integrity_alg);
+		strscpy(p->integrity_alg, nc->integrity_alg, integrity_alg_len);
 	rcu_read_unlock();
 
 	return __conn_send_command(connection, sock, cmd, size, NULL, 0);
@@ -1611,6 +1605,7 @@ static int _drbd_send_zc_bio(struct drbd_peer_device *peer_device, struct bio *b
 static int _drbd_send_zc_ee(struct drbd_peer_device *peer_device,
 			    struct drbd_peer_request *peer_req)
 {
+	bool use_sendpage = !(peer_req->flags & EE_RELEASE_TO_MEMPOOL);
 	struct page *page = peer_req->pages;
 	unsigned len = peer_req->i.size;
 	int err;
@@ -1619,8 +1614,13 @@ static int _drbd_send_zc_ee(struct drbd_peer_device *peer_device,
 	page_chain_for_each(page) {
 		unsigned l = min_t(unsigned, len, PAGE_SIZE);
 
-		err = _drbd_send_page(peer_device, page, 0, l,
-				      page_chain_next(page) ? MSG_MORE : 0);
+		if (likely(use_sendpage))
+			err = _drbd_send_page(peer_device, page, 0, l,
+					      page_chain_next(page) ? MSG_MORE : 0);
+		else
+			err = _drbd_no_send_page(peer_device, page, 0, l,
+						 page_chain_next(page) ? MSG_MORE : 0);
+
 		if (err)
 			return err;
 		len -= l;
@@ -1962,7 +1962,6 @@ void drbd_init_set_defaults(struct drbd_device *device)
 	INIT_LIST_HEAD(&device->sync_ee);
 	INIT_LIST_HEAD(&device->done_ee);
 	INIT_LIST_HEAD(&device->read_ee);
-	INIT_LIST_HEAD(&device->net_ee);
 	INIT_LIST_HEAD(&device->resync_reads);
 	INIT_LIST_HEAD(&device->resync_work.list);
 	INIT_LIST_HEAD(&device->unplug_work.list);
@@ -2043,7 +2042,6 @@ void drbd_device_cleanup(struct drbd_device *device)
 	D_ASSERT(device, list_empty(&device->sync_ee));
 	D_ASSERT(device, list_empty(&device->done_ee));
 	D_ASSERT(device, list_empty(&device->read_ee));
-	D_ASSERT(device, list_empty(&device->net_ee));
 	D_ASSERT(device, list_empty(&device->resync_reads));
 	D_ASSERT(device, list_empty(&first_peer_device(device)->connection->sender_work.q));
 	D_ASSERT(device, list_empty(&device->resync_work.list));
@@ -2055,19 +2053,11 @@ void drbd_device_cleanup(struct drbd_device *device)
 
 static void drbd_destroy_mempools(void)
 {
-	struct page *page;
-
-	while (drbd_pp_pool) {
-		page = drbd_pp_pool;
-		drbd_pp_pool = (struct page *)page_private(page);
-		__free_page(page);
-		drbd_pp_vacant--;
-	}
-
 	/* D_ASSERT(device, atomic_read(&drbd_pp_vacant)==0); */
 
 	bioset_exit(&drbd_io_bio_set);
 	bioset_exit(&drbd_md_io_bio_set);
+	mempool_exit(&drbd_buffer_page_pool);
 	mempool_exit(&drbd_md_io_page_pool);
 	mempool_exit(&drbd_ee_mempool);
 	mempool_exit(&drbd_request_mempool);
@@ -2086,9 +2076,8 @@ static void drbd_destroy_mempools(void)
 
 static int drbd_create_mempools(void)
 {
-	struct page *page;
 	const int number = (DRBD_MAX_BIO_SIZE/PAGE_SIZE) * drbd_minor_count;
-	int i, ret;
+	int ret;
 
 	/* caches */
 	drbd_request_cache = kmem_cache_create(
@@ -2125,6 +2114,10 @@ static int drbd_create_mempools(void)
 	if (ret)
 		goto Enomem;
 
+	ret = mempool_init_page_pool(&drbd_buffer_page_pool, number, 0);
+	if (ret)
+		goto Enomem;
+
 	ret = mempool_init_slab_pool(&drbd_request_mempool, number,
 				     drbd_request_cache);
 	if (ret)
@@ -2133,15 +2126,6 @@ static int drbd_create_mempools(void)
 	ret = mempool_init_slab_pool(&drbd_ee_mempool, number, drbd_ee_cache);
 	if (ret)
 		goto Enomem;
-
-	for (i = 0; i < number; i++) {
-		page = alloc_page(GFP_HIGHUSER);
-		if (!page)
-			goto Enomem;
-		set_page_private(page, (unsigned long)drbd_pp_pool);
-		drbd_pp_pool = page;
-	}
-	drbd_pp_vacant = number;
 
 	return 0;
 
@@ -2169,10 +2153,6 @@ static void drbd_release_all_peer_reqs(struct drbd_device *device)
 	rr = drbd_free_peer_reqs(device, &device->done_ee);
 	if (rr)
 		drbd_err(device, "%d EEs in done list found!\n", rr);
-
-	rr = drbd_free_peer_reqs(device, &device->net_ee);
-	if (rr)
-		drbd_err(device, "%d EEs in net list found!\n", rr);
 }
 
 /* caution. no locking. */
@@ -2534,7 +2514,7 @@ struct drbd_resource *drbd_create_resource(const char *name)
 {
 	struct drbd_resource *resource;
 
-	resource = kzalloc(sizeof(struct drbd_resource), GFP_KERNEL);
+	resource = kzalloc_obj(struct drbd_resource);
 	if (!resource)
 		goto fail;
 	resource->name = kstrdup(name, GFP_KERNEL);
@@ -2567,7 +2547,7 @@ struct drbd_connection *conn_create(const char *name, struct res_opts *res_opts)
 	struct drbd_resource *resource;
 	struct drbd_connection *connection;
 
-	connection = kzalloc(sizeof(struct drbd_connection), GFP_KERNEL);
+	connection = kzalloc_obj(struct drbd_connection);
 	if (!connection)
 		return NULL;
 
@@ -2576,7 +2556,7 @@ struct drbd_connection *conn_create(const char *name, struct res_opts *res_opts)
 	if (drbd_alloc_socket(&connection->meta))
 		goto fail;
 
-	connection->current_epoch = kzalloc(sizeof(struct drbd_epoch), GFP_KERNEL);
+	connection->current_epoch = kzalloc_obj(struct drbd_epoch);
 	if (!connection->current_epoch)
 		goto fail;
 
@@ -2683,9 +2663,6 @@ enum drbd_ret_code drbd_create_device(struct drbd_config_context *adm_ctx, unsig
 		 * connect.
 		 */
 		.max_hw_sectors		= DRBD_MAX_BIO_SIZE_SAFE >> 8,
-		.features		= BLK_FEAT_WRITE_CACHE | BLK_FEAT_FUA |
-					  BLK_FEAT_ROTATIONAL |
-					  BLK_FEAT_STABLE_WRITES,
 	};
 
 	device = minor_to_device(minor);
@@ -2693,7 +2670,7 @@ enum drbd_ret_code drbd_create_device(struct drbd_config_context *adm_ctx, unsig
 		return ERR_MINOR_OR_VOLUME_EXISTS;
 
 	/* GFP_KERNEL, we are outside of all write-out paths */
-	device = kzalloc(sizeof(struct drbd_device), GFP_KERNEL);
+	device = kzalloc_obj(struct drbd_device);
 	if (!device)
 		return ERR_NOMEM;
 	kref_init(&device->kref);
@@ -2752,7 +2729,7 @@ enum drbd_ret_code drbd_create_device(struct drbd_config_context *adm_ctx, unsig
 	INIT_LIST_HEAD(&device->peer_devices);
 	INIT_LIST_HEAD(&device->pending_bitmap_io);
 	for_each_connection(connection, resource) {
-		peer_device = kzalloc(sizeof(struct drbd_peer_device), GFP_KERNEL);
+		peer_device = kzalloc_obj(struct drbd_peer_device);
 		if (!peer_device)
 			goto out_idr_remove_from_resource;
 		peer_device->connection = connection;
@@ -2862,11 +2839,6 @@ static int __init drbd_init(void)
 		       DRBD_MAJOR);
 		return err;
 	}
-
-	/*
-	 * allocate all necessary structs
-	 */
-	init_waitqueue_head(&drbd_pp_wait);
 
 	drbd_proc = NULL; /* play safe for drbd_cleanup */
 	idr_init(&drbd_devices);

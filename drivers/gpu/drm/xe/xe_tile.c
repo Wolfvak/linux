@@ -6,10 +6,12 @@
 #include <linux/fault-inject.h>
 
 #include <drm/drm_managed.h>
+#include <drm/drm_pagemap_util.h>
 
-#include "xe_device.h"
+#include "xe_bo.h"
+#include "xe_device_types.h"
 #include "xe_ggtt.h"
-#include "xe_gt.h"
+#include "xe_memirq.h"
 #include "xe_migrate.h"
 #include "xe_pcode.h"
 #include "xe_sa.h"
@@ -17,6 +19,8 @@
 #include "xe_tile.h"
 #include "xe_tile_sysfs.h"
 #include "xe_ttm_vram_mgr.h"
+#include "xe_vram.h"
+#include "xe_vram_types.h"
 #include "xe_wa.h"
 
 /**
@@ -87,13 +91,46 @@
  */
 static int xe_tile_alloc(struct xe_tile *tile)
 {
-	struct drm_device *drm = &tile_to_xe(tile)->drm;
-
-	tile->mem.ggtt = drmm_kzalloc(drm, sizeof(*tile->mem.ggtt),
-				      GFP_KERNEL);
+	tile->mem.ggtt = xe_ggtt_alloc(tile);
 	if (!tile->mem.ggtt)
 		return -ENOMEM;
-	tile->mem.ggtt->tile = tile;
+
+	tile->migrate = xe_migrate_alloc(tile);
+	if (!tile->migrate)
+		return -ENOMEM;
+
+	return 0;
+}
+
+/**
+ * xe_tile_alloc_vram - Perform per-tile VRAM structs allocation
+ * @tile: Tile to perform allocations for
+ *
+ * Allocates VRAM per-tile data structures using DRM-managed allocations.
+ * Does not touch the hardware.
+ *
+ * Returns -ENOMEM if allocations fail, otherwise 0.
+ */
+int xe_tile_alloc_vram(struct xe_tile *tile)
+{
+	struct xe_device *xe = tile_to_xe(tile);
+	struct xe_vram_region *vram;
+
+	if (!IS_DGFX(xe))
+		return 0;
+
+	vram = xe_vram_region_alloc(xe, tile->id, XE_PL_VRAM0 + tile->id);
+	if (!vram)
+		return -ENOMEM;
+	tile->mem.vram = vram;
+
+	/*
+	 * If the kernel_vram is not already allocated,
+	 * it means that tile has common VRAM region for
+	 * kernel and user space.
+	 */
+	if (!tile->mem.kernel_vram)
+		tile->mem.kernel_vram = tile->mem.vram;
 
 	return 0;
 }
@@ -120,30 +157,11 @@ int xe_tile_init_early(struct xe_tile *tile, struct xe_device *xe, u8 id)
 	if (err)
 		return err;
 
-	tile->primary_gt = xe_gt_alloc(tile);
-	if (IS_ERR(tile->primary_gt))
-		return PTR_ERR(tile->primary_gt);
-
 	xe_pcode_init(tile);
 
 	return 0;
 }
 ALLOW_ERROR_INJECTION(xe_tile_init_early, ERRNO); /* See xe_pci_probe() */
-
-static int tile_ttm_mgr_init(struct xe_tile *tile)
-{
-	struct xe_device *xe = tile_to_xe(tile);
-	int err;
-
-	if (tile->mem.vram.usable_size) {
-		err = xe_ttm_vram_mgr_init(tile, &tile->mem.vram.ttm);
-		if (err)
-			return err;
-		xe->info.mem_region_mask |= BIT(tile->id) << 1;
-	}
-
-	return 0;
-}
 
 /**
  * xe_tile_init_noalloc - Init tile up to the point where allocations can happen.
@@ -164,23 +182,39 @@ int xe_tile_init_noalloc(struct xe_tile *tile)
 	struct xe_device *xe = tile_to_xe(tile);
 	int err;
 
-	err = tile_ttm_mgr_init(tile);
+	xe_wa_apply_tile_workarounds(tile);
+
+	err = xe_pagemap_cache_create(tile);
 	if (err)
 		return err;
 
-	xe_wa_apply_tile_workarounds(tile);
+	if (IS_DGFX(xe) && !ttm_resource_manager_used(&tile->mem.vram->ttm.manager)) {
+		err = xe_ttm_vram_mgr_init(xe, tile->mem.vram);
+		if (err)
+			return err;
 
-	if (xe->info.has_usm && IS_DGFX(xe))
-		xe_devm_add(tile, &tile->mem.vram);
+		xe->info.mem_region_mask |= BIT(tile->mem.vram->id) << 1;
+	}
 
 	return xe_tile_sysfs_init(tile);
 }
 
 int xe_tile_init(struct xe_tile *tile)
 {
+	int err;
+
+	err = xe_memirq_init(&tile->memirq);
+	if (err)
+		return err;
+
 	tile->mem.kernel_bb_pool = xe_sa_bo_manager_init(tile, SZ_1M, 16);
 	if (IS_ERR(tile->mem.kernel_bb_pool))
 		return PTR_ERR(tile->mem.kernel_bb_pool);
+
+	/* Optimistically anticipate at most 256 TLB fences with PRL */
+	tile->mem.reclaim_pool = xe_sa_bo_manager_init(tile, SZ_1M, XE_PAGE_RECLAIM_LIST_MAX_SIZE);
+	if (IS_ERR(tile->mem.reclaim_pool))
+		return PTR_ERR(tile->mem.reclaim_pool);
 
 	return 0;
 }
@@ -188,3 +222,26 @@ void xe_tile_migrate_wait(struct xe_tile *tile)
 {
 	xe_migrate_wait(tile->migrate);
 }
+
+#if IS_ENABLED(CONFIG_DRM_XE_PAGEMAP)
+/**
+ * xe_tile_local_pagemap() - Return a pointer to the tile's local drm_pagemap if any
+ * @tile: The tile.
+ *
+ * Return: A pointer to the tile's local drm_pagemap, or NULL if local pagemap
+ * support has been compiled out.
+ */
+struct drm_pagemap *xe_tile_local_pagemap(struct xe_tile *tile)
+{
+	struct drm_pagemap *dpagemap =
+		drm_pagemap_get_from_cache_if_active(xe_tile_to_vr(tile)->dpagemap_cache);
+
+	if (dpagemap) {
+		xe_assert(tile_to_xe(tile), kref_read(&dpagemap->ref) >= 2);
+		drm_pagemap_put(dpagemap);
+	}
+
+	return dpagemap;
+}
+#endif
+

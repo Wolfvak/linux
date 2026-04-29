@@ -48,8 +48,6 @@
 #include <linux/property.h>
 #include <linux/delay.h>
 
-#include "gpiolib.h"
-
 struct gpio_latch_priv {
 	struct gpio_chip gc;
 	struct gpio_descs *clk_gpios;
@@ -166,11 +164,11 @@ static int gpio_latch_probe(struct platform_device *pdev)
 
 	if (gpio_latch_can_sleep(priv, n_latches)) {
 		priv->gc.can_sleep = true;
-		priv->gc.set_rv = gpio_latch_set_can_sleep;
+		priv->gc.set = gpio_latch_set_can_sleep;
 		mutex_init(&priv->mutex);
 	} else {
 		priv->gc.can_sleep = false;
-		priv->gc.set_rv = gpio_latch_set;
+		priv->gc.set = gpio_latch_set;
 		spin_lock_init(&priv->spinlock);
 	}
 

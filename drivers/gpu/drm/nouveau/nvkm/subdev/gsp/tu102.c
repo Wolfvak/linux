@@ -30,6 +30,18 @@
 #include <nvfw/fw.h>
 #include <nvfw/hs.h>
 
+int
+tu102_gsp_fwsec_sb_ctor(struct nvkm_gsp *gsp)
+{
+	return nvkm_gsp_fwsec_sb_init(gsp);
+}
+
+void
+tu102_gsp_fwsec_sb_dtor(struct nvkm_gsp *gsp)
+{
+	nvkm_falcon_fw_dtor(&gsp->fws.falcon.sb);
+}
+
 static int
 tu102_gsp_booter_unload(struct nvkm_gsp *gsp, u32 mbox0, u32 mbox1)
 {
@@ -149,7 +161,7 @@ tu102_gsp_reset(struct nvkm_gsp *gsp)
 }
 
 int
-tu102_gsp_fini(struct nvkm_gsp *gsp, bool suspend)
+tu102_gsp_fini(struct nvkm_gsp *gsp, enum nvkm_suspend_state suspend)
 {
 	u32 mbox0 = 0xff, mbox1 = 0xff;
 	int ret;
@@ -370,6 +382,9 @@ tu102_gsp = {
 
 	.booter.ctor = tu102_gsp_booter_ctor,
 
+	.fwsec_sb.ctor = tu102_gsp_fwsec_sb_ctor,
+	.fwsec_sb.dtor = tu102_gsp_fwsec_sb_dtor,
+
 	.dtor = r535_gsp_dtor,
 	.oneinit = tu102_gsp_oneinit,
 	.init = tu102_gsp_init,
@@ -383,13 +398,9 @@ int
 tu102_gsp_load_rm(struct nvkm_gsp *gsp, const struct nvkm_gsp_fwif *fwif)
 {
 	struct nvkm_subdev *subdev = &gsp->subdev;
-	bool enable_gsp = fwif->enable;
 	int ret;
 
-#if IS_ENABLED(CONFIG_DRM_NOUVEAU_GSP_DEFAULT)
-	enable_gsp = true;
-#endif
-	if (!nvkm_boolopt(subdev->device->cfgopt, "NvGspRm", enable_gsp))
+	if (!nvkm_boolopt(subdev->device->cfgopt, "NvGspRm", true))
 		return -EINVAL;
 
 	ret = nvkm_gsp_load_fw(gsp, "gsp", fwif->ver, &gsp->fws.rm);

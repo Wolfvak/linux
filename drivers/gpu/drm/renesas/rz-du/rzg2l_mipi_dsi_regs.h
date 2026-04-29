@@ -40,9 +40,40 @@
 #define DSIDPHYTIM3_THS_TRAIL(x)	((x) << 8)
 #define DSIDPHYTIM3_THS_ZERO(x)		((x) << 0)
 
+/* RZ/V2H DPHY Registers */
+#define PLLENR				0x000
+#define PLLENR_PLLEN			BIT(0)
+
+#define PHYRSTR				0x004
+#define PHYRSTR_PHYMRSTN		BIT(0)
+
+#define PLLCLKSET0R			0x010
+#define PLLCLKSET0R_PLL_S		GENMASK(2, 0)
+#define PLLCLKSET0R_PLL_P		GENMASK(13, 8)
+#define PLLCLKSET0R_PLL_M		GENMASK(25, 16)
+
+#define PLLCLKSET1R			0x014
+#define PLLCLKSET1R_PLL_K		GENMASK(15, 0)
+
+#define PHYTCLKSETR			0x020
+#define PHYTCLKSETR_TCLKTRAILCTL        GENMASK(7, 0)
+#define PHYTCLKSETR_TCLKPOSTCTL         GENMASK(15, 8)
+#define PHYTCLKSETR_TCLKZEROCTL         GENMASK(23, 16)
+#define PHYTCLKSETR_TCLKPRPRCTL         GENMASK(31, 24)
+
+#define PHYTHSSETR			0x024
+#define PHYTHSSETR_THSEXITCTL           GENMASK(7, 0)
+#define PHYTHSSETR_THSTRAILCTL          GENMASK(15, 8)
+#define PHYTHSSETR_THSZEROCTL           GENMASK(23, 16)
+#define PHYTHSSETR_THSPRPRCTL           GENMASK(31, 24)
+
+#define PHYTLPXSETR			0x028
+#define PHYTLPXSETR_TLPXCTL             GENMASK(7, 0)
+
+#define PHYCR				0x030
+#define PHYCR_ULPSEXIT                  GENMASK(9, 0)
+
 /* --------------------------------------------------------*/
-/* Link Registers */
-#define LINK_REG_OFFSET			0x10000
 
 /* Link Status Register */
 #define LINKSR				0x10
@@ -81,6 +112,20 @@
 #define RSTSR_SWRSTLP			(1 << 1)
 #define RSTSR_SWRSTHS			(1 << 0)
 
+/* DSI Set Register */
+#define DSISETR				0x120
+#define DSISETR_MRPSZ			GENMASK(15, 0)
+
+/* Rx Result Save Slot 0 Register */
+#define RXRSS0R				0x240
+#define RXRSS0R_RXPKTDFAIL		BIT(28)
+#define RXRSS0R_RXFAIL			BIT(27)
+#define RXRSS0R_RXSUC			BIT(25)
+#define RXRSS0R_DT			GENMASK(21, 16)
+#define RXRSS0R_DATA1			GENMASK(15, 8)
+#define RXRSS0R_DATA0			GENMASK(7, 0)
+#define RXRSS0R_WC			GENMASK(15, 0) /* Word count for long packet. */
+
 /* Clock Lane Stop Time Set Register */
 #define CLSTPTSETR			0x314
 #define CLSTPTSETR_CLKKPT(x)		((x) << 24)
@@ -118,6 +163,7 @@
 
 /* Video-Input Channel 1 Pixel Packet Set Register */
 #define VICH1PPSETR			0x420
+#define VICH1PPSETR_DT_RGB16		(0x0e << 16)
 #define VICH1PPSETR_DT_RGB18		(0x1e << 16)
 #define VICH1PPSETR_DT_RGB18_LS		(0x2e << 16)
 #define VICH1PPSETR_DT_RGB24		(0x3e << 16)
@@ -147,5 +193,45 @@
 #define VICH1HPSETR			0x434
 #define VICH1HPSETR_HFP(x)		(((x) & 0x1fff) << 16)
 #define VICH1HPSETR_HBP(x)		(((x) & 0x1fff) << 0)
+
+/* Sequence Channel 0 Set 0 Register */
+#define SQCH0SET0R			0x5c0
+#define SQCH0SET0R_START		BIT(0)
+
+/* Sequence Channel 0 Status Register */
+#define SQCH0SR				0x5d0
+#define SQCH0SR_ADESFIN			BIT(8)
+
+/* Sequence Channel 0 Status Clear Register */
+#define SQCH0SCR			0x5d4
+#define SQCH0SCR_ADESFIN		BIT(8)
+
+/* Sequence Channel 0 Descriptor 0-A Register */
+#define SQCH0DSC0AR			0x780
+#define SQCH0DSC0AR_NXACT_TERM		0	/* Bit 28 */
+#define SQCH0DSC0AR_BTA			GENMASK(27, 26)
+#define SQCH0DSC0AR_BTA_NONE		0
+#define SQCH0DSC0AR_BTA_NON_READ	1
+#define SQCH0DSC0AR_BTA_READ		2
+#define SQCH0DSC0AR_BTA_ONLY		3
+#define SQCH0DSC0AR_SPD_HIGH		0
+#define SQCH0DSC0AR_SPD_LOW		BIT(25)
+#define SQCH0DSC0AR_FMT_SHORT		0
+#define SQCH0DSC0AR_FMT_LONG		BIT(24)
+#define SQCH0DSC0AR_DT			GENMASK(21, 16)
+#define SQCH0DSC0AR_DATA1		GENMASK(15, 8)
+#define SQCH0DSC0AR_DATA0		GENMASK(7, 0)
+
+/* Sequence Channel 0 Descriptor 0-B Register */
+#define SQCH0DSC0BR			0x784
+#define SQCH0DSC0BR_DTSEL_MEM_SPACE	BIT(24)	/* Use external memory */
+
+/* Sequence Channel 0 Descriptor 0-C Register */
+#define SQCH0DSC0CR			0x788
+#define SQCH0DSC0CR_FINACT		BIT(0)
+#define SQCH0DSC0CR_AUXOP		BIT(22)
+
+/* Sequence Channel 0 Descriptor 0-D Register */
+#define SQCH0DSC0DR			0x78c
 
 #endif /* __RZG2L_MIPI_DSI_REGS_H__ */

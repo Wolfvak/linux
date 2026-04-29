@@ -36,7 +36,7 @@ static void configfs_free_inode(struct inode *inode)
 
 static const struct super_operations configfs_ops = {
 	.statfs		= simple_statfs,
-	.drop_inode	= generic_delete_inode,
+	.drop_inode	= inode_just_drop,
 	.free_inode	= configfs_free_inode,
 };
 
@@ -92,7 +92,8 @@ static int configfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	configfs_root_group.cg_item.ci_dentry = root;
 	root->d_fsdata = &configfs_root;
 	sb->s_root = root;
-	sb->s_d_op = &configfs_dentry_ops; /* the rest get that */
+	set_default_d_op(sb, &configfs_dentry_ops); /* the rest get that */
+	sb->s_d_flags |= DCACHE_DONTCACHE;
 	return 0;
 }
 
@@ -115,7 +116,7 @@ static struct file_system_type configfs_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "configfs",
 	.init_fs_context = configfs_init_fs_context,
-	.kill_sb	= kill_litter_super,
+	.kill_sb	= kill_anon_super,
 };
 MODULE_ALIAS_FS("configfs");
 

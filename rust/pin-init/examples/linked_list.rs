@@ -6,7 +6,6 @@
 
 use core::{
     cell::Cell,
-    convert::Infallible,
     marker::PhantomPinned,
     pin::Pin,
     ptr::{self, NonNull},
@@ -14,8 +13,9 @@ use core::{
 
 use pin_init::*;
 
-#[expect(unused_attributes)]
+#[allow(unused_attributes)]
 mod error;
+#[allow(unused_imports)]
 use error::Error;
 
 #[pin_data(PinnedDrop)]
@@ -30,30 +30,31 @@ pub struct ListHead {
 
 impl ListHead {
     #[inline]
-    pub fn new() -> impl PinInit<Self, Infallible> {
-        try_pin_init!(&this in Self {
+    pub fn new() -> impl PinInit<Self> {
+        pin_init!(&this in Self {
             next: unsafe { Link::new_unchecked(this) },
             prev: unsafe { Link::new_unchecked(this) },
             pin: PhantomPinned,
-        }? Infallible)
+        })
     }
 
     #[inline]
-    pub fn insert_next(list: &ListHead) -> impl PinInit<Self, Infallible> + '_ {
-        try_pin_init!(&this in Self {
+    #[allow(dead_code)]
+    pub fn insert_next(list: &ListHead) -> impl PinInit<Self> + '_ {
+        pin_init!(&this in Self {
             prev: list.next.prev().replace(unsafe { Link::new_unchecked(this)}),
             next: list.next.replace(unsafe { Link::new_unchecked(this)}),
             pin: PhantomPinned,
-        }? Infallible)
+        })
     }
 
     #[inline]
-    pub fn insert_prev(list: &ListHead) -> impl PinInit<Self, Infallible> + '_ {
-        try_pin_init!(&this in Self {
+    pub fn insert_prev(list: &ListHead) -> impl PinInit<Self> + '_ {
+        pin_init!(&this in Self {
             next: list.prev.next().replace(unsafe { Link::new_unchecked(this)}),
             prev: list.prev.replace(unsafe { Link::new_unchecked(this)}),
             pin: PhantomPinned,
-        }? Infallible)
+        })
     }
 
     #[inline]
@@ -112,6 +113,7 @@ impl Link {
     }
 
     #[inline]
+    #[allow(dead_code)]
     fn prev(&self) -> &Link {
         unsafe { &(*self.0.get().as_ptr()).prev }
     }
@@ -138,7 +140,12 @@ impl Link {
 }
 
 #[allow(dead_code)]
+#[cfg(not(any(feature = "std", feature = "alloc")))]
+fn main() {}
+
+#[allow(dead_code)]
 #[cfg_attr(test, test)]
+#[cfg(any(feature = "std", feature = "alloc"))]
 fn main() -> Result<(), Error> {
     let a = Box::pin_init(ListHead::new())?;
     stack_pin_init!(let b = ListHead::insert_next(&a));

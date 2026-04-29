@@ -49,6 +49,16 @@ struct sys_reg_params {
 				  .Op2 = ((esr) >> 17) & 0x7,			\
 				  .is_write = !((esr) & 1) })
 
+/*
+ * The Feature ID space is defined as the System register space in AArch64
+ * with op0==3, op1=={0, 1, 3}, CRn==0, CRm=={0-7}, op2=={0-7}.
+ */
+static inline bool in_feat_id_space(struct sys_reg_params *p)
+{
+	return (p->Op0 == 3 && !(p->Op1 & 0b100) && p->Op1 != 2 &&
+		p->CRn == 0 && !(p->CRm & 0b1000));
+}
+
 struct sys_reg_desc {
 	/* Sysreg string for debug */
 	const char *name;
@@ -108,7 +118,7 @@ inline void print_sys_reg_msg(const struct sys_reg_params *p,
 	/* Look, we even formatted it for you to paste into the table! */
 	kvm_pr_unimpl("%pV { Op0(%2u), Op1(%2u), CRn(%2u), CRm(%2u), Op2(%2u), func_%s },\n",
 		      &(struct va_format){ fmt, &va },
-		      p->Op0, p->Op1, p->CRn, p->CRm, p->Op2, p->is_write ? "write" : "read");
+		      p->Op0, p->Op1, p->CRn, p->CRm, p->Op2, str_write_read(p->is_write));
 	va_end(va);
 }
 
@@ -256,5 +266,11 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu);
 				(u64)SYS_FIELD_VALUE(reg, field, limit)));     \
 	(val);								       \
 })
+
+#define TO_ARM64_SYS_REG(r)	ARM64_SYS_REG(sys_reg_Op0(SYS_ ## r),	\
+					      sys_reg_Op1(SYS_ ## r),	\
+					      sys_reg_CRn(SYS_ ## r),	\
+					      sys_reg_CRm(SYS_ ## r),	\
+					      sys_reg_Op2(SYS_ ## r))
 
 #endif /* __ARM64_KVM_SYS_REGS_LOCAL_H__ */

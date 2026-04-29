@@ -358,23 +358,33 @@ int cap_inode_killpriv(struct mnt_idmap *idmap, struct dentry *dentry)
 	return error;
 }
 
-static bool rootid_owns_currentns(vfsuid_t rootvfsuid)
+/**
+ * kuid_root_in_ns - check whether the given kuid is root in the given ns
+ * @kuid: the kuid to be tested
+ * @ns: the user namespace to test against
+ *
+ * Returns true if @kuid represents the root user in @ns, false otherwise.
+ */
+static bool kuid_root_in_ns(kuid_t kuid, struct user_namespace *ns)
 {
-	struct user_namespace *ns;
-	kuid_t kroot;
-
-	if (!vfsuid_valid(rootvfsuid))
-		return false;
-
-	kroot = vfsuid_into_kuid(rootvfsuid);
-	for (ns = current_user_ns();; ns = ns->parent) {
-		if (from_kuid(ns, kroot) == 0)
+	for (;; ns = ns->parent) {
+		if (from_kuid(ns, kuid) == 0)
 			return true;
 		if (ns == &init_user_ns)
 			break;
 	}
 
 	return false;
+}
+
+static bool vfsuid_root_in_currentns(vfsuid_t vfsuid)
+{
+	kuid_t kuid;
+
+	if (!vfsuid_valid(vfsuid))
+		return false;
+	kuid = vfsuid_into_kuid(vfsuid);
+	return kuid_root_in_ns(kuid, current_user_ns());
 }
 
 static __u32 sansflags(__u32 m)
@@ -481,7 +491,7 @@ int cap_inode_getsecurity(struct mnt_idmap *idmap,
 		goto out_free;
 	}
 
-	if (!rootid_owns_currentns(vfsroot)) {
+	if (!vfsuid_root_in_currentns(vfsroot)) {
 		size = -EOVERFLOW;
 		goto out_free;
 	}
@@ -722,7 +732,7 @@ int get_vfs_caps_from_disk(struct mnt_idmap *idmap,
 	/* Limit the caps to the mounter of the filesystem
 	 * or the more limited uid specified in the xattr.
 	 */
-	if (!rootid_owns_currentns(rootvfsuid))
+	if (!vfsuid_root_in_currentns(rootvfsuid))
 		return -ENODATA;
 
 	cpu_caps->permitted.val = le32_to_cpu(caps->data[0].permitted);
@@ -856,12 +866,6 @@ static void handle_privileged_root(struct linux_binprm *bprm, bool has_fcap,
 #define __cap_full(field, cred) \
 	cap_issubset(CAP_FULL_SET, cred->cap_##field)
 
-static inline bool __is_setuid(struct cred *new, const struct cred *old)
-{ return !uid_eq(new->euid, old->uid); }
-
-static inline bool __is_setgid(struct cred *new, const struct cred *old)
-{ return !gid_eq(new->egid, old->gid); }
-
 /*
  * 1) Audit candidate if current->cap_effective is set
  *
@@ -891,7 +895,7 @@ static inline bool nonroot_raised_pE(struct cred *new, const struct cred *old,
 	    (root_privileged() &&
 	     __is_suid(root, new) &&
 	     !__cap_full(effective, new)) ||
-	    (!__is_setuid(new, old) &&
+	    (uid_eq(new->euid, old->euid) &&
 	     ((has_fcap &&
 	       __cap_gained(permitted, new, old)) ||
 	      __cap_gained(ambient, new, old))))
@@ -917,7 +921,7 @@ int cap_bprm_creds_from_file(struct linux_binprm *bprm, const struct file *file)
 	/* Process setpcap binaries and capabilities for uid 0 */
 	const struct cred *old = current_cred();
 	struct cred *new = bprm->cred;
-	bool effective = false, has_fcap = false, is_setid;
+	bool effective = false, has_fcap = false, id_changed;
 	int ret;
 	kuid_t root_uid;
 
@@ -941,9 +945,9 @@ int cap_bprm_creds_from_file(struct linux_binprm *bprm, const struct file *file)
 	 *
 	 * In addition, if NO_NEW_PRIVS, then ensure we get no new privs.
 	 */
-	is_setid = __is_setuid(new, old) || __is_setgid(new, old);
+	id_changed = !uid_eq(new->euid, old->euid) || !in_group_p(new->egid);
 
-	if ((is_setid || __cap_gained(permitted, new, old)) &&
+	if ((id_changed || __cap_gained(permitted, new, old)) &&
 	    ((bprm->unsafe & ~LSM_UNSAFE_PTRACE) ||
 	     !ptracer_capable(current, new->user_ns))) {
 		/* downgrade; they get no more than they had, and maybe less */
@@ -960,7 +964,7 @@ int cap_bprm_creds_from_file(struct linux_binprm *bprm, const struct file *file)
 	new->sgid = new->fsgid = new->egid;
 
 	/* File caps or setid cancels ambient. */
-	if (has_fcap || is_setid)
+	if (has_fcap || id_changed)
 		cap_clear(new->cap_ambient);
 
 	/*
@@ -993,7 +997,9 @@ int cap_bprm_creds_from_file(struct linux_binprm *bprm, const struct file *file)
 		return -EPERM;
 
 	/* Check for privilege-elevated exec. */
-	if (is_setid ||
+	if (id_changed ||
+	    !uid_eq(new->euid, old->uid) ||
+	    !gid_eq(new->egid, old->gid) ||
 	    (!__is_real(root_uid, new) &&
 	     (effective ||
 	      __cap_grew(permitted, ambient, new))))
@@ -1509,9 +1515,13 @@ static int __init capability_init(void)
 }
 
 DEFINE_LSM(capability) = {
-	.name = "capability",
+	.id = &capability_lsmid,
 	.order = LSM_ORDER_FIRST,
 	.init = capability_init,
 };
 
 #endif /* CONFIG_SECURITY */
+
+#ifdef CONFIG_SECURITY_COMMONCAP_KUNIT_TEST
+#include "commoncap_test.c"
+#endif

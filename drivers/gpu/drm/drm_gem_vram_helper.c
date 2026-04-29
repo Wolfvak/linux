@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <linux/export.h>
 #include <linux/iosys-map.h>
 #include <linux/module.h>
 
@@ -16,6 +17,7 @@
 #include <drm/drm_mode.h>
 #include <drm/drm_plane.h>
 #include <drm/drm_prime.h>
+#include <drm/drm_print.h>
 
 #include <drm/ttm/ttm_range_manager.h>
 #include <drm/ttm/ttm_tt.h>
@@ -88,11 +90,6 @@ static const struct drm_gem_object_funcs drm_gem_vram_object_funcs;
  * drmm_vram_helper_init() is a managed interface that installs a
  * clean-up handler to run during the DRM device's release.
  *
- * For drawing or scanout operations, rsp. buffer objects have to be pinned
- * in video RAM. Call drm_gem_vram_pin() with &DRM_GEM_VRAM_PL_FLAG_VRAM or
- * &DRM_GEM_VRAM_PL_FLAG_SYSTEM to pin a buffer object in video RAM or system
- * memory. Call drm_gem_vram_unpin() to release the pinned object afterwards.
- *
  * A buffer object that is pinned in video RAM has a fixed address within that
  * memory region. Call drm_gem_vram_offset() to retrieve this value. Typically
  * it's used to program the hardware's scanout engine for framebuffers, set
@@ -111,7 +108,7 @@ static const struct drm_gem_object_funcs drm_gem_vram_object_funcs;
 
 static void drm_gem_vram_cleanup(struct drm_gem_vram_object *gbo)
 {
-	/* We got here via ttm_bo_put(), which means that the
+	/* We got here via ttm_bo_fini(), which means that the
 	 * TTM buffer object in 'bo' has already been cleaned
 	 * up; only release the GEM object.
 	 */
@@ -200,7 +197,7 @@ struct drm_gem_vram_object *drm_gem_vram_create(struct drm_device *dev,
 			return ERR_CAST(gem);
 		gbo = drm_gem_vram_of_gem(gem);
 	} else {
-		gbo = kzalloc(sizeof(*gbo), GFP_KERNEL);
+		gbo = kzalloc_obj(*gbo);
 		if (!gbo)
 			return ERR_PTR(-ENOMEM);
 		gem = &gbo->bo.base;
@@ -238,11 +235,11 @@ EXPORT_SYMBOL(drm_gem_vram_create);
  * drm_gem_vram_put() - Releases a reference to a VRAM-backed GEM object
  * @gbo:	the GEM VRAM object
  *
- * See ttm_bo_put() for more information.
+ * See ttm_bo_fini() for more information.
  */
 void drm_gem_vram_put(struct drm_gem_vram_object *gbo)
 {
-	ttm_bo_put(&gbo->bo);
+	ttm_bo_fini(&gbo->bo);
 }
 EXPORT_SYMBOL(drm_gem_vram_put);
 
@@ -299,30 +296,7 @@ out:
 	return 0;
 }
 
-/**
- * drm_gem_vram_pin() - Pins a GEM VRAM object in a region.
- * @gbo:	the GEM VRAM object
- * @pl_flag:	a bitmask of possible memory regions
- *
- * Pinning a buffer object ensures that it is not evicted from
- * a memory region. A pinned buffer object has to be unpinned before
- * it can be pinned to another region. If the pl_flag argument is 0,
- * the buffer is pinned at its current location (video RAM or system
- * memory).
- *
- * Small buffer objects, such as cursor images, can lead to memory
- * fragmentation if they are pinned in the middle of video RAM. This
- * is especially a problem on devices with only a small amount of
- * video RAM. Fragmentation can prevent the primary framebuffer from
- * fitting in, even though there's enough memory overall. The modifier
- * DRM_GEM_VRAM_PL_FLAG_TOPDOWN marks the buffer object to be pinned
- * at the high end of the memory region to avoid fragmentation.
- *
- * Returns:
- * 0 on success, or
- * a negative error code otherwise.
- */
-int drm_gem_vram_pin(struct drm_gem_vram_object *gbo, unsigned long pl_flag)
+static int drm_gem_vram_pin(struct drm_gem_vram_object *gbo, unsigned long pl_flag)
 {
 	int ret;
 
@@ -334,7 +308,6 @@ int drm_gem_vram_pin(struct drm_gem_vram_object *gbo, unsigned long pl_flag)
 
 	return ret;
 }
-EXPORT_SYMBOL(drm_gem_vram_pin);
 
 static void drm_gem_vram_unpin_locked(struct drm_gem_vram_object *gbo)
 {
@@ -343,15 +316,7 @@ static void drm_gem_vram_unpin_locked(struct drm_gem_vram_object *gbo)
 	ttm_bo_unpin(&gbo->bo);
 }
 
-/**
- * drm_gem_vram_unpin() - Unpins a GEM VRAM object
- * @gbo:	the GEM VRAM object
- *
- * Returns:
- * 0 on success, or
- * a negative error code otherwise.
- */
-int drm_gem_vram_unpin(struct drm_gem_vram_object *gbo)
+static int drm_gem_vram_unpin(struct drm_gem_vram_object *gbo)
 {
 	int ret;
 
@@ -364,7 +329,6 @@ int drm_gem_vram_unpin(struct drm_gem_vram_object *gbo)
 
 	return 0;
 }
-EXPORT_SYMBOL(drm_gem_vram_unpin);
 
 /**
  * drm_gem_vram_vmap() - Pins and maps a GEM VRAM object into kernel address
@@ -690,41 +654,6 @@ EXPORT_SYMBOL(drm_gem_vram_plane_helper_cleanup_fb);
  */
 
 /**
- * drm_gem_vram_object_pin() - Implements &struct drm_gem_object_funcs.pin
- * @gem:	The GEM object to pin
- *
- * Returns:
- * 0 on success, or
- * a negative errno code otherwise.
- */
-static int drm_gem_vram_object_pin(struct drm_gem_object *gem)
-{
-	struct drm_gem_vram_object *gbo = drm_gem_vram_of_gem(gem);
-
-	/*
-	 * Fbdev console emulation is the use case of these PRIME
-	 * helpers. This may involve updating a hardware buffer from
-	 * a shadow FB. We pin the buffer to it's current location
-	 * (either video RAM or system memory) to prevent it from
-	 * being relocated during the update operation. If you require
-	 * the buffer to be pinned to VRAM, implement a callback that
-	 * sets the flags accordingly.
-	 */
-	return drm_gem_vram_pin_locked(gbo, 0);
-}
-
-/**
- * drm_gem_vram_object_unpin() - Implements &struct drm_gem_object_funcs.unpin
- * @gem:	The GEM object to unpin
- */
-static void drm_gem_vram_object_unpin(struct drm_gem_object *gem)
-{
-	struct drm_gem_vram_object *gbo = drm_gem_vram_of_gem(gem);
-
-	drm_gem_vram_unpin_locked(gbo);
-}
-
-/**
  * drm_gem_vram_object_vmap() -
  *	Implements &struct drm_gem_object_funcs.vmap
  * @gem: The GEM object to map
@@ -762,8 +691,6 @@ static void drm_gem_vram_object_vunmap(struct drm_gem_object *gem,
 
 static const struct drm_gem_object_funcs drm_gem_vram_object_funcs = {
 	.free	= drm_gem_vram_object_free,
-	.pin	= drm_gem_vram_object_pin,
-	.unpin	= drm_gem_vram_object_unpin,
 	.vmap	= drm_gem_vram_object_vmap,
 	.vunmap	= drm_gem_vram_object_vunmap,
 	.mmap   = drm_gem_ttm_mmap,
@@ -794,7 +721,7 @@ static struct ttm_tt *bo_driver_ttm_tt_create(struct ttm_buffer_object *bo,
 	struct ttm_tt *tt;
 	int ret;
 
-	tt = kzalloc(sizeof(*tt), GFP_KERNEL);
+	tt = kzalloc_obj(*tt);
 	if (!tt)
 		return NULL;
 
@@ -933,7 +860,7 @@ static int drm_vram_mm_init(struct drm_vram_mm *vmm, struct drm_device *dev,
 	ret = ttm_device_init(&vmm->bdev, &bo_driver, dev->dev,
 				 dev->anon_inode->i_mapping,
 				 dev->vma_offset_manager,
-				 false, true);
+				 TTM_ALLOCATION_POOL_USE_DMA32);
 	if (ret)
 		return ret;
 
@@ -963,7 +890,7 @@ static struct drm_vram_mm *drm_vram_helper_alloc_mm(struct drm_device *dev, uint
 	if (WARN_ON(dev->vram_mm))
 		return dev->vram_mm;
 
-	dev->vram_mm = kzalloc(sizeof(*dev->vram_mm), GFP_KERNEL);
+	dev->vram_mm = kzalloc_obj(*dev->vram_mm);
 	if (!dev->vram_mm)
 		return ERR_PTR(-ENOMEM);
 
@@ -1041,7 +968,7 @@ drm_vram_helper_mode_valid_internal(struct drm_device *dev,
 
 	max_fbpages = (vmm->vram_size / 2) >> PAGE_SHIFT;
 
-	fbsize = mode->hdisplay * mode->vdisplay * max_bpp;
+	fbsize = (u32)mode->hdisplay * mode->vdisplay * max_bpp;
 	fbpages = DIV_ROUND_UP(fbsize, PAGE_SIZE);
 
 	if (fbpages > max_fbpages)

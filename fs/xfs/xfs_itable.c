@@ -3,7 +3,7 @@
  * Copyright (c) 2000-2002,2005 Silicon Graphics, Inc.
  * All Rights Reserved.
  */
-#include "xfs.h"
+#include "xfs_platform.h"
 #include "xfs_fs.h"
 #include "xfs_shared.h"
 #include "xfs_format.h"
@@ -230,8 +230,8 @@ xfs_bulkstat_one(
 
 	ASSERT(breq->icount == 1);
 
-	bc.buf = kzalloc(sizeof(struct xfs_bulkstat),
-			GFP_KERNEL | __GFP_RETRY_MAYFAIL);
+	bc.buf = kzalloc_obj(struct xfs_bulkstat,
+			     GFP_KERNEL | __GFP_RETRY_MAYFAIL);
 	if (!bc.buf)
 		return -ENOMEM;
 
@@ -239,14 +239,10 @@ xfs_bulkstat_one(
 	 * Grab an empty transaction so that we can use its recursive buffer
 	 * locking abilities to detect cycles in the inobt without deadlocking.
 	 */
-	error = xfs_trans_alloc_empty(breq->mp, &tp);
-	if (error)
-		goto out;
-
+	tp = xfs_trans_alloc_empty(breq->mp);
 	error = xfs_bulkstat_one_int(breq->mp, breq->idmap, tp,
 			breq->startino, &bc);
 	xfs_trans_cancel(tp);
-out:
 	kfree(bc.buf);
 
 	/*
@@ -311,7 +307,6 @@ xfs_bulkstat(
 		.breq		= breq,
 	};
 	struct xfs_trans	*tp;
-	unsigned int		iwalk_flags = 0;
 	int			error;
 
 	if (breq->idmap != &nop_mnt_idmap) {
@@ -322,8 +317,8 @@ xfs_bulkstat(
 	if (xfs_bulkstat_already_done(breq->mp, breq->startino))
 		return 0;
 
-	bc.buf = kzalloc(sizeof(struct xfs_bulkstat),
-			GFP_KERNEL | __GFP_RETRY_MAYFAIL);
+	bc.buf = kzalloc_obj(struct xfs_bulkstat,
+			     GFP_KERNEL | __GFP_RETRY_MAYFAIL);
 	if (!bc.buf)
 		return -ENOMEM;
 
@@ -331,17 +326,10 @@ xfs_bulkstat(
 	 * Grab an empty transaction so that we can use its recursive buffer
 	 * locking abilities to detect cycles in the inobt without deadlocking.
 	 */
-	error = xfs_trans_alloc_empty(breq->mp, &tp);
-	if (error)
-		goto out;
-
-	if (breq->flags & XFS_IBULK_SAME_AG)
-		iwalk_flags |= XFS_IWALK_SAME_AG;
-
-	error = xfs_iwalk(breq->mp, tp, breq->startino, iwalk_flags,
+	tp = xfs_trans_alloc_empty(breq->mp);
+	error = xfs_iwalk(breq->mp, tp, breq->startino, breq->iwalk_flags,
 			xfs_bulkstat_iwalk, breq->icount, &bc);
 	xfs_trans_cancel(tp);
-out:
 	kfree(bc.buf);
 
 	/*
@@ -464,14 +452,10 @@ xfs_inumbers(
 	 * Grab an empty transaction so that we can use its recursive buffer
 	 * locking abilities to detect cycles in the inobt without deadlocking.
 	 */
-	error = xfs_trans_alloc_empty(breq->mp, &tp);
-	if (error)
-		goto out;
-
-	error = xfs_inobt_walk(breq->mp, tp, breq->startino, breq->flags,
+	tp = xfs_trans_alloc_empty(breq->mp);
+	error = xfs_inobt_walk(breq->mp, tp, breq->startino, breq->iwalk_flags,
 			xfs_inumbers_walk, breq->icount, &ic);
 	xfs_trans_cancel(tp);
-out:
 
 	/*
 	 * We found some inode groups, so clear the error status and return

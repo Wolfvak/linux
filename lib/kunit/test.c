@@ -70,6 +70,13 @@ module_param_named(enable, enable_param, bool, 0);
 MODULE_PARM_DESC(enable, "Enable KUnit tests");
 
 /*
+ * Configure the base timeout.
+ */
+static unsigned long kunit_base_timeout = CONFIG_KUNIT_DEFAULT_TIMEOUT;
+module_param_named(timeout, kunit_base_timeout, ulong, 0644);
+MODULE_PARM_DESC(timeout, "Set the base timeout for Kunit test cases");
+
+/*
  * KUnit statistic mode:
  * 0 - disabled
  * 1 - only when there is more than one subtest
@@ -87,7 +94,7 @@ struct kunit_result_stats {
 	unsigned long total;
 };
 
-static bool kunit_should_print_stats(struct kunit_result_stats stats)
+static bool kunit_should_print_stats(struct kunit_result_stats *stats)
 {
 	if (kunit_stats_enabled == 0)
 		return false;
@@ -95,11 +102,11 @@ static bool kunit_should_print_stats(struct kunit_result_stats stats)
 	if (kunit_stats_enabled == 2)
 		return true;
 
-	return (stats.total > 1);
+	return (stats->total > 1);
 }
 
 static void kunit_print_test_stats(struct kunit *test,
-				   struct kunit_result_stats stats)
+				   struct kunit_result_stats *stats)
 {
 	if (!kunit_should_print_stats(stats))
 		return;
@@ -108,10 +115,10 @@ static void kunit_print_test_stats(struct kunit *test,
 		  KUNIT_SUBTEST_INDENT
 		  "# %s: pass:%lu fail:%lu skip:%lu total:%lu",
 		  test->name,
-		  stats.passed,
-		  stats.failed,
-		  stats.skipped,
-		  stats.total);
+		  stats->passed,
+		  stats->failed,
+		  stats->skipped,
+		  stats->total);
 }
 
 /* Append formatted message to log. */
@@ -330,6 +337,14 @@ void __kunit_do_failed_assertion(struct kunit *test,
 }
 EXPORT_SYMBOL_GPL(__kunit_do_failed_assertion);
 
+static void kunit_init_params(struct kunit *test)
+{
+	test->params_array.params = NULL;
+	test->params_array.get_description = NULL;
+	test->params_array.num_params = 0;
+	test->params_array.elem_size = 0;
+}
+
 void kunit_init_test(struct kunit *test, const char *name, struct string_stream *log)
 {
 	spin_lock_init(&test->lock);
@@ -340,6 +355,7 @@ void kunit_init_test(struct kunit *test, const char *name, struct string_stream 
 		string_stream_clear(log);
 	test->status = KUNIT_SUCCESS;
 	test->status_comment[0] = '\0';
+	kunit_init_params(test);
 }
 EXPORT_SYMBOL_GPL(kunit_init_test);
 
@@ -372,6 +388,40 @@ static void kunit_run_case_check_speed(struct kunit *test,
 		   "Test should be marked slow (runtime: %lld.%09lds)",
 		   duration.tv_sec, duration.tv_nsec);
 }
+
+/* Returns timeout multiplier based on speed.
+ * DEFAULT:		    1
+ * KUNIT_SPEED_SLOW:        3
+ * KUNIT_SPEED_VERY_SLOW:   12
+ */
+static int kunit_timeout_mult(enum kunit_speed speed)
+{
+	switch (speed) {
+	case KUNIT_SPEED_SLOW:
+		return 3;
+	case KUNIT_SPEED_VERY_SLOW:
+		return 12;
+	default:
+		return 1;
+	}
+}
+
+static unsigned long kunit_test_timeout(struct kunit_suite *suite, struct kunit_case *test_case)
+{
+	int mult = 1;
+
+	/*
+	 * The default test timeout is 300 seconds and will be adjusted by mult
+	 * based on the test speed. The test speed will be overridden by the
+	 * innermost test component.
+	 */
+	if (suite->attr.speed != KUNIT_SPEED_UNSET)
+		mult = kunit_timeout_mult(suite->attr.speed);
+	if (test_case->attr.speed != KUNIT_SPEED_UNSET)
+		mult = kunit_timeout_mult(test_case->attr.speed);
+	return mult * kunit_base_timeout * msecs_to_jiffies(MSEC_PER_SEC);
+}
+
 
 /*
  * Initializes and runs test case. Does not clean up or do post validations.
@@ -527,7 +577,8 @@ static void kunit_run_case_catch_errors(struct kunit_suite *suite,
 	kunit_try_catch_init(try_catch,
 			     test,
 			     kunit_try_run_case,
-			     kunit_catch_run_case);
+			     kunit_catch_run_case,
+			     kunit_test_timeout(suite, test_case));
 	context.test = test;
 	context.suite = suite;
 	context.test_case = test_case;
@@ -537,7 +588,8 @@ static void kunit_run_case_catch_errors(struct kunit_suite *suite,
 	kunit_try_catch_init(try_catch,
 			     test,
 			     kunit_try_run_case_cleanup,
-			     kunit_catch_run_case_cleanup);
+			     kunit_catch_run_case_cleanup,
+			     kunit_test_timeout(suite, test_case));
 	kunit_try_catch_run(try_catch, &context);
 
 	/* Propagate the parameter result to the test case. */
@@ -548,26 +600,26 @@ static void kunit_run_case_catch_errors(struct kunit_suite *suite,
 }
 
 static void kunit_print_suite_stats(struct kunit_suite *suite,
-				    struct kunit_result_stats suite_stats,
-				    struct kunit_result_stats param_stats)
+				    struct kunit_result_stats *suite_stats,
+				    struct kunit_result_stats *param_stats)
 {
 	if (kunit_should_print_stats(suite_stats)) {
 		kunit_log(KERN_INFO, suite,
 			  "# %s: pass:%lu fail:%lu skip:%lu total:%lu",
 			  suite->name,
-			  suite_stats.passed,
-			  suite_stats.failed,
-			  suite_stats.skipped,
-			  suite_stats.total);
+			  suite_stats->passed,
+			  suite_stats->failed,
+			  suite_stats->skipped,
+			  suite_stats->total);
 	}
 
 	if (kunit_should_print_stats(param_stats)) {
 		kunit_log(KERN_INFO, suite,
 			  "# Totals: pass:%lu fail:%lu skip:%lu total:%lu",
-			  param_stats.passed,
-			  param_stats.failed,
-			  param_stats.skipped,
-			  param_stats.total);
+			  param_stats->passed,
+			  param_stats->failed,
+			  param_stats->skipped,
+			  param_stats->total);
 	}
 }
 
@@ -598,9 +650,144 @@ static void kunit_accumulate_stats(struct kunit_result_stats *total,
 	total->total += add.total;
 }
 
-int kunit_run_tests(struct kunit_suite *suite)
+const void *kunit_array_gen_params(struct kunit *test, const void *prev, char *desc)
+{
+	struct kunit_params *params_arr = &test->params_array;
+	const void *param;
+
+	if (test->param_index < params_arr->num_params) {
+		param = (char *)params_arr->params
+			+ test->param_index * params_arr->elem_size;
+
+		if (params_arr->get_description)
+			params_arr->get_description(test, param, desc);
+		return param;
+	}
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(kunit_array_gen_params);
+
+static void kunit_init_parent_param_test(struct kunit_case *test_case, struct kunit *test)
+{
+	if (test_case->param_init) {
+		int err = test_case->param_init(test);
+
+		if (err) {
+			kunit_err(test_case, KUNIT_SUBTEST_INDENT KUNIT_SUBTEST_INDENT
+				"# failed to initialize parent parameter test (%d)", err);
+			test->status = KUNIT_FAILURE;
+			test_case->status = KUNIT_FAILURE;
+		}
+	}
+}
+
+static noinline_for_stack void
+kunit_run_param_test(struct kunit_suite *suite, struct kunit_case *test_case,
+		     struct kunit *test,
+		     struct kunit_result_stats *suite_stats,
+		     struct kunit_result_stats *total_stats,
+		     struct kunit_result_stats *param_stats)
 {
 	char param_desc[KUNIT_PARAM_DESC_SIZE];
+	const void *curr_param;
+
+	kunit_init_parent_param_test(test_case, test);
+	if (test_case->status == KUNIT_FAILURE) {
+		kunit_update_stats(param_stats, test->status);
+		return;
+	}
+	/* Get initial param. */
+	param_desc[0] = '\0';
+	/* TODO: Make generate_params try-catch */
+	curr_param = test_case->generate_params(test, NULL, param_desc);
+	test_case->status = KUNIT_SKIPPED;
+	kunit_log(KERN_INFO, test, KUNIT_SUBTEST_INDENT KUNIT_SUBTEST_INDENT
+		  "KTAP version 1\n");
+	kunit_log(KERN_INFO, test, KUNIT_SUBTEST_INDENT KUNIT_SUBTEST_INDENT
+		  "# Subtest: %s", test_case->name);
+	if (test->params_array.params &&
+	    test_case->generate_params == kunit_array_gen_params) {
+		kunit_log(KERN_INFO, test, KUNIT_SUBTEST_INDENT
+			  KUNIT_SUBTEST_INDENT "1..%zd\n",
+			  test->params_array.num_params);
+	}
+
+	while (curr_param) {
+		struct kunit param_test = {
+			.param_value = curr_param,
+			.param_index = ++test->param_index,
+			.parent = test,
+		};
+		kunit_init_test(&param_test, test_case->name, NULL);
+		param_test.log = test_case->log;
+		kunit_run_case_catch_errors(suite, test_case, &param_test);
+
+		if (param_desc[0] == '\0') {
+			snprintf(param_desc, sizeof(param_desc),
+				 "param-%d", param_test.param_index);
+		}
+
+		kunit_print_ok_not_ok(&param_test, KUNIT_LEVEL_CASE_PARAM,
+				      param_test.status,
+				      param_test.param_index,
+				      param_desc,
+				      param_test.status_comment);
+
+		kunit_update_stats(param_stats, param_test.status);
+
+		/* Get next param. */
+		param_desc[0] = '\0';
+		curr_param = test_case->generate_params(test, curr_param,
+							param_desc);
+	}
+	/*
+	 * TODO: Put into a try catch. Since we don't need suite->exit
+	 * for it we can't reuse kunit_try_run_cleanup for this yet.
+	 */
+	if (test_case->param_exit)
+		test_case->param_exit(test);
+	/* TODO: Put this kunit_cleanup into a try-catch. */
+	kunit_cleanup(test);
+}
+
+static noinline_for_stack void
+kunit_run_one_test(struct kunit_suite *suite, struct kunit_case *test_case,
+		   struct kunit_result_stats *suite_stats,
+		   struct kunit_result_stats *total_stats)
+{
+	struct kunit test = { .param_value = NULL, .param_index = 0 };
+	struct kunit_result_stats param_stats = { 0 };
+
+	kunit_init_test(&test, test_case->name, test_case->log);
+	if (test_case->status == KUNIT_SKIPPED) {
+		/* Test marked as skip */
+		test.status = KUNIT_SKIPPED;
+		kunit_update_stats(&param_stats, test.status);
+	} else if (!test_case->generate_params) {
+		/* Non-parameterised test. */
+		test_case->status = KUNIT_SKIPPED;
+		kunit_run_case_catch_errors(suite, test_case, &test);
+		kunit_update_stats(&param_stats, test.status);
+	} else {
+		kunit_run_param_test(suite, test_case, &test, suite_stats,
+				     total_stats, &param_stats);
+	}
+	kunit_print_attr((void *)test_case, true, KUNIT_LEVEL_CASE);
+
+	kunit_print_test_stats(&test, &param_stats);
+
+	kunit_print_ok_not_ok(&test, KUNIT_LEVEL_CASE, test_case->status,
+			      kunit_test_case_num(suite, test_case),
+			      test_case->name,
+			      test.status_comment);
+
+	kunit_update_stats(suite_stats, test_case->status);
+	kunit_accumulate_stats(total_stats, param_stats);
+}
+
+
+int kunit_run_tests(struct kunit_suite *suite)
+{
 	struct kunit_case *test_case;
 	struct kunit_result_stats suite_stats = { 0 };
 	struct kunit_result_stats total_stats = { 0 };
@@ -619,73 +806,13 @@ int kunit_run_tests(struct kunit_suite *suite)
 
 	kunit_print_suite_start(suite);
 
-	kunit_suite_for_each_test_case(suite, test_case) {
-		struct kunit test = { .param_value = NULL, .param_index = 0 };
-		struct kunit_result_stats param_stats = { 0 };
-
-		kunit_init_test(&test, test_case->name, test_case->log);
-		if (test_case->status == KUNIT_SKIPPED) {
-			/* Test marked as skip */
-			test.status = KUNIT_SKIPPED;
-			kunit_update_stats(&param_stats, test.status);
-		} else if (!test_case->generate_params) {
-			/* Non-parameterised test. */
-			test_case->status = KUNIT_SKIPPED;
-			kunit_run_case_catch_errors(suite, test_case, &test);
-			kunit_update_stats(&param_stats, test.status);
-		} else {
-			/* Get initial param. */
-			param_desc[0] = '\0';
-			test.param_value = test_case->generate_params(NULL, param_desc);
-			test_case->status = KUNIT_SKIPPED;
-			kunit_log(KERN_INFO, &test, KUNIT_SUBTEST_INDENT KUNIT_SUBTEST_INDENT
-				  "KTAP version 1\n");
-			kunit_log(KERN_INFO, &test, KUNIT_SUBTEST_INDENT KUNIT_SUBTEST_INDENT
-				  "# Subtest: %s", test_case->name);
-
-			while (test.param_value) {
-				kunit_run_case_catch_errors(suite, test_case, &test);
-
-				if (param_desc[0] == '\0') {
-					snprintf(param_desc, sizeof(param_desc),
-						 "param-%d", test.param_index);
-				}
-
-				kunit_print_ok_not_ok(&test, KUNIT_LEVEL_CASE_PARAM,
-						      test.status,
-						      test.param_index + 1,
-						      param_desc,
-						      test.status_comment);
-
-				kunit_update_stats(&param_stats, test.status);
-
-				/* Get next param. */
-				param_desc[0] = '\0';
-				test.param_value = test_case->generate_params(test.param_value, param_desc);
-				test.param_index++;
-				test.status = KUNIT_SUCCESS;
-				test.status_comment[0] = '\0';
-				test.priv = NULL;
-			}
-		}
-
-		kunit_print_attr((void *)test_case, true, KUNIT_LEVEL_CASE);
-
-		kunit_print_test_stats(&test, param_stats);
-
-		kunit_print_ok_not_ok(&test, KUNIT_LEVEL_CASE, test_case->status,
-				      kunit_test_case_num(suite, test_case),
-				      test_case->name,
-				      test.status_comment);
-
-		kunit_update_stats(&suite_stats, test_case->status);
-		kunit_accumulate_stats(&total_stats, param_stats);
-	}
+	kunit_suite_for_each_test_case(suite, test_case)
+		kunit_run_one_test(suite, test_case, &suite_stats, &total_stats);
 
 	if (suite->suite_exit)
 		suite->suite_exit(suite);
 
-	kunit_print_suite_stats(suite, suite_stats, total_stats);
+	kunit_print_suite_stats(suite, &suite_stats, &total_stats);
 suite_end:
 	kunit_print_suite_end(suite);
 
@@ -759,7 +886,6 @@ void __kunit_test_suites_exit(struct kunit_suite **suites, int num_suites)
 }
 EXPORT_SYMBOL_GPL(__kunit_test_suites_exit);
 
-#ifdef CONFIG_MODULES
 static void kunit_module_init(struct module *mod)
 {
 	struct kunit_suite_set suite_set, filtered_set;
@@ -847,7 +973,6 @@ static struct notifier_block kunit_mod_nb = {
 	.notifier_call = kunit_module_notify,
 	.priority = 0,
 };
-#endif
 
 KUNIT_DEFINE_ACTION_WRAPPER(kfree_action_wrapper, kfree, const void *)
 
@@ -938,20 +1063,14 @@ static int __init kunit_init(void)
 	kunit_debugfs_init();
 
 	kunit_bus_init();
-#ifdef CONFIG_MODULES
 	return register_module_notifier(&kunit_mod_nb);
-#else
-	return 0;
-#endif
 }
 late_initcall(kunit_init);
 
 static void __exit kunit_exit(void)
 {
 	memset(&kunit_hooks, 0, sizeof(kunit_hooks));
-#ifdef CONFIG_MODULES
 	unregister_module_notifier(&kunit_mod_nb);
-#endif
 
 	kunit_bus_shutdown();
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: ISC
+// SPDX-License-Identifier: BSD-3-Clause-Clear
 /*
  * Copyright (C) 2019 Lorenzo Bianconi <lorenzo.bianconi83@gmail.com>
  */
@@ -77,6 +77,10 @@ int mt76_mcu_skb_send_and_get_msg(struct mt76_dev *dev, struct sk_buff *skb,
 	struct sk_buff *orig_skb = NULL;
 	unsigned long expires;
 	int ret, seq;
+
+	if (mt76_is_sdio(dev))
+		if (test_bit(MT76_RESET, &dev->phy.state) && atomic_read(&dev->bus_hung))
+			return -EIO;
 
 	if (ret_skb)
 		*ret_skb = NULL;

@@ -17,7 +17,7 @@
 #include <nvhw/ref/gh100/dev_riscv_pri.h>
 
 int
-gh100_gsp_fini(struct nvkm_gsp *gsp, bool suspend)
+gh100_gsp_fini(struct nvkm_gsp *gsp, enum nvkm_suspend_state suspend)
 {
 	struct nvkm_falcon *falcon = &gsp->falcon;
 	int ret, time = 4000;
@@ -344,7 +344,7 @@ done:
 
 static struct nvkm_gsp_fwif
 gh100_gsps[] = {
-	{ 0, gh100_gsp_load, &gh100_gsp, &r570_rm_gh100, "570.144", true },
+	{ 0, gh100_gsp_load, &gh100_gsp, &r570_rm_gh100, "570.144" },
 	{}
 };
 

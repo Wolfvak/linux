@@ -5,7 +5,7 @@
  *
  * Copyright (C) 2004-2007 Stanislaw Skowronek <skylark@unaligned.org>
  * Copyright (C) 2009 Johannes Dickgreber <tanzy@gmx.de>
- * Copyright (C) 2011 Joshua Kinard <kumba@gentoo.org>
+ * Copyright (C) 2011 Joshua Kinard <linux@kumba.dev>
  */
 
 #include <linux/clocksource.h>
@@ -52,11 +52,10 @@ void __init plat_time_init(void)
 	int irq = get_c0_compare_int();
 
 	cp0_timer_irq_installed = 1;
-	c0_compare_irqaction.percpu_dev_id = &mips_clockevent_device;
-	c0_compare_irqaction.flags &= ~IRQF_SHARED;
 	irq_set_handler(irq, handle_percpu_devid_irq);
 	irq_set_percpu_devid(irq);
-	setup_percpu_irq(irq, &c0_compare_irqaction);
+	WARN_ON(request_percpu_irq(irq, c0_compare_interrupt,
+				   "timer", &mips_clockevent_device));
 	enable_percpu_irq(irq, IRQ_TYPE_NONE);
 
 	ip30_heart_clocksource_init();

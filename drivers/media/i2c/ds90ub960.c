@@ -1379,7 +1379,7 @@ static int ub960_parse_dt_txport(struct ub960_data *priv,
 	struct ub960_txport *txport;
 	int ret;
 
-	txport = kzalloc(sizeof(*txport), GFP_KERNEL);
+	txport = kzalloc_obj(*txport);
 	if (!txport)
 		return -ENOMEM;
 
@@ -3861,14 +3861,6 @@ static int _ub960_set_routing(struct v4l2_subdev *sd,
 	};
 	int ret;
 
-	/*
-	 * Note: we can only support up to V4L2_FRAME_DESC_ENTRY_MAX, until
-	 * frame desc is made dynamically allocated.
-	 */
-
-	if (routing->num_routes > V4L2_FRAME_DESC_ENTRY_MAX)
-		return -E2BIG;
-
 	ret = v4l2_subdev_routing_validate(sd, routing,
 					   V4L2_SUBDEV_ROUTING_ONLY_1_TO_1 |
 					   V4L2_SUBDEV_ROUTING_NO_SINK_STREAM_MIX);
@@ -4581,7 +4573,7 @@ static int ub960_parse_dt_rxport(struct ub960_data *priv, unsigned int nport,
 	struct ub960_rxport *rxport;
 	int ret;
 
-	rxport = kzalloc(sizeof(*rxport), GFP_KERNEL);
+	rxport = kzalloc_obj(*rxport);
 	if (!rxport)
 		return -ENOMEM;
 

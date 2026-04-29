@@ -80,7 +80,7 @@
 #endif
 
 
-#ifdef __ASSEMBLY__
+#ifdef __ASSEMBLER__
 
 #define __pgprot(x)	(x)
 
@@ -126,7 +126,6 @@ void clear_user_highpage(struct page *page, unsigned long vaddr);
 void copy_user_highpage(struct page *to, struct page *from,
 			unsigned long vaddr, struct vm_area_struct *vma);
 #else
-# define clear_user_page(page, vaddr, pg)	clear_page(page)
 # define copy_user_page(to, from, vaddr, pg)	copy_page(to, from)
 #endif
 
@@ -172,7 +171,7 @@ static inline unsigned long ___pa(unsigned long va)
 #define page_to_virt(page)	__va(page_to_pfn(page) << PAGE_SHIFT)
 #define virt_addr_valid(kaddr)	pfn_valid(__pa(kaddr) >> PAGE_SHIFT)
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #include <asm-generic/memory_model.h>
 #endif /* _XTENSA_PAGE_H */

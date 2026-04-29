@@ -21,7 +21,8 @@
  *
  * @flags:
  *   Supported by all adapters:
- *   %I2C_M_RD: read data (from slave to master). Guaranteed to be 0x0001!
+ *   %I2C_M_RD: read data (from slave to master). Guaranteed to be 0x0001! If
+ *   not set, the transaction is interpreted as write.
  *
  *   Optional:
  *   %I2C_M_DMA_SAFE: the buffer of this message is DMA safe. Makes only sense
@@ -35,7 +36,7 @@
  *
  *   Only if I2C_FUNC_NOSTART is set:
  *   %I2C_M_NOSTART: skip repeated start sequence
-
+ *
  *   Only if I2C_FUNC_PROTOCOL_MANGLING is set:
  *   %I2C_M_NO_RD_ACK: in a read message, master ACK/NACK bit is skipped
  *   %I2C_M_IGNORE_NAK: treat NACK from client as ACK

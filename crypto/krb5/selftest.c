@@ -7,6 +7,7 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/hex.h>
 #include <linux/slab.h>
 #include <crypto/skcipher.h>
 #include <crypto/hash.h>
@@ -152,6 +153,7 @@ static int krb5_test_one_prf(const struct krb5_prf_test *test)
 
 out:
 	clear_buf(&result);
+	clear_buf(&prf);
 	clear_buf(&octet);
 	clear_buf(&key);
 	return ret;

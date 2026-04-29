@@ -59,7 +59,6 @@ struct writeback_control {
 	unsigned for_kupdate:1;		/* A kupdate writeback */
 	unsigned for_background:1;	/* A background writeback */
 	unsigned tagged_writepages:1;	/* tag-and-write to avoid livelock */
-	unsigned for_reclaim:1;		/* Invoked from the page allocator */
 	unsigned range_cyclic:1;	/* range_start is cyclic */
 	unsigned for_sync:1;		/* sync(2) WB_SYNC_ALL writeback */
 	unsigned unpinned_netfs_wb:1;	/* Cleared I_PINNING_NETFS_WB */
@@ -71,16 +70,6 @@ struct writeback_control {
 	 * can set the following flag to disable the accounting.
 	 */
 	unsigned no_cgroup_owner:1;
-
-	/* To enable batching of swap writes to non-block-device backends,
-	 * "plug" can be set point to a 'struct swap_iocb *'.  When all swap
-	 * writes have been submitted, if with swap_iocb is not NULL,
-	 * swap_write_unplug() should be called.
-	 */
-	struct swap_iocb **swap_plug;
-
-	/* Target list for splitting a large folio */
-	struct list_head *list;
 
 	/* internal fields used by the ->writepages implementation: */
 	struct folio_batch fbatch;
@@ -200,11 +189,11 @@ void wakeup_flusher_threads_bdi(struct backing_dev_info *bdi,
 void inode_wait_for_writeback(struct inode *inode);
 void inode_io_list_del(struct inode *inode);
 
-/* writeback.h requires fs.h; it, too, is not included from here. */
-static inline void wait_on_inode(struct inode *inode)
+static inline xa_mark_t wbc_to_tag(struct writeback_control *wbc)
 {
-	wait_var_event(inode_state_wait_address(inode, __I_NEW),
-		       !(READ_ONCE(inode->i_state) & I_NEW));
+	if (wbc->sync_mode == WB_SYNC_ALL || wbc->tagged_writepages)
+		return PAGECACHE_TAG_TOWRITE;
+	return PAGECACHE_TAG_DIRTY;
 }
 
 #ifdef CONFIG_CGROUP_WRITEBACK
@@ -245,7 +234,7 @@ static inline void inode_attach_wb(struct inode *inode, struct folio *folio)
 static inline void inode_detach_wb(struct inode *inode)
 {
 	if (inode->i_wb) {
-		WARN_ON_ONCE(!(inode->i_state & I_CLEAR));
+		WARN_ON_ONCE(!(inode_state_read_once(inode) & I_CLEAR));
 		wb_put(inode->i_wb);
 		inode->i_wb = NULL;
 	}
@@ -275,6 +264,8 @@ static inline void wbc_init_bio(struct writeback_control *wbc, struct bio *bio)
 	if (wbc->wb)
 		bio_associate_blkg_from_css(bio, wbc->wb->blkcg_css);
 }
+
+void inode_switch_wbs_work_fn(struct work_struct *work);
 
 #else	/* CONFIG_CGROUP_WRITEBACK */
 
@@ -337,9 +328,6 @@ struct dirty_throttle_control {
 	bool			dirty_exceeded;
 };
 
-void laptop_io_completion(struct backing_dev_info *info);
-void laptop_sync_completion(void);
-void laptop_mode_timer_fn(struct timer_list *t);
 bool node_dirty_ok(struct pglist_data *pgdat);
 int wb_domain_init(struct wb_domain *dom, gfp_t gfp);
 #ifdef CONFIG_CGROUP_WRITEBACK
@@ -351,7 +339,6 @@ extern struct wb_domain global_wb_domain;
 /* These are exported to sysctl. */
 extern unsigned int dirty_writeback_interval;
 extern unsigned int dirty_expire_interval;
-extern int laptop_mode;
 
 void global_dirty_limits(unsigned long *pbackground, unsigned long *pdirty);
 unsigned long wb_calc_thresh(struct bdi_writeback *wb, unsigned long thresh);
@@ -371,12 +358,6 @@ bool wb_over_bg_thresh(struct bdi_writeback *wb);
 struct folio *writeback_iter(struct address_space *mapping,
 		struct writeback_control *wbc, struct folio *folio, int *error);
 
-typedef int (*writepage_t)(struct folio *folio, struct writeback_control *wbc,
-				void *data);
-
-int write_cache_pages(struct address_space *mapping,
-		      struct writeback_control *wbc, writepage_t writepage,
-		      void *data);
 int do_writepages(struct address_space *mapping, struct writeback_control *wbc);
 void writeback_set_ratelimit(void);
 void tag_pages_for_writeback(struct address_space *mapping,
@@ -388,5 +369,10 @@ bool redirty_page_for_writepage(struct writeback_control *, struct page *);
 
 void sb_mark_inode_writeback(struct inode *inode);
 void sb_clear_inode_writeback(struct inode *inode);
+
+/*
+ * 4MB minimal write chunk size
+ */
+#define MIN_WRITEBACK_PAGES	(4096UL >> (PAGE_SHIFT - 10))
 
 #endif		/* WRITEBACK_H */

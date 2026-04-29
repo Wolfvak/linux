@@ -100,7 +100,7 @@ static struct ccu_pll_data *ccu_pll_create_data(struct device_node *np)
 {
 	struct ccu_pll_data *data;
 
-	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	data = kzalloc_obj(*data);
 	if (!data)
 		return ERR_PTR(-ENOMEM);
 
@@ -196,7 +196,7 @@ static void ccu_pll_clk_unregister(struct ccu_pll_data *data, bool defer)
 {
 	int idx;
 
-	/* Uninstall only the clocks registered on the specfied stage */
+	/* Uninstall only the clocks registered on the specified stage */
 	for (idx = 0; idx < CCU_PLL_NUM; ++idx) {
 		if (!!(pll_info[idx].features & CCU_PLL_BASIC) ^ defer)
 			continue;

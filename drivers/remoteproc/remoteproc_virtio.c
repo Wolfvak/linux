@@ -136,7 +136,7 @@ static struct virtqueue *rp_find_vq(struct virtio_device *vdev,
 	size = vring_size(num, rvring->align);
 	memset(addr, 0, size);
 
-	dev_dbg(dev, "vring%d: va %pK qsz %d notifyid %d\n",
+	dev_dbg(dev, "vring%d: va %p qsz %d notifyid %d\n",
 		id, addr, num, rvring->notifyid);
 
 	/*
@@ -430,7 +430,7 @@ static int rproc_add_virtio_dev(struct rproc_vdev *rvdev, int id)
 	}
 
 	/* Allocate virtio device */
-	vdev = kzalloc(sizeof(*vdev), GFP_KERNEL);
+	vdev = kzalloc_obj(*vdev);
 	if (!vdev) {
 		ret = -ENOMEM;
 		goto out;

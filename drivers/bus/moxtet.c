@@ -8,6 +8,7 @@
 #include <dt-bindings/bus/moxtet.h>
 #include <linux/bitops.h>
 #include <linux/debugfs.h>
+#include <linux/hex.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/moxtet.h>
@@ -144,7 +145,7 @@ moxtet_alloc_device(struct moxtet *moxtet)
 	if (!get_device(moxtet->dev))
 		return NULL;
 
-	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+	dev = kzalloc_obj(*dev);
 	if (!dev) {
 		put_device(moxtet->dev);
 		return NULL;
@@ -737,8 +738,7 @@ static int moxtet_irq_setup(struct moxtet *moxtet)
 {
 	int i, ret;
 
-	moxtet->irq.domain = irq_domain_create_simple(of_fwnode_handle(moxtet->dev->of_node),
-						      MOXTET_NIRQS, 0,
+	moxtet->irq.domain = irq_domain_create_simple(dev_fwnode(moxtet->dev), MOXTET_NIRQS, 0,
 						      &moxtet_irq_domain, moxtet);
 	if (moxtet->irq.domain == NULL) {
 		dev_err(moxtet->dev, "Could not add IRQ domain\n");

@@ -6,7 +6,7 @@
 #include "iwl-trans.h"
 #include "iwl-fh.h"
 #include "iwl-context-info.h"
-#include "internal.h"
+#include "gen1_2/internal.h"
 #include "iwl-prph.h"
 
 static void *_iwl_pcie_ctxt_info_dma_alloc_coherent(struct iwl_trans *trans,
@@ -99,10 +99,10 @@ int iwl_pcie_init_fw_sec(struct iwl_trans *trans,
 	/* add 2 due to separators */
 	paging_cnt = iwl_pcie_get_num_sections(fw, lmac_cnt + umac_cnt + 2);
 
-	dram->fw = kcalloc(umac_cnt + lmac_cnt, sizeof(*dram->fw), GFP_KERNEL);
+	dram->fw = kzalloc_objs(*dram->fw, umac_cnt + lmac_cnt);
 	if (!dram->fw)
 		return -ENOMEM;
-	dram->paging = kcalloc(paging_cnt, sizeof(*dram->paging), GFP_KERNEL);
+	dram->paging = kzalloc_objs(*dram->paging, paging_cnt);
 	if (!dram->paging)
 		return -ENOMEM;
 

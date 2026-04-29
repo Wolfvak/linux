@@ -113,8 +113,7 @@ static int efivarfs_create(struct mnt_idmap *idmap, struct inode *dir,
 
 	inode->i_private = var;
 
-	d_instantiate(dentry, inode);
-	dget(dentry);
+	d_make_persistent(dentry, inode);
 
 	return 0;
 }
@@ -126,9 +125,7 @@ static int efivarfs_unlink(struct inode *dir, struct dentry *dentry)
 	if (efivar_entry_delete(var))
 		return -EINVAL;
 
-	drop_nlink(d_inode(dentry));
-	dput(dentry);
-	return 0;
+	return simple_unlink(dir, dentry);
 };
 
 const struct inode_operations efivarfs_dir_inode_operations = {
@@ -138,7 +135,7 @@ const struct inode_operations efivarfs_dir_inode_operations = {
 };
 
 static int
-efivarfs_fileattr_get(struct dentry *dentry, struct fileattr *fa)
+efivarfs_fileattr_get(struct dentry *dentry, struct file_kattr *fa)
 {
 	unsigned int i_flags;
 	unsigned int flags = 0;
@@ -154,7 +151,7 @@ efivarfs_fileattr_get(struct dentry *dentry, struct fileattr *fa)
 
 static int
 efivarfs_fileattr_set(struct mnt_idmap *idmap,
-		      struct dentry *dentry, struct fileattr *fa)
+		      struct dentry *dentry, struct file_kattr *fa)
 {
 	unsigned int i_flags = 0;
 

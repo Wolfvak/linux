@@ -28,6 +28,7 @@
 #include "session.h"
 #include "perf_regs.h"
 #include "string2.h"
+#include "dwarf-regs.h"
 
 /* 4096 - 2 ('\n' + '\0') */
 #define MAX_CMDLEN 4094
@@ -448,10 +449,10 @@ static int probe_cache__open(struct probe_cache *pcache, const char *target,
 	if (!target || !strcmp(target, DSO__NAME_KALLSYMS)) {
 		target = DSO__NAME_KALLSYMS;
 		is_kallsyms = true;
-		ret = sysfs__sprintf_build_id("/", sbuildid);
+		ret = sysfs__snprintf_build_id("/", sbuildid, sizeof(sbuildid));
 	} else {
 		nsinfo__mountns_enter(nsi, &nsc);
-		ret = filename__sprintf_build_id(target, sbuildid);
+		ret = filename__snprintf_build_id(target, sbuildid, sizeof(sbuildid));
 		nsinfo__mountns_exit(&nsc);
 	}
 
@@ -784,7 +785,7 @@ static int synthesize_sdt_probe_arg(struct strbuf *buf, int i, const char *arg)
 		op = desc;
 	}
 
-	ret = arch_sdt_arg_parse_op(op, &new_op);
+	ret = perf_sdt_arg_parse_op(EM_HOST, op, &new_op);
 
 	if (ret < 0)
 		goto error;

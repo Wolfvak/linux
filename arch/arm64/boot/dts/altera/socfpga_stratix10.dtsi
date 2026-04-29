@@ -130,16 +130,19 @@
 		cb_intosc_hs_div2_clk: cb-intosc-hs-div2-clk {
 			#clock-cells = <0>;
 			compatible = "fixed-clock";
+			clock-frequency = <150000000>;
 		};
 
 		cb_intosc_ls_clk: cb-intosc-ls-clk {
 			#clock-cells = <0>;
 			compatible = "fixed-clock";
+			clock-frequency = <300000000>;
 		};
 
 		f2s_free_clk: f2s-free-clk {
 			#clock-cells = <0>;
 			compatible = "fixed-clock";
+			status = "disabled";
 		};
 
 		osc1: osc1 {
@@ -379,7 +382,7 @@
 
 		pinctrl0: pinctrl@ffd13000 {
 			compatible = "pinctrl-single";
-			reg = <0xffd13000 0xA0>;
+			reg = <0xffd13000 0xa0>;
 			#pinctrl-cells = <1>;
 			pinctrl-single,register-width = <32>;
 			pinctrl-single,function-mask = <0x0000000f>;
@@ -395,7 +398,7 @@
 
 		rst: rstmgr@ffd11000 {
 			#reset-cells = <1>;
-			compatible = "altr,stratix10-rst-mgr";
+			compatible = "altr,stratix10-rst-mgr", "altr,rst-mgr";
 			reg = <0xffd11000 0x1000>;
 		};
 
@@ -625,6 +628,15 @@
 				reg = <0xff8c0400 0x100>;
 				altr,ecc-parent = <&gmac0>;
 				interrupts = <5 4>;
+			};
+
+			sdmmca-ecc@ff8c8c00 {
+				compatible = "altr,socfpga-s10-sdmmc-ecc",
+					     "altr,socfpga-sdmmc-ecc";
+				reg = <0xff8c8c00 0x100>;
+				altr,ecc-parent = <&mmc>;
+				interrupts = <14 4>,
+					     <15 4>;
 			};
 
 		};

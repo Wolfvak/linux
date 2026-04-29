@@ -43,8 +43,8 @@
  * alias.
  */
 #define MODULE_ALIAS_CRYPTO(name)	\
-		__MODULE_INFO(alias, alias_userspace, name);	\
-		__MODULE_INFO(alias, alias_crypto, "crypto-" name)
+		MODULE_INFO(alias, name);	\
+		MODULE_INFO(alias, "crypto-" name)
 
 struct crypto_aead;
 struct crypto_instance;
@@ -105,6 +105,18 @@ struct crypto_queue {
 
 	unsigned int qlen;
 	unsigned int max_qlen;
+};
+
+struct scatter_walk {
+	/* Must be the first member, see struct skcipher_walk. */
+	union {
+		void *const addr;
+
+		/* Private API field, do not touch. */
+		union crypto_no_such_thing *__addr;
+	};
+	struct scatterlist *sg;
+	unsigned int offset;
 };
 
 struct crypto_attr_alg {

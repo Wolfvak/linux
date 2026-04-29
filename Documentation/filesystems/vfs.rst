@@ -94,11 +94,9 @@ functions:
 
 The passed struct file_system_type describes your filesystem.  When a
 request is made to mount a filesystem onto a directory in your
-namespace, the VFS will call the appropriate mount() method for the
-specific filesystem.  New vfsmount referring to the tree returned by
-->mount() will be attached to the mountpoint, so that when pathname
-resolution reaches the mountpoint it will jump into the root of that
-vfsmount.
+namespace, the VFS will call the appropriate get_tree() method for the
+specific filesystem.  See Documentation/filesystems/mount_api.rst
+for more details.
 
 You can see all filesystems that are registered to the kernel in the
 file /proc/filesystems.
@@ -117,8 +115,6 @@ members are defined:
 		int fs_flags;
 		int (*init_fs_context)(struct fs_context *);
 		const struct fs_parameter_spec *parameters;
-		struct dentry *(*mount) (struct file_system_type *, int,
-			const char *, void *);
 		void (*kill_sb) (struct super_block *);
 		struct module *owner;
 		struct file_system_type * next;
@@ -151,10 +147,6 @@ members are defined:
 	'struct fs_parameter_spec'.
 	More info in Documentation/filesystems/mount_api.rst.
 
-``mount``
-	the method to call when a new instance of this filesystem should
-	be mounted
-
 ``kill_sb``
 	the method to call when an instance of this filesystem should be
 	shut down
@@ -172,68 +164,6 @@ members are defined:
 
   s_lock_key, s_umount_key, s_vfs_rename_key, s_writers_key,
   i_lock_key, i_mutex_key, invalidate_lock_key, i_mutex_dir_key: lockdep-specific
-
-The mount() method has the following arguments:
-
-``struct file_system_type *fs_type``
-	describes the filesystem, partly initialized by the specific
-	filesystem code
-
-``int flags``
-	mount flags
-
-``const char *dev_name``
-	the device name we are mounting.
-
-``void *data``
-	arbitrary mount options, usually comes as an ASCII string (see
-	"Mount Options" section)
-
-The mount() method must return the root dentry of the tree requested by
-caller.  An active reference to its superblock must be grabbed and the
-superblock must be locked.  On failure it should return ERR_PTR(error).
-
-The arguments match those of mount(2) and their interpretation depends
-on filesystem type.  E.g. for block filesystems, dev_name is interpreted
-as block device name, that device is opened and if it contains a
-suitable filesystem image the method creates and initializes struct
-super_block accordingly, returning its root dentry to caller.
-
-->mount() may choose to return a subtree of existing filesystem - it
-doesn't have to create a new one.  The main result from the caller's
-point of view is a reference to dentry at the root of (sub)tree to be
-attached; creation of new superblock is a common side effect.
-
-The most interesting member of the superblock structure that the mount()
-method fills in is the "s_op" field.  This is a pointer to a "struct
-super_operations" which describes the next level of the filesystem
-implementation.
-
-Usually, a filesystem uses one of the generic mount() implementations
-and provides a fill_super() callback instead.  The generic variants are:
-
-``mount_bdev``
-	mount a filesystem residing on a block device
-
-``mount_nodev``
-	mount a filesystem that is not backed by a device
-
-``mount_single``
-	mount a filesystem which shares the instance between all mounts
-
-A fill_super() callback implementation has the following arguments:
-
-``struct super_block *sb``
-	the superblock structure.  The callback must initialize this
-	properly.
-
-``void *data``
-	arbitrary mount options, usually comes as an ASCII string (see
-	"Mount Options" section)
-
-``int silent``
-	whether or not to be silent on error
-
 
 The Superblock Object
 =====================
@@ -267,7 +197,6 @@ filesystem.  The following members are defined:
 					enum freeze_wholder who);
 		int (*unfreeze_fs) (struct super_block *);
 		int (*statfs) (struct dentry *, struct kstatfs *);
-		int (*remount_fs) (struct super_block *, int *, char *);
 		void (*umount_begin) (struct super_block *);
 
 		int (*show_options)(struct seq_file *, struct dentry *);
@@ -327,11 +256,11 @@ or bottom half).
 	inode->i_lock spinlock held.
 
 	This method should be either NULL (normal UNIX filesystem
-	semantics) or "generic_delete_inode" (for filesystems that do
+	semantics) or "inode_just_drop" (for filesystems that do
 	not want to cache inodes - causing "delete_inode" to always be
 	called regardless of the value of i_nlink)
 
-	The "generic_delete_inode()" behavior is equivalent to the old
+	The "inode_just_drop()" behavior is equivalent to the old
 	practice of using "force_delete" in the put_inode() case, but
 	does not have the races that the "force_delete()" approach had.
 
@@ -373,10 +302,6 @@ or bottom half).
 
 ``statfs``
 	called when the VFS needs to get filesystem statistics.
-
-``remount_fs``
-	called when the filesystem is remounted.  This is called with
-	the kernel lock held
 
 ``umount_begin``
 	called when the VFS is unmounting a filesystem.
@@ -508,15 +433,17 @@ As of kernel 2.6.22, the following members are defined:
 		int (*setattr) (struct mnt_idmap *, struct dentry *, struct iattr *);
 		int (*getattr) (struct mnt_idmap *, const struct path *, struct kstat *, u32, unsigned int);
 		ssize_t (*listxattr) (struct dentry *, char *, size_t);
-		void (*update_time)(struct inode *, struct timespec *, int);
+		void (*update_time)(struct inode *inode, enum fs_update_time type,
+				    int flags);
+		void (*sync_lazytime)(struct inode *inode);
 		int (*atomic_open)(struct inode *, struct dentry *, struct file *,
 				   unsigned open_flag, umode_t create_mode);
 		int (*tmpfile) (struct mnt_idmap *, struct inode *, struct file *, umode_t);
 		struct posix_acl * (*get_acl)(struct mnt_idmap *, struct dentry *, int);
 	        int (*set_acl)(struct mnt_idmap *, struct dentry *, struct posix_acl *, int);
 		int (*fileattr_set)(struct mnt_idmap *idmap,
-				    struct dentry *dentry, struct fileattr *fa);
-		int (*fileattr_get)(struct dentry *dentry, struct fileattr *fa);
+				    struct dentry *dentry, struct file_kattr *fa);
+		int (*fileattr_get)(struct dentry *dentry, struct file_kattr *fa);
 	        struct offset_ctx *(*get_offset_ctx)(struct inode *inode);
 	};
 
@@ -665,6 +592,11 @@ otherwise noted.
 	an inode.  If this is not defined the VFS will update the inode
 	itself and call mark_inode_dirty_sync.
 
+``sync_lazytime``:
+	called by the writeback code to update the lazy time stamps to
+	regular time stamp updates that get syncing into the on-disk
+	inode.
+
 ``atomic_open``
 	called on the last component of an open.  Using this optional
 	method the filesystem can look up, possibly create and open the
@@ -758,8 +690,9 @@ process is more complicated and uses write_begin/write_end or
 dirty_folio to write data into the address_space, and
 writepages to writeback data to storage.
 
-Adding and removing pages to/from an address_space is protected by the
-inode's i_mutex.
+Removing pages from an address_space requires holding the inode's i_rwsem
+exclusively, while adding pages to the address_space requires holding the
+inode's i_mapping->invalidate_lock exclusively.
 
 When data is written to a page, the PG_Dirty flag should be set.  It
 typically remains set until writepages asks for it to be written.  This
@@ -822,10 +755,10 @@ cache in your filesystem.  The following members are defined:
 		int (*writepages)(struct address_space *, struct writeback_control *);
 		bool (*dirty_folio)(struct address_space *, struct folio *);
 		void (*readahead)(struct readahead_control *);
-		int (*write_begin)(struct file *, struct address_space *mapping,
+		int (*write_begin)(const struct kiocb *, struct address_space *mapping,
 				   loff_t pos, unsigned len,
-				struct page **pagep, void **fsdata);
-		int (*write_end)(struct file *, struct address_space *mapping,
+				   struct page **pagep, void **fsdata);
+		int (*write_end)(const struct kiocb *, struct address_space *mapping,
 				 loff_t pos, unsigned len, unsigned copied,
 				 struct folio *folio, void *fsdata);
 		sector_t (*bmap)(struct address_space *, sector_t);
@@ -1071,12 +1004,14 @@ This describes how the VFS can manipulate an open file.  As of kernel
 
 	struct file_operations {
 		struct module *owner;
+		fop_flags_t fop_flags;
 		loff_t (*llseek) (struct file *, loff_t, int);
 		ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
 		ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
 		ssize_t (*read_iter) (struct kiocb *, struct iov_iter *);
 		ssize_t (*write_iter) (struct kiocb *, struct iov_iter *);
-		int (*iopoll)(struct kiocb *kiocb, bool spin);
+		int (*iopoll)(struct kiocb *kiocb, struct io_comp_batch *,
+				unsigned int flags);
 		int (*iterate_shared) (struct file *, struct dir_context *);
 		__poll_t (*poll) (struct file *, struct poll_table_struct *);
 		long (*unlocked_ioctl) (struct file *, unsigned int, unsigned long);
@@ -1093,18 +1028,24 @@ This describes how the VFS can manipulate an open file.  As of kernel
 		int (*flock) (struct file *, int, struct file_lock *);
 		ssize_t (*splice_write)(struct pipe_inode_info *, struct file *, loff_t *, size_t, unsigned int);
 		ssize_t (*splice_read)(struct file *, loff_t *, struct pipe_inode_info *, size_t, unsigned int);
-		int (*setlease)(struct file *, long, struct file_lock **, void **);
+		void (*splice_eof)(struct file *file);
+		int (*setlease)(struct file *, int, struct file_lease **, void **);
 		long (*fallocate)(struct file *file, int mode, loff_t offset,
 				  loff_t len);
 		void (*show_fdinfo)(struct seq_file *m, struct file *f);
 	#ifndef CONFIG_MMU
 		unsigned (*mmap_capabilities)(struct file *);
 	#endif
-		ssize_t (*copy_file_range)(struct file *, loff_t, struct file *, loff_t, size_t, unsigned int);
+		ssize_t (*copy_file_range)(struct file *, loff_t, struct file *,
+				loff_t, size_t, unsigned int);
 		loff_t (*remap_file_range)(struct file *file_in, loff_t pos_in,
 					   struct file *file_out, loff_t pos_out,
 					   loff_t len, unsigned int remap_flags);
 		int (*fadvise)(struct file *, loff_t, loff_t, int);
+		int (*uring_cmd)(struct io_uring_cmd *ioucmd, unsigned int issue_flags);
+		int (*uring_cmd_iopoll)(struct io_uring_cmd *, struct io_comp_batch *,
+					unsigned int poll_flags);
+		int (*mmap_prepare)(struct vm_area_desc *);
 	};
 
 Again, all methods are called without any locks being held, unless
@@ -1144,7 +1085,8 @@ otherwise noted.
 	 used on 64 bit kernels.
 
 ``mmap``
-	called by the mmap(2) system call
+	called by the mmap(2) system call. Deprecated in favour of
+	``mmap_prepare``.
 
 ``open``
 	called by the VFS when an inode should be opened.  When the VFS
@@ -1193,9 +1135,12 @@ otherwise noted.
 	method is used by the splice(2) system call
 
 ``setlease``
-	called by the VFS to set or release a file lock lease.  setlease
-	implementations should call generic_setlease to record or remove
-	the lease in the inode after setting it.
+	called by the VFS to set or release a file lock lease.  Local
+	filesystems that wish to use the kernel-internal lease implementation
+	should set this to generic_setlease(). Other setlease implementations
+	should call generic_setlease() to record or remove the lease in the inode
+	after setting it. When set to NULL, attempts to set or remove a lease will
+	return -EINVAL.
 
 ``fallocate``
 	called by the VFS to preallocate blocks or punch a hole.
@@ -1220,6 +1165,15 @@ otherwise noted.
 
 ``fadvise``
 	possibly called by the fadvise64() system call.
+
+``mmap_prepare``
+	Called by the mmap(2) system call. Allows a VFS to set up a
+	file-backed memory mapping, most notably establishing relevant
+	private state and VMA callbacks.
+
+	If further action such as pre-population of page tables is required,
+	this can be specified by the vm_area_desc->action field and related
+	parameters.
 
 Note that the file operations are implemented by the specific
 filesystem in which the inode resides.  When opening a device node

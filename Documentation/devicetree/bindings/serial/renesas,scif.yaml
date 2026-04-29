@@ -12,14 +12,15 @@ maintainers:
 properties:
   compatible:
     oneOf:
+      - enum:
+          - renesas,scif-r7s9210          # RZ/A2
+          - renesas,scif-r9a07g044        # RZ/G2{L,LC}
+          - renesas,scif-r9a09g057        # RZ/V2H(P)
+
       - items:
           - enum:
               - renesas,scif-r7s72100     # RZ/A1H
           - const: renesas,scif           # generic SCIF compatible UART
-
-      - items:
-          - enum:
-              - renesas,scif-r7s9210      # RZ/A2
 
       - items:
           - enum:
@@ -72,20 +73,22 @@ properties:
 
       - items:
           - enum:
-              - renesas,scif-r9a07g044      # RZ/G2{L,LC}
+              - renesas,scif-r8a78000     # R-Car X5H
+          - const: renesas,rcar-gen5-scif # R-Car Gen5
+          - const: renesas,scif           # generic SCIF compatible UART
 
       - items:
           - enum:
               - renesas,scif-r9a07g043      # RZ/G2UL and RZ/Five
               - renesas,scif-r9a07g054      # RZ/V2L
               - renesas,scif-r9a08g045      # RZ/G3S
+              - renesas,scif-r9a08g046      # RZ/G3L
           - const: renesas,scif-r9a07g044   # RZ/G2{L,LC} fallback
-
-      - const: renesas,scif-r9a09g057       # RZ/V2H(P)
 
       - items:
           - enum:
               - renesas,scif-r9a09g047      # RZ/G3E
+              - renesas,scif-r9a09g056      # RZ/V2N
           - const: renesas,scif-r9a09g057   # RZ/V2H fallback
 
   reg:
@@ -174,6 +177,7 @@ allOf:
               - renesas,rcar-gen2-scif
               - renesas,rcar-gen3-scif
               - renesas,rcar-gen4-scif
+              - renesas,rcar-gen5-scif
               - renesas,scif-r9a07g044
               - renesas,scif-r9a09g057
     then:
@@ -189,6 +193,7 @@ allOf:
               - renesas,rcar-gen2-scif
               - renesas,rcar-gen3-scif
               - renesas,rcar-gen4-scif
+              - renesas,rcar-gen5-scif
     then:
       properties:
         interrupts:

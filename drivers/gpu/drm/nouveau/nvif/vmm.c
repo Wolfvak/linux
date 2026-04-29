@@ -219,7 +219,8 @@ nvif_vmm_ctor(struct nvif_mmu *mmu, const char *name, s32 oclass,
 	case RAW: args->type = NVIF_VMM_V0_TYPE_RAW; break;
 	default:
 		WARN_ON(1);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto done;
 	}
 
 	memcpy(args->data, argv, argc);
@@ -233,8 +234,7 @@ nvif_vmm_ctor(struct nvif_mmu *mmu, const char *name, s32 oclass,
 	vmm->limit = args->size;
 
 	vmm->page_nr = args->page_nr;
-	vmm->page = kmalloc_array(vmm->page_nr, sizeof(*vmm->page),
-				  GFP_KERNEL);
+	vmm->page = kmalloc_objs(*vmm->page, vmm->page_nr);
 	if (!vmm->page) {
 		ret = -ENOMEM;
 		goto done;

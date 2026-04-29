@@ -16,6 +16,14 @@
 #include "intel_psr.h"
 #include "intel_psr_regs.h"
 
+#define SILENCE_PERIOD_MIN_TIME	80
+#define SILENCE_PERIOD_MAX_TIME	180
+#define SILENCE_PERIOD_TIME	(SILENCE_PERIOD_MIN_TIME +	\
+				(SILENCE_PERIOD_MAX_TIME -	\
+				 SILENCE_PERIOD_MIN_TIME) / 2)
+
+#define LFPS_CYCLE_COUNT 10
+
 bool intel_alpm_aux_wake_supported(struct intel_dp *intel_dp)
 {
 	return intel_dp->alpm_dpcd & DP_ALPM_CAP;
@@ -26,83 +34,50 @@ bool intel_alpm_aux_less_wake_supported(struct intel_dp *intel_dp)
 	return intel_dp->alpm_dpcd & DP_ALPM_AUX_LESS_CAP;
 }
 
-void intel_alpm_init(struct intel_dp *intel_dp)
+bool intel_alpm_is_alpm_aux_less(struct intel_dp *intel_dp,
+				 const struct intel_crtc_state *crtc_state)
 {
-	u8 dpcd;
-
-	if (drm_dp_dpcd_readb(&intel_dp->aux, DP_RECEIVER_ALPM_CAP, &dpcd) < 0)
-		return;
-
-	intel_dp->alpm_dpcd = dpcd;
-	mutex_init(&intel_dp->alpm_parameters.lock);
+	return intel_psr_needs_alpm_aux_less(intel_dp, crtc_state) ||
+		(crtc_state->has_lobf && intel_alpm_aux_less_wake_supported(intel_dp));
 }
 
-/*
- * See Bspec: 71632 for the table
- *
- * Silence_period = tSilence,Min + ((tSilence,Max - tSilence,Min) / 2)
- *
- * Half cycle duration:
- *
- * Link rates 1.62 - 4.32 and tLFPS_Cycle = 70 ns
- * FLOOR( (Link Rate * tLFPS_Cycle) / (2 * 10) )
- *
- * Link rates 5.4 - 8.1
- * PORT_ALPM_LFPS_CTL[ LFPS Cycle Count ] = 10
- * LFPS Period chosen is the mid-point of the min:max values from the table
- * FLOOR( LFPS Period in Symbol clocks /
- * (2 * PORT_ALPM_LFPS_CTL[ LFPS Cycle Count ]) )
- */
-static bool _lnl_get_silence_period_and_lfps_half_cycle(int link_rate,
-							int *silence_period,
-							int *lfps_half_cycle)
+void intel_alpm_init(struct intel_dp *intel_dp)
 {
-	switch (link_rate) {
-	case 162000:
-		*silence_period = 20;
-		*lfps_half_cycle = 5;
-		break;
-	case 216000:
-		*silence_period = 27;
-		*lfps_half_cycle = 7;
-		break;
-	case 243000:
-		*silence_period = 31;
-		*lfps_half_cycle = 8;
-		break;
-	case 270000:
-		*silence_period = 34;
-		*lfps_half_cycle = 9;
-		break;
-	case 324000:
-		*silence_period = 41;
-		*lfps_half_cycle = 11;
-		break;
-	case 432000:
-		*silence_period = 56;
-		*lfps_half_cycle = 15;
-		break;
-	case 540000:
-		*silence_period = 69;
-		*lfps_half_cycle = 12;
-		break;
-	case 648000:
-		*silence_period = 84;
-		*lfps_half_cycle = 15;
-		break;
-	case 675000:
-		*silence_period = 87;
-		*lfps_half_cycle = 15;
-		break;
-	case 810000:
-		*silence_period = 104;
-		*lfps_half_cycle = 19;
-		break;
-	default:
-		*silence_period = *lfps_half_cycle = -1;
-		return false;
+	mutex_init(&intel_dp->alpm.lock);
+}
+
+static int get_silence_period_symbols(const struct intel_crtc_state *crtc_state)
+{
+	return SILENCE_PERIOD_TIME * intel_dp_link_symbol_clock(crtc_state->port_clock) /
+		1000 / 1000;
+}
+
+static void get_lfps_cycle_min_max_time(const struct intel_crtc_state *crtc_state,
+					int *min, int *max)
+{
+	if (crtc_state->port_clock < 540000) {
+		*min = 65 * LFPS_CYCLE_COUNT;
+		*max = 75 * LFPS_CYCLE_COUNT;
+	} else {
+		*min = 140;
+		*max = 800;
 	}
-	return true;
+}
+
+static int get_lfps_cycle_time(const struct intel_crtc_state *crtc_state)
+{
+	int tlfps_cycle_min, tlfps_cycle_max;
+
+	get_lfps_cycle_min_max_time(crtc_state, &tlfps_cycle_min,
+				    &tlfps_cycle_max);
+
+	return tlfps_cycle_min +  (tlfps_cycle_max - tlfps_cycle_min) / 2;
+}
+
+static int get_lfps_half_cycle_clocks(const struct intel_crtc_state *crtc_state)
+{
+	return get_lfps_cycle_time(crtc_state) * crtc_state->port_clock / 1000 /
+		1000 / (2 * LFPS_CYCLE_COUNT);
 }
 
 /*
@@ -124,40 +99,36 @@ static bool _lnl_get_silence_period_and_lfps_half_cycle(int link_rate,
  * tML_PHY_LOCK = TPS4 Length * ( 10 / (Link Rate in MHz) )
  * TPS4 Length = 252 Symbols
  */
-static int _lnl_compute_aux_less_wake_time(int port_clock)
+static int _lnl_compute_aux_less_wake_time(const struct intel_crtc_state *crtc_state)
 {
 	int tphy2_p2_to_p0 = 12 * 1000;
-	int tlfps_period_max = 800;
-	int tsilence_max = 180;
 	int t1 = 50 * 1000;
 	int tps4 = 252;
 	/* port_clock is link rate in 10kbit/s units */
-	int tml_phy_lock = 1000 * 1000 * tps4 / port_clock;
+	int tml_phy_lock = 1000 * 1000 * tps4 / crtc_state->port_clock;
 	int num_ml_phy_lock = 7 + DIV_ROUND_UP(6500, tml_phy_lock) + 1;
 	int t2 = num_ml_phy_lock * tml_phy_lock;
 	int tcds = 1 * t2;
 
-	return DIV_ROUND_UP(tphy2_p2_to_p0 + tlfps_period_max + tsilence_max +
-			    t1 + tcds, 1000);
+	return DIV_ROUND_UP(tphy2_p2_to_p0 + get_lfps_cycle_time(crtc_state) +
+			    SILENCE_PERIOD_TIME + t1 + tcds, 1000);
 }
 
 static int
 _lnl_compute_aux_less_alpm_params(struct intel_dp *intel_dp,
-				  const struct intel_crtc_state *crtc_state)
+				  struct intel_crtc_state *crtc_state)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 	int aux_less_wake_time, aux_less_wake_lines, silence_period,
 		lfps_half_cycle;
 
 	aux_less_wake_time =
-		_lnl_compute_aux_less_wake_time(crtc_state->port_clock);
+		_lnl_compute_aux_less_wake_time(crtc_state);
 	aux_less_wake_lines = intel_usecs_to_scanlines(&crtc_state->hw.adjusted_mode,
 						       aux_less_wake_time);
+	silence_period = get_silence_period_symbols(crtc_state);
 
-	if (!_lnl_get_silence_period_and_lfps_half_cycle(crtc_state->port_clock,
-							 &silence_period,
-							 &lfps_half_cycle))
-		return false;
+	lfps_half_cycle = get_lfps_half_cycle_clocks(crtc_state);
 
 	if (aux_less_wake_lines > ALPM_CTL_AUX_LESS_WAKE_TIME_MASK ||
 	    silence_period > PORT_ALPM_CTL_SILENCE_PERIOD_MASK ||
@@ -167,15 +138,15 @@ _lnl_compute_aux_less_alpm_params(struct intel_dp *intel_dp,
 	if (display->params.psr_safest_params)
 		aux_less_wake_lines = ALPM_CTL_AUX_LESS_WAKE_TIME_MASK;
 
-	intel_dp->alpm_parameters.aux_less_wake_lines = aux_less_wake_lines;
-	intel_dp->alpm_parameters.silence_period_sym_clocks = silence_period;
-	intel_dp->alpm_parameters.lfps_half_cycle_num_of_syms = lfps_half_cycle;
+	crtc_state->alpm_state.aux_less_wake_lines = aux_less_wake_lines;
+	crtc_state->alpm_state.silence_period_sym_clocks = silence_period;
+	crtc_state->alpm_state.lfps_half_cycle_num_of_syms = lfps_half_cycle;
 
 	return true;
 }
 
 static bool _lnl_compute_alpm_params(struct intel_dp *intel_dp,
-				     const struct intel_crtc_state *crtc_state)
+				     struct intel_crtc_state *crtc_state)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 	int check_entry_lines;
@@ -196,7 +167,7 @@ static bool _lnl_compute_alpm_params(struct intel_dp *intel_dp,
 	if (display->params.psr_safest_params)
 		check_entry_lines = 15;
 
-	intel_dp->alpm_parameters.check_entry_lines = check_entry_lines;
+	crtc_state->alpm_state.check_entry_lines = check_entry_lines;
 
 	return true;
 }
@@ -227,7 +198,7 @@ static int io_buffer_wake_time(const struct intel_crtc_state *crtc_state)
 }
 
 bool intel_alpm_compute_params(struct intel_dp *intel_dp,
-			       const struct intel_crtc_state *crtc_state)
+			       struct intel_crtc_state *crtc_state)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 	int io_wake_lines, io_wake_time, fast_wake_lines, fast_wake_time;
@@ -265,8 +236,8 @@ bool intel_alpm_compute_params(struct intel_dp *intel_dp,
 		io_wake_lines = fast_wake_lines = max_wake_lines;
 
 	/* According to Bspec lower limit should be set as 7 lines. */
-	intel_dp->alpm_parameters.io_wake_lines = max(io_wake_lines, 7);
-	intel_dp->alpm_parameters.fast_wake_lines = max(fast_wake_lines, 7);
+	crtc_state->alpm_state.io_wake_lines = max(io_wake_lines, 7);
+	crtc_state->alpm_state.fast_wake_lines = max(fast_wake_lines, 7);
 
 	return true;
 }
@@ -280,12 +251,12 @@ void intel_alpm_lobf_compute_config(struct intel_dp *intel_dp,
 	int waketime_in_lines, first_sdp_position;
 	int context_latency, guardband;
 
-	if (intel_dp->alpm_parameters.lobf_disable_debug) {
+	if (intel_dp->alpm.lobf_disable_debug) {
 		drm_dbg_kms(display->drm, "LOBF is disabled by debug flag\n");
 		return;
 	}
 
-	if (intel_dp->alpm_parameters.sink_alpm_error)
+	if (intel_dp->alpm.sink_alpm_error)
 		return;
 
 	if (!intel_dp_is_edp(intel_dp))
@@ -316,9 +287,9 @@ void intel_alpm_lobf_compute_config(struct intel_dp *intel_dp,
 		    adjusted_mode->crtc_vdisplay - context_latency;
 	first_sdp_position = adjusted_mode->crtc_vtotal - adjusted_mode->crtc_vsync_start;
 	if (intel_alpm_aux_less_wake_supported(intel_dp))
-		waketime_in_lines = intel_dp->alpm_parameters.io_wake_lines;
+		waketime_in_lines = crtc_state->alpm_state.io_wake_lines;
 	else
-		waketime_in_lines = intel_dp->alpm_parameters.aux_less_wake_lines;
+		waketime_in_lines = crtc_state->alpm_state.aux_less_wake_lines;
 
 	crtc_state->has_lobf = (context_latency + guardband) >
 		(first_sdp_position + waketime_in_lines);
@@ -329,45 +300,38 @@ static void lnl_alpm_configure(struct intel_dp *intel_dp,
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 	enum transcoder cpu_transcoder = crtc_state->cpu_transcoder;
-	enum port port = dp_to_dig_port(intel_dp)->base.port;
 	u32 alpm_ctl;
 
 	if (DISPLAY_VER(display) < 20 || (!intel_psr_needs_alpm(intel_dp, crtc_state) &&
 					  !crtc_state->has_lobf))
 		return;
 
-	mutex_lock(&intel_dp->alpm_parameters.lock);
+	mutex_lock(&intel_dp->alpm.lock);
 	/*
 	 * Panel Replay on eDP is always using ALPM aux less. I.e. no need to
 	 * check panel support at this point.
 	 */
-	if ((crtc_state->has_panel_replay && intel_dp_is_edp(intel_dp)) ||
-	    (crtc_state->has_lobf && intel_alpm_aux_less_wake_supported(intel_dp))) {
+	if (intel_alpm_is_alpm_aux_less(intel_dp, crtc_state)) {
 		alpm_ctl = ALPM_CTL_ALPM_ENABLE |
 			ALPM_CTL_ALPM_AUX_LESS_ENABLE |
 			ALPM_CTL_AUX_LESS_SLEEP_HOLD_TIME_50_SYMBOLS |
-			ALPM_CTL_AUX_LESS_WAKE_TIME(intel_dp->alpm_parameters.aux_less_wake_lines);
+			ALPM_CTL_AUX_LESS_WAKE_TIME(crtc_state->alpm_state.aux_less_wake_lines);
 
-		intel_de_write(display,
-			       PORT_ALPM_CTL(port),
-			       PORT_ALPM_CTL_ALPM_AUX_LESS_ENABLE |
-			       PORT_ALPM_CTL_MAX_PHY_SWING_SETUP(15) |
-			       PORT_ALPM_CTL_MAX_PHY_SWING_HOLD(0) |
-			       PORT_ALPM_CTL_SILENCE_PERIOD(
-				       intel_dp->alpm_parameters.silence_period_sym_clocks));
+		if (intel_dp->as_sdp_supported) {
+			u32 pr_alpm_ctl = PR_ALPM_CTL_ADAPTIVE_SYNC_SDP_POSITION_T1;
 
-		intel_de_write(display,
-			       PORT_ALPM_LFPS_CTL(port),
-			       PORT_ALPM_LFPS_CTL_LFPS_CYCLE_COUNT(10) |
-			       PORT_ALPM_LFPS_CTL_LFPS_HALF_CYCLE_DURATION(
-				       intel_dp->alpm_parameters.lfps_half_cycle_num_of_syms) |
-			       PORT_ALPM_LFPS_CTL_FIRST_LFPS_HALF_CYCLE_DURATION(
-				       intel_dp->alpm_parameters.lfps_half_cycle_num_of_syms) |
-			       PORT_ALPM_LFPS_CTL_LAST_LFPS_HALF_CYCLE_DURATION(
-				       intel_dp->alpm_parameters.lfps_half_cycle_num_of_syms));
+			if (crtc_state->link_off_after_as_sdp_when_pr_active)
+				pr_alpm_ctl |= PR_ALPM_CTL_ALLOW_LINK_OFF_BETWEEN_AS_SDP_AND_SU;
+			if (crtc_state->disable_as_sdp_when_pr_active)
+				pr_alpm_ctl |= PR_ALPM_CTL_AS_SDP_TRANSMISSION_IN_ACTIVE_DISABLE;
+
+			intel_de_write(display, PR_ALPM_CTL(display, cpu_transcoder),
+				       pr_alpm_ctl);
+		}
+
 	} else {
 		alpm_ctl = ALPM_CTL_EXTENDED_FAST_WAKE_ENABLE |
-			ALPM_CTL_EXTENDED_FAST_WAKE_TIME(intel_dp->alpm_parameters.fast_wake_lines);
+			ALPM_CTL_EXTENDED_FAST_WAKE_TIME(crtc_state->alpm_state.fast_wake_lines);
 	}
 
 	if (crtc_state->has_lobf) {
@@ -375,17 +339,47 @@ static void lnl_alpm_configure(struct intel_dp *intel_dp,
 		drm_dbg_kms(display->drm, "Link off between frames (LOBF) enabled\n");
 	}
 
-	alpm_ctl |= ALPM_CTL_ALPM_ENTRY_CHECK(intel_dp->alpm_parameters.check_entry_lines);
+	alpm_ctl |= ALPM_CTL_ALPM_ENTRY_CHECK(crtc_state->alpm_state.check_entry_lines);
 
 	intel_de_write(display, ALPM_CTL(display, cpu_transcoder), alpm_ctl);
-	mutex_unlock(&intel_dp->alpm_parameters.lock);
+	mutex_unlock(&intel_dp->alpm.lock);
 }
 
 void intel_alpm_configure(struct intel_dp *intel_dp,
 			  const struct intel_crtc_state *crtc_state)
 {
 	lnl_alpm_configure(intel_dp, crtc_state);
-	intel_dp->alpm_parameters.transcoder = crtc_state->cpu_transcoder;
+	intel_dp->alpm.transcoder = crtc_state->cpu_transcoder;
+}
+
+void intel_alpm_port_configure(struct intel_dp *intel_dp,
+			       const struct intel_crtc_state *crtc_state)
+{
+	struct intel_display *display = to_intel_display(intel_dp);
+	enum port port = dp_to_dig_port(intel_dp)->base.port;
+	u32 alpm_ctl_val = 0, lfps_ctl_val = 0;
+
+	if (DISPLAY_VER(display) < 20)
+		return;
+
+	if (intel_alpm_is_alpm_aux_less(intel_dp, crtc_state)) {
+		alpm_ctl_val = PORT_ALPM_CTL_ALPM_AUX_LESS_ENABLE |
+			PORT_ALPM_CTL_MAX_PHY_SWING_SETUP(15) |
+			PORT_ALPM_CTL_MAX_PHY_SWING_HOLD(0) |
+			PORT_ALPM_CTL_SILENCE_PERIOD(
+				crtc_state->alpm_state.silence_period_sym_clocks);
+		lfps_ctl_val = PORT_ALPM_LFPS_CTL_LFPS_CYCLE_COUNT(LFPS_CYCLE_COUNT) |
+			PORT_ALPM_LFPS_CTL_LFPS_HALF_CYCLE_DURATION(
+				crtc_state->alpm_state.lfps_half_cycle_num_of_syms) |
+			PORT_ALPM_LFPS_CTL_FIRST_LFPS_HALF_CYCLE_DURATION(
+				crtc_state->alpm_state.lfps_half_cycle_num_of_syms) |
+			PORT_ALPM_LFPS_CTL_LAST_LFPS_HALF_CYCLE_DURATION(
+				crtc_state->alpm_state.lfps_half_cycle_num_of_syms);
+	}
+
+	intel_de_write(display, PORT_ALPM_CTL(port), alpm_ctl_val);
+
+	intel_de_write(display, PORT_ALPM_LFPS_CTL(port), lfps_ctl_val);
 }
 
 void intel_alpm_pre_plane_update(struct intel_atomic_state *state,
@@ -418,10 +412,10 @@ void intel_alpm_pre_plane_update(struct intel_atomic_state *state,
 			continue;
 
 		if (old_crtc_state->has_lobf) {
-			mutex_lock(&intel_dp->alpm_parameters.lock);
+			mutex_lock(&intel_dp->alpm.lock);
 			intel_de_write(display, ALPM_CTL(display, cpu_transcoder), 0);
 			drm_dbg_kms(display->drm, "Link off between frames (LOBF) disabled\n");
-			mutex_unlock(&intel_dp->alpm_parameters.lock);
+			mutex_unlock(&intel_dp->alpm.lock);
 		}
 	}
 }
@@ -515,7 +509,7 @@ i915_edp_lobf_debug_get(void *data, u64 *val)
 	struct intel_connector *connector = data;
 	struct intel_dp *intel_dp = enc_to_intel_dp(connector->encoder);
 
-	*val = intel_dp->alpm_parameters.lobf_disable_debug;
+	*val = intel_dp->alpm.lobf_disable_debug;
 
 	return 0;
 }
@@ -526,7 +520,7 @@ i915_edp_lobf_debug_set(void *data, u64 val)
 	struct intel_connector *connector = data;
 	struct intel_dp *intel_dp = enc_to_intel_dp(connector->encoder);
 
-	intel_dp->alpm_parameters.lobf_disable_debug = val;
+	intel_dp->alpm.lobf_disable_debug = val;
 
 	return 0;
 }
@@ -554,23 +548,18 @@ void intel_alpm_lobf_debugfs_add(struct intel_connector *connector)
 void intel_alpm_disable(struct intel_dp *intel_dp)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
-	enum transcoder cpu_transcoder = intel_dp->alpm_parameters.transcoder;
+	enum transcoder cpu_transcoder = intel_dp->alpm.transcoder;
 
 	if (DISPLAY_VER(display) < 20 || !intel_dp->alpm_dpcd)
 		return;
 
-	mutex_lock(&intel_dp->alpm_parameters.lock);
+	mutex_lock(&intel_dp->alpm.lock);
 
 	intel_de_rmw(display, ALPM_CTL(display, cpu_transcoder),
-		     ALPM_CTL_ALPM_ENABLE | ALPM_CTL_LOBF_ENABLE |
-		     ALPM_CTL_ALPM_AUX_LESS_ENABLE, 0);
-
-	intel_de_rmw(display,
-		     PORT_ALPM_CTL(cpu_transcoder),
-		     PORT_ALPM_CTL_ALPM_AUX_LESS_ENABLE, 0);
+		     ALPM_CTL_ALPM_ENABLE | ALPM_CTL_LOBF_ENABLE, 0);
 
 	drm_dbg_kms(display->drm, "Disabling ALPM\n");
-	mutex_unlock(&intel_dp->alpm_parameters.lock);
+	mutex_unlock(&intel_dp->alpm.lock);
 }
 
 bool intel_alpm_get_error(struct intel_dp *intel_dp)

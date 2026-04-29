@@ -3,8 +3,11 @@
 
 . "$(cd "$(dirname "$0")" && pwd)"/test_common.sh
 
-TID="null_02"
 ERR_CODE=0
+
+if ! _have_program fio; then
+	exit "$UBLK_SKIP_CODE"
+fi
 
 _prep_test "null" "basic IO test with zero copy"
 

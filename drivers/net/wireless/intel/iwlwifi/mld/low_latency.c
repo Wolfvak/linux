@@ -131,8 +131,8 @@ int iwl_mld_low_latency_init(struct iwl_mld *mld)
 	struct iwl_mld_low_latency *ll = &mld->low_latency;
 	unsigned long ts = jiffies;
 
-	ll->pkts_counters = kcalloc(mld->trans->info.num_rxqs,
-				    sizeof(*ll->pkts_counters), GFP_KERNEL);
+	ll->pkts_counters = kzalloc_objs(*ll->pkts_counters,
+					 mld->trans->info.num_rxqs);
 	if (!ll->pkts_counters)
 		return -ENOMEM;
 
@@ -223,9 +223,6 @@ void iwl_mld_vif_update_low_latency(struct iwl_mld *mld,
 		iwl_mld_vif_set_low_latency(mld_vif, prev, cause);
 		return;
 	}
-
-	if (low_latency)
-		iwl_mld_leave_omi_bw_reduction(mld);
 
 	if (ieee80211_vif_type_p2p(vif) != NL80211_IFTYPE_P2P_CLIENT)
 		return;

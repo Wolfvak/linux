@@ -5,7 +5,7 @@
  * Copyright 2007-2009	Johannes Berg <johannes@sipsolutions.net>
  * Copyright 2013-2014  Intel Mobile Communications GmbH
  * Copyright 2017	Intel Deutschland GmbH
- * Copyright (C) 2018-2023, 2025 Intel Corporation
+ * Copyright (C) 2018-2023, 2025-2026 Intel Corporation
  */
 #include <linux/export.h>
 #include <linux/bitops.h>
@@ -105,33 +105,6 @@ u32 ieee80211_channel_to_freq_khz(int chan, enum nl80211_band band)
 	return 0; /* not supported */
 }
 EXPORT_SYMBOL(ieee80211_channel_to_freq_khz);
-
-enum nl80211_chan_width
-ieee80211_s1g_channel_width(const struct ieee80211_channel *chan)
-{
-	if (WARN_ON(!chan || chan->band != NL80211_BAND_S1GHZ))
-		return NL80211_CHAN_WIDTH_20_NOHT;
-
-	/*S1G defines a single allowed channel width per channel.
-	 * Extract that width here.
-	 */
-	if (chan->flags & IEEE80211_CHAN_1MHZ)
-		return NL80211_CHAN_WIDTH_1;
-	else if (chan->flags & IEEE80211_CHAN_2MHZ)
-		return NL80211_CHAN_WIDTH_2;
-	else if (chan->flags & IEEE80211_CHAN_4MHZ)
-		return NL80211_CHAN_WIDTH_4;
-	else if (chan->flags & IEEE80211_CHAN_8MHZ)
-		return NL80211_CHAN_WIDTH_8;
-	else if (chan->flags & IEEE80211_CHAN_16MHZ)
-		return NL80211_CHAN_WIDTH_16;
-
-	pr_err("unknown channel width for channel at %dKHz?\n",
-	       ieee80211_channel_to_khz(chan));
-
-	return NL80211_CHAN_WIDTH_1;
-}
-EXPORT_SYMBOL(ieee80211_s1g_channel_width);
 
 int ieee80211_freq_khz_to_channel(u32 freq)
 {
@@ -1171,7 +1144,8 @@ void cfg80211_process_wdev_events(struct wireless_dev *wdev)
 					       ev->ij.channel);
 			break;
 		case EVENT_STOPPED:
-			cfg80211_leave(wiphy_to_rdev(wdev->wiphy), wdev);
+			cfg80211_leave(wiphy_to_rdev(wdev->wiphy), wdev,
+				       ev->link_id);
 			break;
 		case EVENT_PORT_AUTHORIZED:
 			__cfg80211_port_authorized(wdev, ev->pa.peer_addr,
@@ -1230,28 +1204,7 @@ int cfg80211_change_iface(struct cfg80211_registered_device *rdev,
 		dev->ieee80211_ptr->use_4addr = false;
 		rdev_set_qos_map(rdev, dev, NULL);
 
-		switch (otype) {
-		case NL80211_IFTYPE_AP:
-		case NL80211_IFTYPE_P2P_GO:
-			cfg80211_stop_ap(rdev, dev, -1, true);
-			break;
-		case NL80211_IFTYPE_ADHOC:
-			cfg80211_leave_ibss(rdev, dev, false);
-			break;
-		case NL80211_IFTYPE_STATION:
-		case NL80211_IFTYPE_P2P_CLIENT:
-			cfg80211_disconnect(rdev, dev,
-					    WLAN_REASON_DEAUTH_LEAVING, true);
-			break;
-		case NL80211_IFTYPE_MESH_POINT:
-			/* mesh should be handled? */
-			break;
-		case NL80211_IFTYPE_OCB:
-			cfg80211_leave_ocb(rdev, dev);
-			break;
-		default:
-			break;
-		}
+		cfg80211_leave(rdev, dev->ieee80211_ptr, -1);
 
 		cfg80211_process_rdev_events(rdev);
 		cfg80211_mlme_purge_registrations(dev->ieee80211_ptr);
@@ -1609,36 +1562,42 @@ static u32 cfg80211_calculate_bitrate_he(struct rate_info *rate)
 	tmp = result;
 	tmp *= SCALE;
 	do_div(tmp, mcs_divisors[rate->mcs]);
-	result = tmp;
 
 	/* and take NSS, DCM into account */
-	result = (result * rate->nss) / 8;
+	tmp *= rate->nss;
+	do_div(tmp, 8);
 	if (rate->he_dcm)
-		result /= 2;
+		do_div(tmp, 2);
+
+	result = tmp;
 
 	return result / 10000;
 }
 
-static u32 cfg80211_calculate_bitrate_eht(struct rate_info *rate)
+static u32 _cfg80211_calculate_bitrate_eht_uhr(struct rate_info *rate)
 {
 #define SCALE 6144
-	static const u32 mcs_divisors[16] = {
-		102399, /* 16.666666... */
-		 51201, /*  8.333333... */
-		 34134, /*  5.555555... */
-		 25599, /*  4.166666... */
-		 17067, /*  2.777777... */
-		 12801, /*  2.083333... */
-		 11377, /*  1.851725... */
-		 10239, /*  1.666666... */
-		  8532, /*  1.388888... */
-		  7680, /*  1.250000... */
-		  6828, /*  1.111111... */
-		  6144, /*  1.000000... */
-		  5690, /*  0.926106... */
-		  5120, /*  0.833333... */
-		409600, /* 66.666666... */
-		204800, /* 33.333333... */
+	static const u32 mcs_divisors[] = {
+		[ 0] = 102399, /* 16.666666... */
+		[ 1] =  51201, /*  8.333333... */
+		[ 2] =  34134, /*  5.555555... */
+		[ 3] =  25599, /*  4.166666... */
+		[ 4] =  17067, /*  2.777777... */
+		[ 5] =  12801, /*  2.083333... */
+		[ 6] =  11377, /*  1.851725... */
+		[ 7] =  10239, /*  1.666666... */
+		[ 8] =   8532, /*  1.388888... */
+		[ 9] =   7680, /*  1.250000... */
+		[10] =   6828, /*  1.111111... */
+		[11] =   6144, /*  1.000000... */
+		[12] =   5690, /*  0.926106... */
+		[13] =   5120, /*  0.833333... */
+		[14] = 409600, /* 66.666666... */
+		[15] = 204800, /* 33.333333... */
+		[17] =  38400, /*  6.250180... */
+		[19] =  19200, /*  3.125090... */
+		[20] =  15360, /*  2.500000... */
+		[23] =   9600, /*  1.562545... */
 	};
 	static const u32 rates_996[3] =  { 480388888, 453700000, 408333333 };
 	static const u32 rates_484[3] =  { 229411111, 216666666, 195000000 };
@@ -1649,8 +1608,6 @@ static u32 cfg80211_calculate_bitrate_eht(struct rate_info *rate)
 	u64 tmp;
 	u32 result;
 
-	if (WARN_ON_ONCE(rate->mcs > 15))
-		return 0;
 	if (WARN_ON_ONCE(rate->eht_gi > NL80211_RATE_INFO_EHT_GI_3_2))
 		return 0;
 	if (WARN_ON_ONCE(rate->eht_ru_alloc >
@@ -1731,7 +1688,7 @@ static u32 cfg80211_calculate_bitrate_eht(struct rate_info *rate)
 		 rate->eht_ru_alloc == NL80211_RATE_INFO_EHT_RU_ALLOC_26)
 		result = rates_26[rate->eht_gi];
 	else {
-		WARN(1, "invalid EHT MCS: bw:%d, ru:%d\n",
+		WARN(1, "invalid EHT or UHR MCS: bw:%d, ru:%d\n",
 		     rate->bw, rate->eht_ru_alloc);
 		return 0;
 	}
@@ -1745,9 +1702,62 @@ static u32 cfg80211_calculate_bitrate_eht(struct rate_info *rate)
 	tmp *= rate->nss;
 	do_div(tmp, 8);
 
+	/* and handle interference mitigation - 0.9x */
+	if (rate->flags & RATE_INFO_FLAGS_UHR_IM) {
+		if (WARN(rate->nss != 1 || rate->mcs == 15,
+			 "invalid NSS or MCS for UHR IM\n"))
+			return 0;
+		tmp *= 9000;
+		do_div(tmp, 10000);
+	}
+
 	result = tmp;
 
 	return result / 10000;
+}
+
+static u32 cfg80211_calculate_bitrate_eht(struct rate_info *rate)
+{
+	if (WARN_ONCE(rate->mcs > 15, "bad EHT MCS %d\n", rate->mcs))
+		return 0;
+
+	if (WARN_ONCE(rate->flags & (RATE_INFO_FLAGS_UHR_ELR_MCS |
+				     RATE_INFO_FLAGS_UHR_IM),
+		      "bad EHT MCS flags 0x%x\n", rate->flags))
+		return 0;
+
+	return _cfg80211_calculate_bitrate_eht_uhr(rate);
+}
+
+static u32 cfg80211_calculate_bitrate_uhr(struct rate_info *rate)
+{
+	if (rate->flags & RATE_INFO_FLAGS_UHR_ELR_MCS) {
+		WARN_ONCE(rate->eht_gi != NL80211_RATE_INFO_EHT_GI_1_6,
+			  "bad UHR ELR guard interval %d\n",
+			  rate->eht_gi);
+		WARN_ONCE(rate->mcs > 1, "bad UHR ELR MCS %d\n", rate->mcs);
+		WARN_ONCE(rate->nss != 1, "bad UHR ELR NSS %d\n", rate->nss);
+		WARN_ONCE(rate->bw != RATE_INFO_BW_20,
+			  "bad UHR ELR bandwidth %d\n",
+			  rate->bw);
+		WARN_ONCE(rate->flags & RATE_INFO_FLAGS_UHR_IM,
+			  "bad UHR MCS flags 0x%x\n", rate->flags);
+		if (rate->mcs == 0)
+			return 17;
+		return 33;
+	}
+
+	switch (rate->mcs) {
+	case 0 ... 15:
+	case 17:
+	case 19:
+	case 20:
+	case 23:
+		return _cfg80211_calculate_bitrate_eht_uhr(rate);
+	}
+
+	WARN_ONCE(1, "bad UHR MCS %d\n", rate->mcs);
+	return 0;
 }
 
 static u32 cfg80211_calculate_bitrate_s1g(struct rate_info *rate)
@@ -1874,6 +1884,8 @@ u32 cfg80211_calculate_bitrate(struct rate_info *rate)
 		return cfg80211_calculate_bitrate_he(rate);
 	if (rate->flags & RATE_INFO_FLAGS_EHT_MCS)
 		return cfg80211_calculate_bitrate_eht(rate);
+	if (rate->flags & RATE_INFO_FLAGS_UHR_MCS)
+		return cfg80211_calculate_bitrate_uhr(rate);
 	if (rate->flags & RATE_INFO_FLAGS_S1G_MCS)
 		return cfg80211_calculate_bitrate_s1g(rate);
 
@@ -2564,6 +2576,30 @@ int cfg80211_check_combinations(struct wiphy *wiphy,
 }
 EXPORT_SYMBOL(cfg80211_check_combinations);
 
+int cfg80211_get_radio_idx_by_chan(struct wiphy *wiphy,
+				   const struct ieee80211_channel *chan)
+{
+	const struct wiphy_radio *radio;
+	int i, j;
+	u32 freq;
+
+	if (!chan)
+		return -EINVAL;
+
+	freq = ieee80211_channel_to_khz(chan);
+	for (i = 0; i < wiphy->n_radio; i++) {
+		radio = &wiphy->radio[i];
+		for (j = 0; j < radio->n_freq_range; j++) {
+			if (freq >= radio->freq_range[j].start_freq &&
+			    freq < radio->freq_range[j].end_freq)
+				return i;
+		}
+	}
+
+	return -EINVAL;
+}
+EXPORT_SYMBOL(cfg80211_get_radio_idx_by_chan);
+
 int ieee80211_get_ratemask(struct ieee80211_supported_band *sband,
 			   const u8 *rates, unsigned int n_rates,
 			   u32 *mask)
@@ -2674,11 +2710,22 @@ bool cfg80211_does_bw_fit_range(const struct ieee80211_freq_range *freq_range,
 	return false;
 }
 
+int cfg80211_link_sinfo_alloc_tid_stats(struct link_station_info *link_sinfo,
+					gfp_t gfp)
+{
+	link_sinfo->pertid = kzalloc_objs(*link_sinfo->pertid,
+					  IEEE80211_NUM_TIDS + 1, gfp);
+	if (!link_sinfo->pertid)
+		return -ENOMEM;
+
+	return 0;
+}
+EXPORT_SYMBOL(cfg80211_link_sinfo_alloc_tid_stats);
+
 int cfg80211_sinfo_alloc_tid_stats(struct station_info *sinfo, gfp_t gfp)
 {
-	sinfo->pertid = kcalloc(IEEE80211_NUM_TIDS + 1,
-				sizeof(*(sinfo->pertid)),
-				gfp);
+	sinfo->pertid = kzalloc_objs(*(sinfo->pertid), IEEE80211_NUM_TIDS + 1,
+				     gfp);
 	if (!sinfo->pertid)
 		return -ENOMEM;
 
@@ -2933,9 +2980,8 @@ cfg80211_get_iftype_ext_capa(struct wiphy *wiphy, enum nl80211_iftype type)
 }
 EXPORT_SYMBOL(cfg80211_get_iftype_ext_capa);
 
-static bool
-ieee80211_radio_freq_range_valid(const struct wiphy_radio *radio,
-				 u32 freq, u32 width)
+bool ieee80211_radio_freq_range_valid(const struct wiphy_radio *radio,
+				      u32 freq, u32 width)
 {
 	const struct wiphy_radio_freq_range *r;
 	int i;
@@ -2949,6 +2995,7 @@ ieee80211_radio_freq_range_valid(const struct wiphy_radio *radio,
 
 	return false;
 }
+EXPORT_SYMBOL(ieee80211_radio_freq_range_valid);
 
 bool cfg80211_radio_chandef_valid(const struct wiphy_radio *radio,
 				  const struct cfg80211_chan_def *chandef)
@@ -2956,7 +3003,7 @@ bool cfg80211_radio_chandef_valid(const struct wiphy_radio *radio,
 	u32 freq, width;
 
 	freq = ieee80211_chandef_to_khz(chandef);
-	width = cfg80211_chandef_get_width(chandef);
+	width = MHZ_TO_KHZ(cfg80211_chandef_get_width(chandef));
 	if (!ieee80211_radio_freq_range_valid(radio, freq, width))
 		return false;
 

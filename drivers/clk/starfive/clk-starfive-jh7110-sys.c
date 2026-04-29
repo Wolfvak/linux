@@ -347,7 +347,7 @@ int jh7110_reset_controller_register(struct jh71x0_clk_priv *priv,
 	struct auxiliary_device *adev;
 	int ret;
 
-	rdev = kzalloc(sizeof(*rdev), GFP_KERNEL);
+	rdev = kzalloc_obj(*rdev);
 	if (!rdev)
 		return -ENOMEM;
 
@@ -376,7 +376,7 @@ EXPORT_SYMBOL_GPL(jh7110_reset_controller_register);
 
 /*
  * This clock notifier is called when the rate of PLL0 clock is to be changed.
- * The cpu_root clock should save the curent parent clock and switch its parent
+ * The cpu_root clock should save the current parent clock and switch its parent
  * clock to osc before PLL0 rate will be changed. Then switch its parent clock
  * back after the PLL0 rate is completed.
  */

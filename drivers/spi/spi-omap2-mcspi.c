@@ -272,7 +272,6 @@ static void omap2_mcspi_set_cs(struct spi_device *spi, bool enable)
 
 		mcspi_write_chconf0(spi, l);
 
-		pm_runtime_mark_last_busy(mcspi->dev);
 		pm_runtime_put_autosuspend(mcspi->dev);
 	}
 }
@@ -989,6 +988,7 @@ static int omap2_mcspi_setup_transfer(struct spi_device *spi,
 	else
 		l &= ~OMAP2_MCSPI_CHCONF_PHA;
 
+	mcspi_write_chconf0(spi, l | OMAP2_MCSPI_CHCONF_FORCE);
 	mcspi_write_chconf0(spi, l);
 
 	cs->mode = spi->mode;
@@ -1076,7 +1076,7 @@ static int omap2_mcspi_setup(struct spi_device *spi)
 	struct omap2_mcspi_cs	*cs = spi->controller_state;
 
 	if (!cs) {
-		cs = kzalloc(sizeof(*cs), GFP_KERNEL);
+		cs = kzalloc_obj(*cs);
 		if (!cs)
 			return -ENOMEM;
 		cs->base = mcspi->base + spi_get_chipselect(spi, 0) * 0x14;
@@ -1102,7 +1102,6 @@ static int omap2_mcspi_setup(struct spi_device *spi)
 	if (ret && initial_setup)
 		omap2_mcspi_cleanup(spi);
 
-	pm_runtime_mark_last_busy(mcspi->dev);
 	pm_runtime_put_autosuspend(mcspi->dev);
 
 	return ret;
@@ -1379,7 +1378,6 @@ static int omap2_mcspi_controller_setup(struct omap2_mcspi *mcspi)
 	ctx->wakeupenable = OMAP2_MCSPI_WAKEUPENABLE_WKEN;
 
 	omap2_mcspi_set_mode(ctlr);
-	pm_runtime_mark_last_busy(mcspi->dev);
 	pm_runtime_put_autosuspend(mcspi->dev);
 	return 0;
 }

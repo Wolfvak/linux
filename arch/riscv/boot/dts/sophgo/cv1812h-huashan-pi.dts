@@ -55,6 +55,14 @@
 	non-removable;
 };
 
+&gmac0 {
+	status = "okay";
+};
+
+&mdio {
+	status = "okay";
+};
+
 &sdhci0 {
 	status = "okay";
 	bus-width = <4>;
@@ -76,5 +84,10 @@
 };
 
 &uart0 {
+	status = "okay";
+};
+
+&usb {
+	dr_mode = "host";
 	status = "okay";
 };

@@ -3,12 +3,8 @@
  * Copyright (C) 2017 Red Hat, Inc.
  * Copyright (c) 2018-2021 Christoph Hellwig.
  */
-#include <linux/module.h>
-#include <linux/compiler.h>
-#include <linux/fs.h>
 #include <linux/iomap.h>
 #include <linux/pagemap.h>
-#include <linux/pagevec.h>
 
 static int iomap_seek_hole_iter(struct iomap_iter *iter,
 		loff_t *hole_pos)
@@ -20,13 +16,13 @@ static int iomap_seek_hole_iter(struct iomap_iter *iter,
 		*hole_pos = mapping_seek_hole_data(iter->inode->i_mapping,
 				iter->pos, iter->pos + length, SEEK_HOLE);
 		if (*hole_pos == iter->pos + length)
-			return iomap_iter_advance(iter, &length);
+			return iomap_iter_advance(iter, length);
 		return 0;
 	case IOMAP_HOLE:
 		*hole_pos = iter->pos;
 		return 0;
 	default:
-		return iomap_iter_advance(iter, &length);
+		return iomap_iter_advance(iter, length);
 	}
 }
 
@@ -63,12 +59,12 @@ static int iomap_seek_data_iter(struct iomap_iter *iter,
 
 	switch (iter->iomap.type) {
 	case IOMAP_HOLE:
-		return iomap_iter_advance(iter, &length);
+		return iomap_iter_advance(iter, length);
 	case IOMAP_UNWRITTEN:
 		*hole_pos = mapping_seek_hole_data(iter->inode->i_mapping,
 				iter->pos, iter->pos + length, SEEK_DATA);
 		if (*hole_pos < 0)
-			return iomap_iter_advance(iter, &length);
+			return iomap_iter_advance(iter, length);
 		return 0;
 	default:
 		*hole_pos = iter->pos;

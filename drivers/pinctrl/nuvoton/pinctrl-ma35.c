@@ -81,10 +81,6 @@
 #define MVOLT_1800			0
 #define MVOLT_3300			1
 
-/* Non-constant mask variant of FIELD_GET() and FIELD_PREP() */
-#define field_get(_mask, _reg)	(((_reg) & (_mask)) >> (ffs(_mask) - 1))
-#define field_prep(_mask, _val)	(((_val) << (ffs(_mask) - 1)) & (_mask))
-
 static const char * const gpio_group_name[] = {
 	"gpioa", "gpiob", "gpioc", "gpiod", "gpioe", "gpiof", "gpiog",
 	"gpioh", "gpioi", "gpioj", "gpiok", "gpiol", "gpiom", "gpion",
@@ -206,7 +202,7 @@ static int ma35_pinctrl_dt_node_to_map_func(struct pinctrl_dev *pctldev,
 	}
 
 	map_num += grp->grp.npins;
-	new_map = kcalloc(map_num, sizeof(*new_map), GFP_KERNEL);
+	new_map = kzalloc_objs(*new_map, map_num);
 	if (!new_map)
 		return -ENOMEM;
 
@@ -361,7 +357,7 @@ static int ma35_gpio_core_get(struct gpio_chip *gc, unsigned int gpio)
 	return !!(readl(reg_pin) & BIT(gpio));
 }
 
-static void ma35_gpio_core_set(struct gpio_chip *gc, unsigned int gpio, int val)
+static int ma35_gpio_core_set(struct gpio_chip *gc, unsigned int gpio, int val)
 {
 	struct ma35_pin_bank *bank = gpiochip_get_data(gc);
 	void __iomem *reg_dout = bank->reg_base + MA35_GP_REG_DOUT;
@@ -373,6 +369,8 @@ static void ma35_gpio_core_set(struct gpio_chip *gc, unsigned int gpio, int val)
 		regval = readl(reg_dout) & ~BIT(gpio);
 
 	writel(regval, reg_dout);
+
+	return 0;
 }
 
 static int ma35_gpio_core_to_request(struct gpio_chip *gc, unsigned int gpio)
@@ -1036,7 +1034,8 @@ static int ma35_pinctrl_parse_functions(struct fwnode_handle *fwnode, struct ma3
 	struct group_desc *grp;
 	static u32 grp_index;
 	const char **groups;
-	u32 ret, i = 0;
+	u32 i = 0;
+	int ret;
 
 	dev_dbg(npctl->dev, "parse function(%d): %s\n", index, np->name);
 

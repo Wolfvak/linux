@@ -168,14 +168,14 @@ static const char *read_super(struct cache_sb *sb, struct block_device *bdev,
 {
 	const char *err;
 	struct cache_sb_disk *s;
-	struct page *page;
+	struct folio *folio;
 	unsigned int i;
 
-	page = read_cache_page_gfp(bdev->bd_mapping,
-				   SB_OFFSET >> PAGE_SHIFT, GFP_KERNEL);
-	if (IS_ERR(page))
+	folio = mapping_read_folio_gfp(bdev->bd_mapping,
+			SB_OFFSET >> PAGE_SHIFT, GFP_KERNEL);
+	if (IS_ERR(folio))
 		return "IO error";
-	s = page_address(page) + offset_in_page(SB_OFFSET);
+	s = folio_address(folio) + offset_in_folio(folio, SB_OFFSET);
 
 	sb->offset		= le64_to_cpu(s->offset);
 	sb->version		= le64_to_cpu(s->version);
@@ -272,7 +272,7 @@ static const char *read_super(struct cache_sb *sb, struct block_device *bdev,
 	*res = s;
 	return NULL;
 err:
-	put_page(page);
+	folio_put(folio);
 	return err;
 }
 
@@ -887,6 +887,7 @@ static void bcache_device_free(struct bcache_device *d)
 	}
 
 	bioset_exit(&d->bio_split);
+	bioset_exit(&d->bio_detached);
 	kvfree(d->full_dirty_stripes);
 	kvfree(d->stripe_sectors_dirty);
 
@@ -949,6 +950,11 @@ static int bcache_device_init(struct bcache_device *d, unsigned int block_size,
 			BIOSET_NEED_BVECS|BIOSET_NEED_RESCUER))
 		goto out_ida_remove;
 
+	if (bioset_init(&d->bio_detached, 4,
+			offsetof(struct detached_dev_io_private, bio),
+			BIOSET_NEED_BVECS|BIOSET_NEED_RESCUER))
+		goto out_bioset_split_exit;
+
 	if (lim.logical_block_size > PAGE_SIZE && cached_bdev) {
 		/*
 		 * This should only happen with BCACHE_SB_VERSION_BDEV.
@@ -964,7 +970,7 @@ static int bcache_device_init(struct bcache_device *d, unsigned int block_size,
 
 	d->disk = blk_alloc_disk(&lim, NUMA_NO_NODE);
 	if (IS_ERR(d->disk))
-		goto out_bioset_exit;
+		goto out_bioset_detach_exit;
 
 	set_capacity(d->disk, sectors);
 	snprintf(d->disk->disk_name, DISK_NAME_LEN, "bcache%i", idx);
@@ -976,7 +982,9 @@ static int bcache_device_init(struct bcache_device *d, unsigned int block_size,
 	d->disk->private_data	= d;
 	return 0;
 
-out_bioset_exit:
+out_bioset_detach_exit:
+	bioset_exit(&d->bio_detached);
+out_bioset_split_exit:
 	bioset_exit(&d->bio_split);
 out_ida_remove:
 	ida_free(&bcache_device_idx, idx);
@@ -1366,7 +1374,7 @@ static CLOSURE_CALLBACK(cached_dev_free)
 	mutex_unlock(&bch_register_lock);
 
 	if (dc->sb_disk)
-		put_page(virt_to_page(dc->sb_disk));
+		folio_put(virt_to_folio(dc->sb_disk));
 
 	if (dc->bdev_file)
 		fput(dc->bdev_file);
@@ -1388,7 +1396,7 @@ static CLOSURE_CALLBACK(cached_dev_flush)
 	bch_cache_accounting_destroy(&dc->accounting);
 	kobject_del(&d->kobj);
 
-	continue_at(cl, cached_dev_free, system_wq);
+	continue_at(cl, cached_dev_free, system_percpu_wq);
 }
 
 static int cached_dev_init(struct cached_dev *dc, unsigned int block_size)
@@ -1400,7 +1408,7 @@ static int cached_dev_init(struct cached_dev *dc, unsigned int block_size)
 	__module_get(THIS_MODULE);
 	INIT_LIST_HEAD(&dc->list);
 	closure_init(&dc->disk.cl, NULL);
-	set_closure_fn(&dc->disk.cl, cached_dev_flush, system_wq);
+	set_closure_fn(&dc->disk.cl, cached_dev_flush, system_percpu_wq);
 	kobject_init(&dc->disk.kobj, &bch_cached_dev_ktype);
 	INIT_WORK(&dc->detach, cached_dev_detach_finish);
 	sema_init(&dc->sb_write_mutex, 1);
@@ -1513,19 +1521,18 @@ static CLOSURE_CALLBACK(flash_dev_flush)
 	bcache_device_unlink(d);
 	mutex_unlock(&bch_register_lock);
 	kobject_del(&d->kobj);
-	continue_at(cl, flash_dev_free, system_wq);
+	continue_at(cl, flash_dev_free, system_percpu_wq);
 }
 
 static int flash_dev_run(struct cache_set *c, struct uuid_entry *u)
 {
 	int err = -ENOMEM;
-	struct bcache_device *d = kzalloc(sizeof(struct bcache_device),
-					  GFP_KERNEL);
+	struct bcache_device *d = kzalloc_obj(struct bcache_device);
 	if (!d)
 		goto err_ret;
 
 	closure_init(&d->cl, NULL);
-	set_closure_fn(&d->cl, flash_dev_flush, system_wq);
+	set_closure_fn(&d->cl, flash_dev_flush, system_percpu_wq);
 
 	kobject_init(&d->kobj, &bch_flash_dev_ktype);
 
@@ -1833,7 +1840,7 @@ static CLOSURE_CALLBACK(__cache_set_unregister)
 
 	mutex_unlock(&bch_register_lock);
 
-	continue_at(cl, cache_set_flush, system_wq);
+	continue_at(cl, cache_set_flush, system_percpu_wq);
 }
 
 void bch_cache_set_stop(struct cache_set *c)
@@ -1856,17 +1863,17 @@ struct cache_set *bch_cache_set_alloc(struct cache_sb *sb)
 {
 	int iter_size;
 	struct cache *ca = container_of(sb, struct cache, sb);
-	struct cache_set *c = kzalloc(sizeof(struct cache_set), GFP_KERNEL);
+	struct cache_set *c = kzalloc_obj(struct cache_set);
 
 	if (!c)
 		return NULL;
 
 	__module_get(THIS_MODULE);
 	closure_init(&c->cl, NULL);
-	set_closure_fn(&c->cl, cache_set_free, system_wq);
+	set_closure_fn(&c->cl, cache_set_free, system_percpu_wq);
 
 	closure_init(&c->caching, &c->cl);
-	set_closure_fn(&c->caching, __cache_set_unregister, system_wq);
+	set_closure_fn(&c->caching, __cache_set_unregister, system_percpu_wq);
 
 	/* Maybe create continue_at_noreturn() and use it here? */
 	closure_set_stopped(&c->cl);
@@ -1939,7 +1946,8 @@ struct cache_set *bch_cache_set_alloc(struct cache_sb *sb)
 	if (!c->uuids)
 		goto err;
 
-	c->moving_gc_wq = alloc_workqueue("bcache_gc", WQ_MEM_RECLAIM, 0);
+	c->moving_gc_wq = alloc_workqueue("bcache_gc",
+					  WQ_MEM_RECLAIM | WQ_PERCPU, 0);
 	if (!c->moving_gc_wq)
 		goto err;
 
@@ -2216,7 +2224,7 @@ void bch_cache_release(struct kobject *kobj)
 		free_fifo(&ca->free[i]);
 
 	if (ca->sb_disk)
-		put_page(virt_to_page(ca->sb_disk));
+		folio_put(virt_to_folio(ca->sb_disk));
 
 	if (ca->bdev_file)
 		fput(ca->bdev_file);
@@ -2236,7 +2244,7 @@ static int cache_alloc(struct cache *ca)
 	__module_get(THIS_MODULE);
 	kobject_init(&ca->kobj, &bch_cache_ktype);
 
-	bio_init(&ca->journal.bio, NULL, ca->journal.bio.bi_inline_vecs, 8, 0);
+	bio_init_inline(&ca->journal.bio, NULL, 8, 0);
 
 	/*
 	 * When the cache disk is first registered, ca->sb.njournal_buckets
@@ -2381,9 +2389,6 @@ static int register_cache(struct cache_sb *sb, struct cache_sb_disk *sb_disk,
 	ca->bdev_file = bdev_file;
 	ca->bdev = file_bdev(bdev_file);
 	ca->sb_disk = sb_disk;
-
-	if (bdev_max_discard_sectors(file_bdev(bdev_file)))
-		ca->discard = CACHE_DISCARD(&ca->sb);
 
 	ret = cache_alloc(ca);
 	if (ret != 0) {
@@ -2531,14 +2536,14 @@ static void register_device_async(struct async_reg_args *args)
 		INIT_DELAYED_WORK(&args->reg_work, register_cache_worker);
 
 	/* 10 jiffies is enough for a delay */
-	queue_delayed_work(system_wq, &args->reg_work, 10);
+	queue_delayed_work(system_percpu_wq, &args->reg_work, 10);
 }
 
 static void *alloc_holder_object(struct cache_sb *sb)
 {
 	if (SB_IS_BDEV(sb))
-		return kzalloc(sizeof(struct cached_dev), GFP_KERNEL);
-	return kzalloc(sizeof(struct cache), GFP_KERNEL);
+		return kzalloc_obj(struct cached_dev);
+	return kzalloc_obj(struct cache);
 }
 
 static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
@@ -2575,7 +2580,7 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 	if (!path)
 		goto out_module_put;
 
-	sb = kmalloc(sizeof(struct cache_sb), GFP_KERNEL);
+	sb = kmalloc_obj(struct cache_sb);
 	if (!sb)
 		goto out_free_path;
 
@@ -2593,7 +2598,7 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 	if (!holder) {
 		ret = -ENOMEM;
 		err = "cannot allocate memory";
-		goto out_put_sb_page;
+		goto out_put_sb_folio;
 	}
 
 	/* Now reopen in exclusive mode with proper holder */
@@ -2627,7 +2632,7 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 	if (async_registration) {
 		/* register in asynchronous way */
 		struct async_reg_args *args =
-			kzalloc(sizeof(struct async_reg_args), GFP_KERNEL);
+			kzalloc_obj(struct async_reg_args);
 
 		if (!args) {
 			ret = -ENOMEM;
@@ -2667,8 +2672,8 @@ async_done:
 
 out_free_holder:
 	kfree(holder);
-out_put_sb_page:
-	put_page(virt_to_page(sb_disk));
+out_put_sb_folio:
+	folio_put(virt_to_folio(sb_disk));
 out_blkdev_put:
 	if (bdev_file)
 		fput(bdev_file);
@@ -2704,7 +2709,7 @@ static ssize_t bch_pending_bdevs_cleanup(struct kobject *k,
 
 	mutex_lock(&bch_register_lock);
 	list_for_each_entry_safe(dc, tdc, &uncached_devices, list) {
-		pdev = kmalloc(sizeof(struct pdev), GFP_KERNEL);
+		pdev = kmalloc_obj(struct pdev);
 		if (!pdev)
 			break;
 		pdev->dc = dc;
@@ -2905,24 +2910,25 @@ static int __init bcache_init(void)
 	if (bch_btree_init())
 		goto err;
 
-	bcache_wq = alloc_workqueue("bcache", WQ_MEM_RECLAIM, 0);
+	bcache_wq = alloc_workqueue("bcache", WQ_MEM_RECLAIM | WQ_PERCPU, 0);
 	if (!bcache_wq)
 		goto err;
 
 	/*
 	 * Let's not make this `WQ_MEM_RECLAIM` for the following reasons:
 	 *
-	 * 1. It used `system_wq` before which also does no memory reclaim.
+	 * 1. It used `system_percpu_wq` before which also does no memory reclaim.
 	 * 2. With `WQ_MEM_RECLAIM` desktop stalls, increased boot times, and
 	 *    reduced throughput can be observed.
 	 *
-	 * We still want to user our own queue to not congest the `system_wq`.
+	 * We still want to user our own queue to not congest the `system_percpu_wq`.
 	 */
-	bch_flush_wq = alloc_workqueue("bch_flush", 0, 0);
+	bch_flush_wq = alloc_workqueue("bch_flush", WQ_PERCPU, 0);
 	if (!bch_flush_wq)
 		goto err;
 
-	bch_journal_wq = alloc_workqueue("bch_journal", WQ_MEM_RECLAIM, 0);
+	bch_journal_wq = alloc_workqueue("bch_journal",
+					 WQ_MEM_RECLAIM | WQ_PERCPU, 0);
 	if (!bch_journal_wq)
 		goto err;
 

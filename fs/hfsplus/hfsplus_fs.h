@@ -11,46 +11,12 @@
 #ifndef _LINUX_HFSPLUS_FS_H
 #define _LINUX_HFSPLUS_FS_H
 
-#ifdef pr_fmt
-#undef pr_fmt
-#endif
-
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/fs.h>
 #include <linux/mutex.h>
 #include <linux/buffer_head.h>
 #include <linux/blkdev.h>
 #include <linux/fs_context.h>
 #include "hfsplus_raw.h"
-
-#define DBG_BNODE_REFS	0x00000001
-#define DBG_BNODE_MOD	0x00000002
-#define DBG_CAT_MOD	0x00000004
-#define DBG_INODE	0x00000008
-#define DBG_SUPER	0x00000010
-#define DBG_EXTENT	0x00000020
-#define DBG_BITMAP	0x00000040
-#define DBG_ATTR_MOD	0x00000080
-
-#if 0
-#define DBG_MASK	(DBG_EXTENT|DBG_INODE|DBG_BNODE_MOD)
-#define DBG_MASK	(DBG_BNODE_MOD|DBG_CAT_MOD|DBG_INODE)
-#define DBG_MASK	(DBG_CAT_MOD|DBG_BNODE_REFS|DBG_INODE|DBG_EXTENT)
-#endif
-#define DBG_MASK	(0)
-
-#define hfs_dbg(flg, fmt, ...)					\
-do {								\
-	if (DBG_##flg & DBG_MASK)				\
-		printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__);	\
-} while (0)
-
-#define hfs_dbg_cont(flg, fmt, ...)				\
-do {								\
-	if (DBG_##flg & DBG_MASK)				\
-		pr_cont(fmt, ##__VA_ARGS__);			\
-} while (0)
 
 /* Runtime config options */
 #define HFSPLUS_DEF_CR_TYPE    0x3F3F3F3F  /* '????' */
@@ -378,6 +344,9 @@ int hfsplus_create_attr(struct inode *inode, const char *name,
 			const void *value, size_t size);
 int hfsplus_delete_attr(struct inode *inode, const char *name);
 int hfsplus_delete_all_attrs(struct inode *dir, u32 cnid);
+int hfsplus_replace_attr(struct inode *inode,
+			 const char *name,
+			 const void *value, size_t size);
 
 /* bitmap.c */
 int hfsplus_block_allocate(struct super_block *sb, u32 size, u32 offset,
@@ -390,21 +359,21 @@ u32 hfsplus_calc_btree_clump_size(u32 block_size, u32 node_size, u64 sectors,
 struct hfs_btree *hfs_btree_open(struct super_block *sb, u32 id);
 void hfs_btree_close(struct hfs_btree *tree);
 int hfs_btree_write(struct hfs_btree *tree);
-int hfs_bmap_reserve(struct hfs_btree *tree, int rsvd_nodes);
+int hfs_bmap_reserve(struct hfs_btree *tree, u32 rsvd_nodes);
 struct hfs_bnode *hfs_bmap_alloc(struct hfs_btree *tree);
 void hfs_bmap_free(struct hfs_bnode *node);
 
 /* bnode.c */
-void hfs_bnode_read(struct hfs_bnode *node, void *buf, int off, int len);
-u16 hfs_bnode_read_u16(struct hfs_bnode *node, int off);
-u8 hfs_bnode_read_u8(struct hfs_bnode *node, int off);
-void hfs_bnode_read_key(struct hfs_bnode *node, void *key, int off);
-void hfs_bnode_write(struct hfs_bnode *node, void *buf, int off, int len);
-void hfs_bnode_write_u16(struct hfs_bnode *node, int off, u16 data);
-void hfs_bnode_clear(struct hfs_bnode *node, int off, int len);
-void hfs_bnode_copy(struct hfs_bnode *dst_node, int dst,
-		    struct hfs_bnode *src_node, int src, int len);
-void hfs_bnode_move(struct hfs_bnode *node, int dst, int src, int len);
+void hfs_bnode_read(struct hfs_bnode *node, void *buf, u32 off, u32 len);
+u16 hfs_bnode_read_u16(struct hfs_bnode *node, u32 off);
+u8 hfs_bnode_read_u8(struct hfs_bnode *node, u32 off);
+void hfs_bnode_read_key(struct hfs_bnode *node, void *key, u32 off);
+void hfs_bnode_write(struct hfs_bnode *node, void *buf, u32 off, u32 len);
+void hfs_bnode_write_u16(struct hfs_bnode *node, u32 off, u16 data);
+void hfs_bnode_clear(struct hfs_bnode *node, u32 off, u32 len);
+void hfs_bnode_copy(struct hfs_bnode *dst_node, u32 dst,
+		    struct hfs_bnode *src_node, u32 src, u32 len);
+void hfs_bnode_move(struct hfs_bnode *node, u32 dst, u32 src, u32 len);
 void hfs_bnode_dump(struct hfs_bnode *node);
 void hfs_bnode_unlink(struct hfs_bnode *node);
 struct hfs_bnode *hfs_bnode_findhash(struct hfs_btree *tree, u32 cnid);
@@ -419,7 +388,7 @@ bool hfs_bnode_need_zeroout(struct hfs_btree *tree);
 /* brec.c */
 u16 hfs_brec_lenoff(struct hfs_bnode *node, u16 rec, u16 *off);
 u16 hfs_brec_keylen(struct hfs_bnode *node, u16 rec);
-int hfs_brec_insert(struct hfs_find_data *fd, void *entry, int entry_len);
+int hfs_brec_insert(struct hfs_find_data *fd, void *entry, u32 entry_len);
 int hfs_brec_remove(struct hfs_find_data *fd);
 
 /* bfind.c */
@@ -432,7 +401,7 @@ int hfs_find_rec_by_key(struct hfs_bnode *bnode, struct hfs_find_data *fd,
 int __hfs_brec_find(struct hfs_bnode *bnode, struct hfs_find_data *fd,
 		    search_strategy_t rec_found);
 int hfs_brec_find(struct hfs_find_data *fd, search_strategy_t do_key_compare);
-int hfs_brec_read(struct hfs_find_data *fd, void *rec, int rec_len);
+int hfs_brec_read(struct hfs_find_data *fd, void *rec, u32 rec_len);
 int hfs_brec_goto(struct hfs_find_data *fd, int cnt);
 
 /* catalog.c */
@@ -473,8 +442,10 @@ extern const struct address_space_operations hfsplus_aops;
 extern const struct address_space_operations hfsplus_btree_aops;
 extern const struct dentry_operations hfsplus_dentry_operations;
 
-int hfsplus_write_begin(struct file *file, struct address_space *mapping,
-		loff_t pos, unsigned len, struct folio **foliop, void **fsdata);
+int hfsplus_write_begin(const struct kiocb *iocb,
+			struct address_space *mapping,
+			loff_t pos, unsigned len, struct folio **foliop,
+			void **fsdata);
 struct inode *hfsplus_new_inode(struct super_block *sb, struct inode *dir,
 				umode_t mode);
 void hfsplus_delete_inode(struct inode *inode);
@@ -489,9 +460,9 @@ int hfsplus_getattr(struct mnt_idmap *idmap, const struct path *path,
 		    unsigned int query_flags);
 int hfsplus_file_fsync(struct file *file, loff_t start, loff_t end,
 		       int datasync);
-int hfsplus_fileattr_get(struct dentry *dentry, struct fileattr *fa);
+int hfsplus_fileattr_get(struct dentry *dentry, struct file_kattr *fa);
 int hfsplus_fileattr_set(struct mnt_idmap *idmap,
-			 struct dentry *dentry, struct fileattr *fa);
+			 struct dentry *dentry, struct file_kattr *fa);
 
 /* ioctl.c */
 long hfsplus_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
@@ -508,6 +479,8 @@ int hfs_part_find(struct super_block *sb, sector_t *part_start,
 /* super.c */
 struct inode *hfsplus_iget(struct super_block *sb, unsigned long ino);
 void hfsplus_mark_mdb_dirty(struct super_block *sb);
+void hfsplus_prepare_volume_header_for_commit(struct hfsplus_vh *vhdr);
+int hfsplus_commit_superblock(struct super_block *sb);
 
 /* tables.c */
 extern u16 hfsplus_case_fold_table[];
@@ -519,8 +492,12 @@ int hfsplus_strcasecmp(const struct hfsplus_unistr *s1,
 		       const struct hfsplus_unistr *s2);
 int hfsplus_strcmp(const struct hfsplus_unistr *s1,
 		   const struct hfsplus_unistr *s2);
-int hfsplus_uni2asc(struct super_block *sb, const struct hfsplus_unistr *ustr,
-		    char *astr, int *len_p);
+int hfsplus_uni2asc_str(struct super_block *sb,
+			const struct hfsplus_unistr *ustr, char *astr,
+			int *len_p);
+int hfsplus_uni2asc_xattr_str(struct super_block *sb,
+			      const struct hfsplus_attr_unistr *ustr,
+			      char *astr, int *len_p);
 int hfsplus_asc2uni(struct super_block *sb, struct hfsplus_unistr *ustr,
 		    int max_unistr_len, const char *astr, int len);
 int hfsplus_hash_dentry(const struct dentry *dentry, struct qstr *str);
@@ -573,6 +550,48 @@ hfsplus_btree_lock_class(struct hfs_btree *tree)
 		BUG();
 	}
 	return class;
+}
+
+static inline
+bool is_bnode_offset_valid(struct hfs_bnode *node, u32 off)
+{
+	bool is_valid = off < node->tree->node_size;
+
+	if (!is_valid) {
+		pr_err("requested invalid offset: "
+		       "NODE: id %u, type %#x, height %u, "
+		       "node_size %u, offset %u\n",
+		       node->this, node->type, node->height,
+		       node->tree->node_size, off);
+	}
+
+	return is_valid;
+}
+
+static inline
+u32 check_and_correct_requested_length(struct hfs_bnode *node, u32 off, u32 len)
+{
+	unsigned int node_size;
+
+	if (!is_bnode_offset_valid(node, off))
+		return 0;
+
+	node_size = node->tree->node_size;
+
+	if ((off + len) > node_size) {
+		u32 new_len = node_size - off;
+
+		pr_err("requested length has been corrected: "
+		       "NODE: id %u, type %#x, height %u, "
+		       "node_size %u, offset %u, "
+		       "requested_len %u, corrected_len %u\n",
+		       node->this, node->type, node->height,
+		       node->tree->node_size, off, len, new_len);
+
+		return new_len;
+	}
+
+	return len;
 }
 
 /* compatibility */

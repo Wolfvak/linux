@@ -9,13 +9,13 @@
 /* kernel only transaction subsystem defines */
 
 struct xlog;
+struct xlog_format_buf;
 struct xfs_buf;
 struct xfs_buftarg;
 struct xfs_efd_log_item;
 struct xfs_efi_log_item;
 struct xfs_inode;
 struct xfs_item_ops;
-struct xfs_log_iovec;
 struct xfs_mount;
 struct xfs_trans;
 struct xfs_trans_res;
@@ -71,7 +71,8 @@ struct xfs_log_item {
 struct xfs_item_ops {
 	unsigned flags;
 	void (*iop_size)(struct xfs_log_item *, int *, int *);
-	void (*iop_format)(struct xfs_log_item *, struct xfs_log_vec *);
+	void (*iop_format)(struct xfs_log_item *lip,
+			struct xlog_format_buf *lfb);
 	void (*iop_pin)(struct xfs_log_item *);
 	void (*iop_unpin)(struct xfs_log_item *, int remove);
 	uint64_t (*iop_sort)(struct xfs_log_item *lip);
@@ -168,8 +169,7 @@ int		xfs_trans_alloc(struct xfs_mount *mp, struct xfs_trans_res *resp,
 			struct xfs_trans **tpp);
 int		xfs_trans_reserve_more(struct xfs_trans *tp,
 			unsigned int blocks, unsigned int rtextents);
-int		xfs_trans_alloc_empty(struct xfs_mount *mp,
-			struct xfs_trans **tpp);
+struct xfs_trans *xfs_trans_alloc_empty(struct xfs_mount *mp);
 void		xfs_trans_mod_sb(xfs_trans_t *, uint, int64_t);
 
 int xfs_trans_get_buf_map(struct xfs_trans *tp, struct xfs_buftarg *target,
@@ -278,15 +278,6 @@ xfs_trans_clear_context(
 	struct xfs_trans	*tp)
 {
 	memalloc_nofs_restore(tp->t_pflags);
-}
-
-static inline void
-xfs_trans_switch_context(
-	struct xfs_trans	*old_tp,
-	struct xfs_trans	*new_tp)
-{
-	new_tp->t_pflags = old_tp->t_pflags;
-	old_tp->t_pflags = 0;
 }
 
 #endif	/* __XFS_TRANS_H__ */

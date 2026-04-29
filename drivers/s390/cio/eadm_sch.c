@@ -11,6 +11,7 @@
 #include <linux/workqueue.h>
 #include <linux/spinlock.h>
 #include <linux/device.h>
+#include <linux/export.h>
 #include <linux/module.h>
 #include <linux/timer.h>
 #include <linux/slab.h>
@@ -214,7 +215,7 @@ static int eadm_subchannel_probe(struct subchannel *sch)
 	struct eadm_private *private;
 	int ret;
 
-	private = kzalloc(sizeof(*private), GFP_KERNEL | GFP_DMA);
+	private = kzalloc_obj(*private, GFP_KERNEL | GFP_DMA);
 	if (!private)
 		return -ENOMEM;
 

@@ -299,8 +299,6 @@ manage the filesystem context.  They are as follows:
      On success it should return 0.  In the case of an error, it should return
      a negative error code.
 
-     .. Note:: reconfigure is intended as a replacement for remount_fs.
-
 
 Filesystem context Security
 ===========================
@@ -506,8 +504,16 @@ returned.
 
    * ::
 
+       int vfs_parse_fs_qstr(struct fs_context *fc, const char *key,
+			       const struct qstr *value);
+
+     A wrapper around vfs_parse_fs_param() that copies the value string it is
+     passed.
+
+   * ::
+
        int vfs_parse_fs_string(struct fs_context *fc, const char *key,
-			       const char *value, size_t v_size);
+			       const char *value);
 
      A wrapper around vfs_parse_fs_param() that copies the value string it is
      passed.

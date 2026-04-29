@@ -158,7 +158,6 @@ static int ti_qspi_setup(struct spi_device *spi)
 		return ret;
 	}
 
-	pm_runtime_mark_last_busy(qspi->dev);
 	ret = pm_runtime_put_autosuspend(qspi->dev);
 	if (ret < 0) {
 		dev_err(qspi->dev, "pm_runtime_put_autosuspend() failed\n");
@@ -195,7 +194,6 @@ static void ti_qspi_setup_clk(struct ti_qspi *qspi, u32 speed_hz)
 		ctx_reg->clkctrl = clk_ctrl_new;
 	}
 
-	pm_runtime_mark_last_busy(qspi->dev);
 	pm_runtime_put_autosuspend(qspi->dev);
 }
 
@@ -777,7 +775,6 @@ static int ti_qspi_probe(struct platform_device *pdev)
 	host->setup = ti_qspi_setup;
 	host->auto_runtime_pm = true;
 	host->transfer_one_message = ti_qspi_start_transfer_one;
-	host->dev.of_node = pdev->dev.of_node;
 	host->bits_per_word_mask = SPI_BPW_MASK(32) | SPI_BPW_MASK(16) |
 				   SPI_BPW_MASK(8);
 	host->mem_ops = &ti_qspi_mem_ops;

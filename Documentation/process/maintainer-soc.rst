@@ -10,7 +10,7 @@ Overview
 The SoC subsystem is a place of aggregation for SoC-specific code.
 The main components of the subsystem are:
 
-* devicetrees for 32- & 64-bit ARM and RISC-V
+* devicetrees (DTS) for 32- & 64-bit ARM and RISC-V
 * 32-bit ARM board files (arch/arm/mach*)
 * 32- & 64-bit ARM defconfigs
 * SoC-specific drivers across architectures, in particular for 32- & 64-bit
@@ -57,8 +57,10 @@ Submitting Patches for Given SoC
 
 All typical platform related patches should be sent via SoC submaintainers
 (platform-specific maintainers).  This includes also changes to per-platform or
-shared defconfigs (scripts/get_maintainer.pl might not provide correct
-addresses in such case).
+shared defconfigs. Note that scripts/get_maintainer.pl might not provide
+correct addresses for the shared defconfig, so ignore its output and manually
+create CC-list based on MAINTAINERS file or use something like
+``scripts/get_maintainer.pl -f drivers/soc/FOO/``).
 
 Submitting Patches to the Main SoC Maintainers
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -97,8 +99,8 @@ Perhaps one of the most important things to highlight is that dt-bindings
 document the ABI between the devicetree and the kernel.
 Please read Documentation/devicetree/bindings/ABI.rst.
 
-If changes are being made to a devicetree that are incompatible with old
-kernels, the devicetree patch should not be applied until the driver is, or an
+If changes are being made to a DTS that are incompatible with old
+kernels, the DTS patch should not be applied until the driver is, or an
 appropriate time later.  Most importantly, any incompatible changes should be
 clearly pointed out in the patch description and pull request, along with the
 expected impact on existing users, such as bootloaders or other operating
@@ -114,9 +116,9 @@ coordinating how the changes get merged through different maintainer trees.
 Usually the branch that includes a driver change will also include the
 corresponding change to the devicetree binding description, to ensure they are
 in fact compatible.  This means that the devicetree branch can end up causing
-warnings in the "make dtbs_check" step.  If a devicetree change depends on
+warnings in the ``make dtbs_check`` step.  If a devicetree change depends on
 missing additions to a header file in include/dt-bindings/, it will fail the
-"make dtbs" step and not get merged.
+``make dtbs`` step and not get merged.
 
 There are multiple ways to deal with this:
 

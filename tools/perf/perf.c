@@ -169,8 +169,8 @@ static int set_debug_file(const char *path)
 {
 	debug_fp = fopen(path, "w");
 	if (!debug_fp) {
-		fprintf(stderr, "Open debug file '%s' failed: %s\n",
-			path, strerror(errno));
+		fprintf(stderr, "Open debug file '%s' failed: %m\n",
+			path);
 		return -1;
 	}
 
@@ -335,7 +335,6 @@ static int run_builtin(struct cmd_struct *p, int argc, const char **argv)
 {
 	int status;
 	struct stat st;
-	char sbuf[STRERR_BUFSIZE];
 
 	if (use_browser == -1)
 		use_browser = check_browser_config(p->cmd);
@@ -346,12 +345,9 @@ static int run_builtin(struct cmd_struct *p, int argc, const char **argv)
 		use_pager = 1;
 	commit_pager_choice();
 
-	perf_env__init(&perf_env);
-	perf_env__set_cmdline(&perf_env, argc, argv);
 	status = p->fn(argc, argv);
 	perf_config__exit();
 	exit_browser(status);
-	perf_env__exit(&perf_env);
 
 	if (status)
 		return status & 0xff;
@@ -366,17 +362,15 @@ static int run_builtin(struct cmd_struct *p, int argc, const char **argv)
 	status = 1;
 	/* Check for ENOSPC and EIO errors.. */
 	if (fflush(stdout)) {
-		fprintf(stderr, "write failure on standard output: %s",
-			str_error_r(errno, sbuf, sizeof(sbuf)));
+		fprintf(stderr, "write failure on standard output: %m\n");
 		goto out;
 	}
 	if (ferror(stdout)) {
-		fprintf(stderr, "unknown write failure on standard output");
+		fprintf(stderr, "unknown write failure on standard output\n");
 		goto out;
 	}
 	if (fclose(stdout)) {
-		fprintf(stderr, "close failed on standard output: %s",
-			str_error_r(errno, sbuf, sizeof(sbuf)));
+		fprintf(stderr, "close failed on standard output: %m\n");
 		goto out;
 	}
 	status = 0;
@@ -462,7 +456,6 @@ int main(int argc, const char **argv)
 {
 	int err, done_help = 0;
 	const char *cmd;
-	char sbuf[STRERR_BUFSIZE];
 
 	perf_debug_setup();
 
@@ -576,8 +569,8 @@ int main(int argc, const char **argv)
 	}
 
 	if (cmd) {
-		fprintf(stderr, "Failed to run command '%s': %s\n",
-			cmd, str_error_r(errno, sbuf, sizeof(sbuf)));
+		fprintf(stderr, "Failed to run command '%s': %m\n",
+			cmd);
 	}
 out:
 	if (debug_fp)

@@ -21,6 +21,7 @@
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/minmax.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -851,7 +852,6 @@ static void stm32_cryp_finish_req(struct stm32_cryp *cryp, int err)
 	if (!err && (!(is_gcm(cryp) || is_ccm(cryp) || is_ecb(cryp))))
 		stm32_cryp_get_iv(cryp);
 
-	pm_runtime_mark_last_busy(cryp->dev);
 	pm_runtime_put_autosuspend(cryp->dev);
 
 	if (is_gcm(cryp) || is_ccm(cryp))
@@ -1498,7 +1498,7 @@ static int stm32_cryp_truncate_sg(struct scatterlist **new_sg, size_t *new_sg_le
 		return alloc_sg_len;
 
 	/* We allocate to much sg entry, but it is easier */
-	*new_sg = kmalloc_array((size_t)alloc_sg_len, sizeof(struct scatterlist), GFP_KERNEL);
+	*new_sg = kmalloc_objs(struct scatterlist, (size_t)alloc_sg_len);
 	if (!*new_sg)
 		return -ENOMEM;
 
@@ -1923,20 +1923,19 @@ static void stm32_cryp_irq_read_data(struct stm32_cryp *cryp)
 	u32 block[AES_BLOCK_32];
 
 	readsl(cryp->regs + cryp->caps->dout, block, cryp->hw_blocksize / sizeof(u32));
-	memcpy_to_scatterwalk(&cryp->out_walk, block, min_t(size_t, cryp->hw_blocksize,
-							    cryp->payload_out));
-	cryp->payload_out -= min_t(size_t, cryp->hw_blocksize,
-				   cryp->payload_out);
+	memcpy_to_scatterwalk(&cryp->out_walk, block, min(cryp->hw_blocksize,
+							  cryp->payload_out));
+	cryp->payload_out -= min(cryp->hw_blocksize, cryp->payload_out);
 }
 
 static void stm32_cryp_irq_write_block(struct stm32_cryp *cryp)
 {
 	u32 block[AES_BLOCK_32] = {0};
 
-	memcpy_from_scatterwalk(block, &cryp->in_walk, min_t(size_t, cryp->hw_blocksize,
-							     cryp->payload_in));
+	memcpy_from_scatterwalk(block, &cryp->in_walk, min(cryp->hw_blocksize,
+							   cryp->payload_in));
 	writesl(cryp->regs + cryp->caps->din, block, cryp->hw_blocksize / sizeof(u32));
-	cryp->payload_in -= min_t(size_t, cryp->hw_blocksize, cryp->payload_in);
+	cryp->payload_in -= min(cryp->hw_blocksize, cryp->payload_in);
 }
 
 static void stm32_cryp_irq_write_gcm_padded_data(struct stm32_cryp *cryp)
@@ -1981,10 +1980,9 @@ static void stm32_cryp_irq_write_gcm_padded_data(struct stm32_cryp *cryp)
 	 */
 	readsl(cryp->regs + cryp->caps->dout, block, cryp->hw_blocksize / sizeof(u32));
 
-	memcpy_to_scatterwalk(&cryp->out_walk, block, min_t(size_t, cryp->hw_blocksize,
-							    cryp->payload_out));
-	cryp->payload_out -= min_t(size_t, cryp->hw_blocksize,
-				   cryp->payload_out);
+	memcpy_to_scatterwalk(&cryp->out_walk, block, min(cryp->hw_blocksize,
+							  cryp->payload_out));
+	cryp->payload_out -= min(cryp->hw_blocksize, cryp->payload_out);
 
 	/* d) change mode back to AES GCM */
 	cfg &= ~CR_ALGO_MASK;
@@ -2079,9 +2077,9 @@ static void stm32_cryp_irq_write_ccm_padded_data(struct stm32_cryp *cryp)
 	 */
 	readsl(cryp->regs + cryp->caps->dout, block, cryp->hw_blocksize / sizeof(u32));
 
-	memcpy_to_scatterwalk(&cryp->out_walk, block, min_t(size_t, cryp->hw_blocksize,
-							    cryp->payload_out));
-	cryp->payload_out -= min_t(size_t, cryp->hw_blocksize, cryp->payload_out);
+	memcpy_to_scatterwalk(&cryp->out_walk, block, min(cryp->hw_blocksize,
+							  cryp->payload_out));
+	cryp->payload_out -= min(cryp->hw_blocksize, cryp->payload_out);
 
 	/* d) Load again CRYP_CSGCMCCMxR */
 	for (i = 0; i < ARRAY_SIZE(cstmp2); i++)
@@ -2159,7 +2157,7 @@ static void stm32_cryp_irq_write_gcmccm_header(struct stm32_cryp *cryp)
 	u32 block[AES_BLOCK_32] = {0};
 	size_t written;
 
-	written = min_t(size_t, AES_BLOCK_SIZE, cryp->header_in);
+	written = min(AES_BLOCK_SIZE, cryp->header_in);
 
 	memcpy_from_scatterwalk(block, &cryp->in_walk, written);
 
@@ -2782,5 +2780,5 @@ static struct platform_driver stm32_cryp_driver = {
 module_platform_driver(stm32_cryp_driver);
 
 MODULE_AUTHOR("Fabien Dessenne <fabien.dessenne@st.com>");
-MODULE_DESCRIPTION("STMicrolectronics STM32 CRYP hardware driver");
+MODULE_DESCRIPTION("STMicroelectronics STM32 CRYP hardware driver");
 MODULE_LICENSE("GPL");

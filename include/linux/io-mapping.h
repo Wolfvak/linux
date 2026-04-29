@@ -206,7 +206,7 @@ io_mapping_create_wc(resource_size_t base,
 {
 	struct io_mapping *iomap;
 
-	iomap = kmalloc(sizeof(*iomap), GFP_KERNEL);
+	iomap = kmalloc_obj(*iomap);
 	if (!iomap)
 		return NULL;
 
@@ -224,8 +224,5 @@ io_mapping_free(struct io_mapping *iomap)
 	io_mapping_fini(iomap);
 	kfree(iomap);
 }
-
-int io_mapping_map_user(struct io_mapping *iomap, struct vm_area_struct *vma,
-		unsigned long addr, unsigned long pfn, unsigned long size);
 
 #endif /* _LINUX_IO_MAPPING_H */

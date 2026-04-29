@@ -990,6 +990,9 @@ static const struct hid_usage_entry hid_usage_table[] = {
 		{ 0x0c, 0x01c9, "ALContactSync" },
 		{ 0x0c, 0x01ca, "ALNavigation" },
 		{ 0x0c, 0x01cb, "ALContextawareDesktopAssistant" },
+		{ 0x0c, 0x01cc, "ALActionOnSelection" },
+		{ 0x0c, 0x01cd, "ALContextualInsertion" },
+		{ 0x0c, 0x01ce, "ALContextualQuery" },
 		{ 0x0c, 0x0200, "GenericGUIApplicationControls" },
 		{ 0x0c, 0x0201, "ACNew" },
 		{ 0x0c, 0x0202, "ACOpen" },
@@ -2523,7 +2526,7 @@ static const struct hid_usage_entry hid_usage_table[] = {
 		{ 0x85, 0x0088, "iDeviceName" },
 		{ 0x85, 0x0089, "iDeviceChemistry" },
 		{ 0x85, 0x008a, "ManufacturerData" },
-		{ 0x85, 0x008b, "Rechargable" },
+		{ 0x85, 0x008b, "Rechargeable" },
 		{ 0x85, 0x008c, "WarningCapacityLimit" },
 		{ 0x85, 0x008d, "CapacityGranularity1" },
 		{ 0x85, 0x008e, "CapacityGranularity2" },
@@ -3291,6 +3294,8 @@ static const char *keys[KEY_MAX + 1] = {
 	[BTN_TR2] = "BtnTR2",			[BTN_SELECT] = "BtnSelect",
 	[BTN_START] = "BtnStart",		[BTN_MODE] = "BtnMode",
 	[BTN_THUMBL] = "BtnThumbL",		[BTN_THUMBR] = "BtnThumbR",
+	[BTN_GRIPL] = "BtnGripL",		[BTN_GRIPR] = "BtnGripR",
+	[BTN_GRIPL2] = "BtnGripL2",		[BTN_GRIPR2] = "BtnGripR2",
 	[BTN_TOOL_PEN] = "ToolPen",		[BTN_TOOL_RUBBER] = "ToolRubber",
 	[BTN_TOOL_BRUSH] = "ToolBrush",		[BTN_TOOL_PENCIL] = "ToolPencil",
 	[BTN_TOOL_AIRBRUSH] = "ToolAirbrush",	[BTN_TOOL_FINGER] = "ToolFinger",
@@ -3373,6 +3378,9 @@ static const char *keys[KEY_MAX + 1] = {
 	[KEY_BRIGHTNESS_MIN] = "BrightnessMin",
 	[KEY_BRIGHTNESS_MAX] = "BrightnessMax",
 	[KEY_BRIGHTNESS_AUTO] = "BrightnessAuto",
+	[KEY_ACTION_ON_SELECTION] = "ActionOnSelection",
+	[KEY_CONTEXTUAL_INSERT] = "ContextualInsert",
+	[KEY_CONTEXTUAL_QUERY] = "ContextualQuery",
 	[KEY_KBDINPUTASSIST_PREV] = "KbdInputAssistPrev",
 	[KEY_KBDINPUTASSIST_NEXT] = "KbdInputAssistNext",
 	[KEY_KBDINPUTASSIST_PREVGROUP] = "KbdInputAssistPrevGroup",
@@ -3511,6 +3519,7 @@ static const char *absolutes[ABS_CNT] = {
 	[ABS_DISTANCE] = "Distance",	[ABS_TILT_X] = "XTilt",
 	[ABS_TILT_Y] = "YTilt",		[ABS_TOOL_WIDTH] = "ToolWidth",
 	[ABS_VOLUME] = "Volume",	[ABS_PROFILE] = "Profile",
+	[ABS_SND_PROFILE] = "SoundProfile",
 	[ABS_MISC] = "Misc",
 	[ABS_MT_SLOT] = "MTSlot",
 	[ABS_MT_TOUCH_MAJOR] = "MTMajor",
@@ -3678,7 +3687,7 @@ static int hid_debug_events_open(struct inode *inode, struct file *file)
 	struct hid_debug_list *list;
 	unsigned long flags;
 
-	if (!(list = kzalloc(sizeof(struct hid_debug_list), GFP_KERNEL))) {
+	if (!(list = kzalloc_obj(struct hid_debug_list))) {
 		err = -ENOMEM;
 		goto out;
 	}
@@ -3726,7 +3735,7 @@ static ssize_t hid_debug_events_read(struct file *file, char __user *buffer,
 			 */
 			if (!list->hdev || !list->hdev->debug) {
 				ret = -EIO;
-				set_current_state(TASK_RUNNING);
+				__set_current_state(TASK_RUNNING);
 				goto out;
 			}
 

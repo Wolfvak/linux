@@ -254,10 +254,8 @@ static irqreturn_t tmp006_trigger_handler(int irq, void *p)
 	struct {
 		s16 channels[2];
 		aligned_s64 ts;
-	} scan;
+	} scan = { };
 	s32 ret;
-
-	memset(&scan, 0, sizeof(scan));
 
 	ret = i2c_smbus_read_word_data(data->client, TMP006_VOBJECT);
 	if (ret < 0)
@@ -358,12 +356,10 @@ static int tmp006_probe(struct i2c_client *client)
 
 		indio_dev->trig = iio_trigger_get(data->drdy_trig);
 
-		ret = devm_request_threaded_irq(&client->dev, client->irq,
-						iio_trigger_generic_data_rdy_poll,
-						NULL,
-						IRQF_ONESHOT,
-						"tmp006_irq",
-						data->drdy_trig);
+		ret = devm_request_irq(&client->dev, client->irq,
+				       iio_trigger_generic_data_rdy_poll,
+				       IRQF_NO_THREAD, "tmp006_irq",
+				       data->drdy_trig);
 		if (ret < 0)
 			return ret;
 	}

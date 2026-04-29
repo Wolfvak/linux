@@ -927,17 +927,16 @@ static int imx412_parse_hw_config(struct imx412 *imx412)
 	imx412->reset_gpio = devm_gpiod_get_optional(imx412->dev, "reset",
 						     GPIOD_OUT_LOW);
 	if (IS_ERR(imx412->reset_gpio)) {
-		dev_err(imx412->dev, "failed to get reset gpio %ld\n",
-			PTR_ERR(imx412->reset_gpio));
+		dev_err(imx412->dev, "failed to get reset gpio %pe\n",
+			imx412->reset_gpio);
 		return PTR_ERR(imx412->reset_gpio);
 	}
 
 	/* Get sensor input clock */
-	imx412->inclk = devm_clk_get(imx412->dev, NULL);
-	if (IS_ERR(imx412->inclk)) {
-		dev_err(imx412->dev, "could not get inclk\n");
-		return PTR_ERR(imx412->inclk);
-	}
+	imx412->inclk = devm_v4l2_sensor_clk_get(imx412->dev, NULL);
+	if (IS_ERR(imx412->inclk))
+		return dev_err_probe(imx412->dev, PTR_ERR(imx412->inclk),
+				     "could not get inclk\n");
 
 	rate = clk_get_rate(imx412->inclk);
 	if (rate != IMX412_INCLK_RATE) {

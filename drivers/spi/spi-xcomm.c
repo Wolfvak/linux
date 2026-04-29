@@ -70,7 +70,7 @@ static int spi_xcomm_gpio_add(struct spi_xcomm *spi_xcomm)
 		return 0;
 
 	spi_xcomm->gc.get_direction = spi_xcomm_gpio_get_direction;
-	spi_xcomm->gc.set_rv = spi_xcomm_gpio_set_value;
+	spi_xcomm->gc.set = spi_xcomm_gpio_set_value;
 	spi_xcomm->gc.can_sleep = 1;
 	spi_xcomm->gc.base = -1;
 	spi_xcomm->gc.ngpio = 1;
@@ -260,7 +260,6 @@ static int spi_xcomm_probe(struct i2c_client *i2c)
 	host->bits_per_word_mask = SPI_BPW_MASK(8);
 	host->flags = SPI_CONTROLLER_HALF_DUPLEX;
 	host->transfer_one_message = spi_xcomm_transfer_one;
-	host->dev.of_node = i2c->dev.of_node;
 
 	ret = devm_spi_register_controller(&i2c->dev, host);
 	if (ret < 0)

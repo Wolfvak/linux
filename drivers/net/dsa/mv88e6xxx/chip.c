@@ -2024,7 +2024,7 @@ static int mv88e6xxx_mst_get(struct mv88e6xxx_chip *chip, struct net_device *br,
 	if (err)
 		goto err;
 
-	mst = kzalloc(sizeof(*mst), GFP_KERNEL);
+	mst = kzalloc_obj(*mst);
 	if (!mst) {
 		err = -ENOMEM;
 		goto err;
@@ -3364,13 +3364,10 @@ static int mv88e6xxx_setup_upstream_port(struct mv88e6xxx_chip *chip, int port)
 
 static int mv88e6xxx_setup_port(struct mv88e6xxx_chip *chip, int port)
 {
-	struct device_node *phy_handle = NULL;
 	struct fwnode_handle *ports_fwnode;
 	struct fwnode_handle *port_fwnode;
 	struct dsa_switch *ds = chip->ds;
 	struct mv88e6xxx_port *p;
-	struct dsa_port *dp;
-	int tx_amp;
 	int err;
 	u16 reg;
 	u32 val;
@@ -3580,23 +3577,6 @@ static int mv88e6xxx_setup_port(struct mv88e6xxx_chip *chip, int port)
 		err = chip->info->ops->port_setup_message_port(chip, port);
 		if (err)
 			return err;
-	}
-
-	if (chip->info->ops->serdes_set_tx_amplitude) {
-		dp = dsa_to_port(ds, port);
-		if (dp)
-			phy_handle = of_parse_phandle(dp->dn, "phy-handle", 0);
-
-		if (phy_handle && !of_property_read_u32(phy_handle,
-							"tx-p2p-microvolt",
-							&tx_amp))
-			err = chip->info->ops->serdes_set_tx_amplitude(chip,
-								port, tx_amp);
-		if (phy_handle) {
-			of_node_put(phy_handle);
-			if (err)
-				return err;
-		}
 	}
 
 	/* Port based VLAN map: give each port the same default address
@@ -3965,6 +3945,8 @@ static void mv88e6xxx_teardown(struct dsa_switch *ds)
 	mv88e6xxx_teardown_devlink_params(ds);
 	dsa_devlink_resources_unregister(ds);
 	mv88e6xxx_teardown_devlink_regions_global(ds);
+	mv88e6xxx_hwtstamp_free(chip);
+	mv88e6xxx_ptp_free(chip);
 	mv88e6xxx_mdios_unregister(chip);
 }
 
@@ -4105,7 +4087,7 @@ unlock:
 	mv88e6xxx_reg_unlock(chip);
 
 	if (err)
-		goto out_mdios;
+		goto out_hwtstamp;
 
 	/* Have to be called without holding the register lock, since
 	 * they take the devlink lock, and we later take the locks in
@@ -4114,7 +4096,7 @@ unlock:
 	 */
 	err = mv88e6xxx_setup_devlink_resources(ds);
 	if (err)
-		goto out_mdios;
+		goto out_hwtstamp;
 
 	err = mv88e6xxx_setup_devlink_params(ds);
 	if (err)
@@ -4130,7 +4112,9 @@ out_params:
 	mv88e6xxx_teardown_devlink_params(ds);
 out_resources:
 	dsa_devlink_resources_unregister(ds);
-out_mdios:
+out_hwtstamp:
+	mv88e6xxx_hwtstamp_free(chip);
+	mv88e6xxx_ptp_free(chip);
 	mv88e6xxx_mdios_unregister(chip);
 
 	return err;
@@ -4764,7 +4748,6 @@ static const struct mv88e6xxx_ops mv88e6176_ops = {
 	.serdes_irq_mapping = mv88e6352_serdes_irq_mapping,
 	.serdes_get_regs_len = mv88e6352_serdes_get_regs_len,
 	.serdes_get_regs = mv88e6352_serdes_get_regs,
-	.serdes_set_tx_amplitude = mv88e6352_serdes_set_tx_amplitude,
 	.gpio_ops = &mv88e6352_gpio_ops,
 	.phylink_get_caps = mv88e6352_phylink_get_caps,
 	.pcs_ops = &mv88e6352_pcs_ops,
@@ -5040,7 +5023,6 @@ static const struct mv88e6xxx_ops mv88e6240_ops = {
 	.serdes_irq_mapping = mv88e6352_serdes_irq_mapping,
 	.serdes_get_regs_len = mv88e6352_serdes_get_regs_len,
 	.serdes_get_regs = mv88e6352_serdes_get_regs,
-	.serdes_set_tx_amplitude = mv88e6352_serdes_set_tx_amplitude,
 	.gpio_ops = &mv88e6352_gpio_ops,
 	.avb_ops = &mv88e6352_avb_ops,
 	.ptp_ops = &mv88e6352_ptp_ops,
@@ -5088,7 +5070,7 @@ static const struct mv88e6xxx_ops mv88e6250_ops = {
 	.vtu_getnext = mv88e6185_g1_vtu_getnext,
 	.vtu_loadpurge = mv88e6185_g1_vtu_loadpurge,
 	.avb_ops = &mv88e6352_avb_ops,
-	.ptp_ops = &mv88e6250_ptp_ops,
+	.ptp_ops = &mv88e6352_ptp_ops,
 	.phylink_get_caps = mv88e6250_phylink_get_caps,
 	.set_max_frame_size = mv88e6185_g1_set_max_frame_size,
 };
@@ -5477,7 +5459,6 @@ static const struct mv88e6xxx_ops mv88e6352_ops = {
 	.serdes_get_stats = mv88e6352_serdes_get_stats,
 	.serdes_get_regs_len = mv88e6352_serdes_get_regs_len,
 	.serdes_get_regs = mv88e6352_serdes_get_regs,
-	.serdes_set_tx_amplitude = mv88e6352_serdes_set_tx_amplitude,
 	.phylink_get_caps = mv88e6352_phylink_get_caps,
 	.pcs_ops = &mv88e6352_pcs_ops,
 };
@@ -7438,11 +7419,6 @@ static void mv88e6xxx_remove(struct mdio_device *mdiodev)
 		return;
 
 	chip = ds->priv;
-
-	if (chip->info->ptp_support) {
-		mv88e6xxx_hwtstamp_free(chip);
-		mv88e6xxx_ptp_free(chip);
-	}
 
 	mv88e6xxx_unregister_switch(chip);
 

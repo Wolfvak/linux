@@ -57,8 +57,7 @@ static int libipw_networks_allocate(struct libipw_device *ieee)
 	int i, j;
 
 	for (i = 0; i < MAX_NETWORK_COUNT; i++) {
-		ieee->networks[i] = kzalloc(sizeof(struct libipw_network),
-					    GFP_KERNEL);
+		ieee->networks[i] = kzalloc_obj(struct libipw_network);
 		if (!ieee->networks[i]) {
 			LIBIPW_ERROR("Out of memory allocating beacons\n");
 			for (j = 0; j < i; j++)
@@ -83,7 +82,7 @@ void libipw_networks_age(struct libipw_device *ieee,
 {
 	struct libipw_network *network = NULL;
 	unsigned long flags;
-	unsigned long age_jiffies = msecs_to_jiffies(age_secs * MSEC_PER_SEC);
+	unsigned long age_jiffies = secs_to_jiffies(age_secs);
 
 	spin_lock_irqsave(&ieee->lock, flags);
 	list_for_each_entry(network, &ieee->network_list, list) {

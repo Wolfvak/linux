@@ -9,11 +9,13 @@
 #include <linux/types.h>
 
 struct dma_fence;
+struct drm_pagemap_addr;
 struct iosys_map;
 struct ttm_resource;
 
 struct xe_bo;
 struct xe_gt;
+struct xe_tlb_inval_job;
 struct xe_exec_queue;
 struct xe_migrate;
 struct xe_migrate_pt_update;
@@ -23,6 +25,13 @@ struct xe_tile;
 struct xe_vm;
 struct xe_vm_pgtable_update;
 struct xe_vma;
+
+enum xe_sriov_vf_ccs_rw_ctxs;
+
+enum xe_migrate_copy_dir {
+	XE_MIGRATE_COPY_TO_VRAM,
+	XE_MIGRATE_COPY_TO_SRAM,
+};
 
 /**
  * struct xe_migrate_pt_update_ops - Callbacks for the
@@ -89,21 +98,32 @@ struct xe_migrate_pt_update {
 	struct xe_vma_ops *vops;
 	/** @job: The job if a GPU page-table update. NULL otherwise */
 	struct xe_sched_job *job;
+	/**
+	 * @ijob: The TLB invalidation job for primary GT. NULL otherwise
+	 */
+	struct xe_tlb_inval_job *ijob;
+	/**
+	 * @mjob: The TLB invalidation job for media GT. NULL otherwise
+	 */
+	struct xe_tlb_inval_job *mjob;
 	/** @tile_id: Tile ID of the update */
 	u8 tile_id;
 };
 
-struct xe_migrate *xe_migrate_init(struct xe_tile *tile);
+struct xe_migrate *xe_migrate_alloc(struct xe_tile *tile);
+int xe_migrate_init(struct xe_migrate *m);
 
 struct dma_fence *xe_migrate_to_vram(struct xe_migrate *m,
 				     unsigned long npages,
-				     dma_addr_t *src_addr,
-				     u64 dst_addr);
+				     struct drm_pagemap_addr *src_addr,
+				     u64 dst_addr,
+				     struct dma_fence *deps);
 
 struct dma_fence *xe_migrate_from_vram(struct xe_migrate *m,
 				       unsigned long npages,
 				       u64 src_addr,
-				       dma_addr_t *dst_addr);
+				       struct drm_pagemap_addr *dst_addr,
+				       struct dma_fence *deps);
 
 struct dma_fence *xe_migrate_copy(struct xe_migrate *m,
 				  struct xe_bo *src_bo,
@@ -112,6 +132,18 @@ struct dma_fence *xe_migrate_copy(struct xe_migrate *m,
 				  struct ttm_resource *dst,
 				  bool copy_only_ccs);
 
+int xe_migrate_ccs_rw_copy(struct xe_tile *tile, struct xe_exec_queue *q,
+			   struct xe_bo *src_bo,
+			   enum xe_sriov_vf_ccs_rw_ctxs read_write);
+
+void xe_migrate_ccs_rw_copy_clear(struct xe_bo *src_bo,
+				  enum xe_sriov_vf_ccs_rw_ctxs read_write);
+
+struct xe_lrc *xe_migrate_lrc(struct xe_migrate *migrate);
+struct xe_exec_queue *xe_migrate_exec_queue(struct xe_migrate *migrate);
+struct dma_fence *xe_migrate_vram_copy_chunk(struct xe_bo *vram_bo, u64 vram_offset,
+					     struct xe_bo *sysmem_bo, u64 sysmem_offset,
+					     u64 size, enum xe_migrate_copy_dir dir);
 int xe_migrate_access_memory(struct xe_migrate *m, struct xe_bo *bo,
 			     unsigned long offset, void *buf, int len,
 			     int write);
@@ -133,5 +165,15 @@ xe_migrate_update_pgtables(struct xe_migrate *m,
 
 void xe_migrate_wait(struct xe_migrate *m);
 
-struct xe_exec_queue *xe_tile_migrate_exec_queue(struct xe_tile *tile);
+#if IS_ENABLED(CONFIG_PROVE_LOCKING)
+void xe_migrate_job_lock_assert(struct xe_exec_queue *q);
+#else
+static inline void xe_migrate_job_lock_assert(struct xe_exec_queue *q)
+{
+}
+#endif
+
+void xe_migrate_job_lock(struct xe_migrate *m, struct xe_exec_queue *q);
+void xe_migrate_job_unlock(struct xe_migrate *m, struct xe_exec_queue *q);
+
 #endif

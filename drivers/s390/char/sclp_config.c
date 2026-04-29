@@ -3,8 +3,7 @@
  *    Copyright IBM Corp. 2007
  */
 
-#define KMSG_COMPONENT "sclp_config"
-#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
+#define pr_fmt(fmt) "sclp_config: " fmt
 
 #include <linux/init.h>
 #include <linux/errno.h>
@@ -142,7 +141,7 @@ static const struct bin_attribute ofb_bin_attr = {
 		.name = "event_data",
 		.mode = S_IWUSR,
 	},
-	.write_new = sysfs_ofb_data_write,
+	.write = sysfs_ofb_data_write,
 };
 #endif
 

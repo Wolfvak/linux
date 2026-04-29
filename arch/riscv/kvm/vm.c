@@ -11,8 +11,9 @@
 #include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/kvm_host.h>
+#include <asm/kvm_mmu.h>
 
-const struct _kvm_stats_desc kvm_vm_stats_desc[] = {
+const struct kvm_stats_desc kvm_vm_stats_desc[] = {
 	KVM_GENERIC_VM_STATS()
 };
 static_assert(ARRAY_SIZE(kvm_vm_stats_desc) ==
@@ -31,13 +32,13 @@ int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 {
 	int r;
 
-	r = kvm_riscv_gstage_alloc_pgd(kvm);
+	r = kvm_riscv_mmu_alloc_pgd(kvm);
 	if (r)
 		return r;
 
 	r = kvm_riscv_gstage_vmid_init(kvm);
 	if (r) {
-		kvm_riscv_gstage_free_pgd(kvm);
+		kvm_riscv_mmu_free_pgd(kvm);
 		return r;
 	}
 
@@ -94,7 +95,7 @@ int kvm_riscv_setup_default_irq_routing(struct kvm *kvm, u32 lines)
 	struct kvm_irq_routing_entry *ents;
 	int i, rc;
 
-	ents = kcalloc(lines, sizeof(*ents), GFP_KERNEL);
+	ents = kzalloc_objs(*ents, lines);
 	if (!ents)
 		return -ENOMEM;
 
@@ -180,7 +181,6 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
 		break;
 	case KVM_CAP_IOEVENTFD:
 	case KVM_CAP_USER_MEMORY:
-	case KVM_CAP_SYNC_MMU:
 	case KVM_CAP_DESTROY_MEMORY_REGION_WORKS:
 	case KVM_CAP_ONE_REG:
 	case KVM_CAP_READONLY_MEM:
@@ -199,7 +199,7 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
 		r = KVM_USER_MEM_SLOTS;
 		break;
 	case KVM_CAP_VM_GPA_BITS:
-		r = kvm_riscv_gstage_gpa_bits();
+		r = kvm_riscv_gstage_gpa_bits;
 		break;
 	default:
 		r = 0;

@@ -80,6 +80,7 @@ struct xenbus_device {
 	const char *devicetype;
 	const char *nodename;
 	const char *otherend;
+	bool vanished;
 	int otherend_id;
 	struct xenbus_watch otherend_watch;
 	struct device dev;
@@ -154,13 +155,11 @@ void *xenbus_read(struct xenbus_transaction t,
 		  const char *dir, const char *node, unsigned int *len);
 int xenbus_write(struct xenbus_transaction t,
 		 const char *dir, const char *node, const char *string);
-int xenbus_mkdir(struct xenbus_transaction t,
-		 const char *dir, const char *node);
 int xenbus_exists(struct xenbus_transaction t,
 		  const char *dir, const char *node);
 int xenbus_rm(struct xenbus_transaction t, const char *dir, const char *node);
 int xenbus_transaction_start(struct xenbus_transaction *t);
-int xenbus_transaction_end(struct xenbus_transaction t, int abort);
+int xenbus_transaction_end(struct xenbus_transaction t, bool abort);
 
 /* Single read and scanf: returns -errno or num scanned if > 0. */
 __scanf(4, 5)
@@ -180,7 +179,7 @@ int xenbus_printf(struct xenbus_transaction t,
  * sprintf-style type string, and pointer. Returns 0 or errno.*/
 int xenbus_gather(struct xenbus_transaction t, const char *dir, ...);
 
-/* notifer routines for when the xenstore comes up */
+/* notifier routines for when the xenstore comes up */
 extern int xenstored_ready;
 int register_xenstore_notifier(struct notifier_block *nb);
 void unregister_xenstore_notifier(struct notifier_block *nb);
@@ -230,7 +229,8 @@ int xenbus_unmap_ring_vfree(struct xenbus_device *dev, void *vaddr);
 int xenbus_alloc_evtchn(struct xenbus_device *dev, evtchn_port_t *port);
 int xenbus_free_evtchn(struct xenbus_device *dev, evtchn_port_t port);
 
-enum xenbus_state xenbus_read_driver_state(const char *path);
+enum xenbus_state xenbus_read_driver_state(const struct xenbus_device *dev,
+					   const char *path);
 
 __printf(3, 4)
 void xenbus_dev_error(struct xenbus_device *dev, int err, const char *fmt, ...);

@@ -32,6 +32,7 @@
 #include "dce/dce_hwseq.h"
 #include "clk_mgr.h"
 #include "reg_helper.h"
+#include "dcn10/dcn10_hubbub.h"
 #include "abm.h"
 #include "hubp.h"
 #include "dchubbub.h"
@@ -46,12 +47,13 @@
 #include "link_hwss.h"
 #include "dpcd_defs.h"
 #include "dce/dmub_outbox.h"
-#include "link.h"
+#include "link_service.h"
 #include "dcn10/dcn10_hwseq.h"
 #include "inc/link_enc_cfg.h"
 #include "dcn30/dcn30_vpg.h"
 #include "dce/dce_i2c_hw.h"
 #include "dsc.h"
+#include "dio/dcn10/dcn10_dio.h"
 #include "dcn20/dcn20_optc.h"
 #include "dcn30/dcn30_cm_common.h"
 #include "dcn31/dcn31_hwseq.h"
@@ -113,6 +115,14 @@ static void enable_memory_low_power(struct dc *dc)
 }
 #endif
 
+static void print_pg_status(struct dc *dc, const char *debug_func, const char *debug_log)
+{
+	if (dc->debug.enable_pg_cntl_debug_logs && dc->res_pool->pg_cntl) {
+		if (dc->res_pool->pg_cntl->funcs->print_pg_status)
+			dc->res_pool->pg_cntl->funcs->print_pg_status(dc->res_pool->pg_cntl, debug_func, debug_log);
+	}
+}
+
 void dcn35_set_dmu_fgcg(struct dce_hwseq *hws, bool enable)
 {
 	REG_UPDATE_3(DMU_CLK_CNTL,
@@ -136,6 +146,8 @@ void dcn35_init_hw(struct dc *dc)
 	uint32_t backlight = MAX_BACKLIGHT_LEVEL;
 	uint32_t user_level = MAX_BACKLIGHT_LEVEL;
 	int i;
+
+	print_pg_status(dc, __func__, ": start");
 
 	if (dc->clk_mgr && dc->clk_mgr->funcs->init_clocks)
 		dc->clk_mgr->funcs->init_clocks(dc->clk_mgr);
@@ -200,10 +212,7 @@ void dcn35_init_hw(struct dc *dc)
 
 	/* we want to turn off all dp displays before doing detection */
 	dc->link_srv->blank_all_dp_displays(dc);
-/*
-	if (hws->funcs.enable_power_gating_plane)
-		hws->funcs.enable_power_gating_plane(dc->hwseq, true);
-*/
+
 	if (res_pool->hubbub && res_pool->hubbub->funcs->dchubbub_init)
 		res_pool->hubbub->funcs->dchubbub_init(dc->res_pool->hubbub);
 	/* If taking control over from VBIOS, we may want to optimize our first
@@ -236,6 +245,8 @@ void dcn35_init_hw(struct dc *dc)
 		}
 
 		hws->funcs.init_pipes(dc, dc->current_state);
+		print_pg_status(dc, __func__, ": after init_pipes");
+
 		if (dc->res_pool->hubbub->funcs->allow_self_refresh_control &&
 			!dc->res_pool->hubbub->ctx->dc->debug.disable_stutter)
 			dc->res_pool->hubbub->funcs->allow_self_refresh_control(dc->res_pool->hubbub,
@@ -262,12 +273,9 @@ void dcn35_init_hw(struct dc *dc)
 		}
 	}
 
-	/* power AFMT HDMI memory TODO: may move to dis/en output save power*/
-	REG_WRITE(DIO_MEM_PWR_CTRL, 0);
-
-	// Set i2c to light sleep until engine is setup
-	if (dc->debug.enable_mem_low_power.bits.i2c)
-		REG_UPDATE(DIO_MEM_PWR_CTRL, I2C_LIGHT_SLEEP_FORCE, 0);
+	/* Power on DIO memory (AFMT HDMI) and optionally disable I2C light sleep */
+	if (dc->res_pool->dio && dc->res_pool->dio->funcs->mem_pwr_ctrl)
+		dc->res_pool->dio->funcs->mem_pwr_ctrl(dc->res_pool->dio, !dc->debug.enable_mem_low_power.bits.i2c);
 
 	if (hws->funcs.setup_hpo_hw_control)
 		hws->funcs.setup_hpo_hw_control(hws, false);
@@ -278,7 +286,8 @@ void dcn35_init_hw(struct dc *dc)
 	}
 
 	if (dc->debug.disable_mem_low_power) {
-		REG_UPDATE(DC_MEM_GLOBAL_PWR_REQ_CNTL, DC_MEM_GLOBAL_PWR_REQ_DIS, 1);
+		if (dc->res_pool->dccg && dc->res_pool->dccg->funcs && dc->res_pool->dccg->funcs->enable_memory_low_power)
+			dc->res_pool->dccg->funcs->enable_memory_low_power(dc->res_pool->dccg, false);
 	}
 	if (!dcb->funcs->is_accelerated_mode(dcb) && dc->res_pool->hubbub->funcs->init_watermarks)
 		dc->res_pool->hubbub->funcs->init_watermarks(dc->res_pool->hubbub);
@@ -312,6 +321,7 @@ void dcn35_init_hw(struct dc *dc)
 		if (dc->res_pool->pg_cntl->funcs->init_pg_status)
 			dc->res_pool->pg_cntl->funcs->init_pg_status(dc->res_pool->pg_cntl);
 	}
+	print_pg_status(dc, __func__, ": after init_pg_status");
 }
 
 static void update_dsc_on_stream(struct pipe_ctx *pipe_ctx, bool enable)
@@ -354,6 +364,7 @@ static void update_dsc_on_stream(struct pipe_ctx *pipe_ctx, bool enable)
 		dsc_cfg.dc_dsc_cfg = stream->timing.dsc_cfg;
 		ASSERT(dsc_cfg.dc_dsc_cfg.num_slices_h % opp_cnt == 0);
 		dsc_cfg.dc_dsc_cfg.num_slices_h /= opp_cnt;
+		dsc_cfg.dsc_padding = 0;
 
 		dsc->funcs->dsc_set_config(dsc, &dsc_cfg, &dsc_optc_cfg);
 		dsc->funcs->dsc_enable(dsc, pipe_ctx->stream_res.opp->inst);
@@ -498,97 +509,6 @@ void dcn35_physymclk_root_clock_control(struct dce_hwseq *hws, unsigned int phy_
 		hws->ctx->dc->res_pool->dccg->funcs->set_physymclk_root_clock_gating(
 			hws->ctx->dc->res_pool->dccg, phy_inst, clock_on);
 	}
-}
-
-void dcn35_dsc_pg_control(
-		struct dce_hwseq *hws,
-		unsigned int dsc_inst,
-		bool power_on)
-{
-	uint32_t power_gate = power_on ? 0 : 1;
-	uint32_t pwr_status = power_on ? 0 : 2;
-	uint32_t org_ip_request_cntl = 0;
-
-	if (hws->ctx->dc->debug.disable_dsc_power_gate)
-		return;
-	if (hws->ctx->dc->debug.ignore_pg)
-		return;
-	REG_GET(DC_IP_REQUEST_CNTL, IP_REQUEST_EN, &org_ip_request_cntl);
-	if (org_ip_request_cntl == 0)
-		REG_SET(DC_IP_REQUEST_CNTL, 0, IP_REQUEST_EN, 1);
-
-	switch (dsc_inst) {
-	case 0: /* DSC0 */
-		REG_UPDATE(DOMAIN16_PG_CONFIG,
-				DOMAIN_POWER_GATE, power_gate);
-
-		REG_WAIT(DOMAIN16_PG_STATUS,
-				DOMAIN_PGFSM_PWR_STATUS, pwr_status,
-				1, 1000);
-		break;
-	case 1: /* DSC1 */
-		REG_UPDATE(DOMAIN17_PG_CONFIG,
-				DOMAIN_POWER_GATE, power_gate);
-
-		REG_WAIT(DOMAIN17_PG_STATUS,
-				DOMAIN_PGFSM_PWR_STATUS, pwr_status,
-				1, 1000);
-		break;
-	case 2: /* DSC2 */
-		REG_UPDATE(DOMAIN18_PG_CONFIG,
-				DOMAIN_POWER_GATE, power_gate);
-
-		REG_WAIT(DOMAIN18_PG_STATUS,
-				DOMAIN_PGFSM_PWR_STATUS, pwr_status,
-				1, 1000);
-		break;
-	case 3: /* DSC3 */
-		REG_UPDATE(DOMAIN19_PG_CONFIG,
-				DOMAIN_POWER_GATE, power_gate);
-
-		REG_WAIT(DOMAIN19_PG_STATUS,
-				DOMAIN_PGFSM_PWR_STATUS, pwr_status,
-				1, 1000);
-		break;
-	default:
-		BREAK_TO_DEBUGGER();
-		break;
-	}
-
-	if (org_ip_request_cntl == 0)
-		REG_SET(DC_IP_REQUEST_CNTL, 0, IP_REQUEST_EN, 0);
-}
-
-void dcn35_enable_power_gating_plane(struct dce_hwseq *hws, bool enable)
-{
-	bool force_on = true; /* disable power gating */
-	uint32_t org_ip_request_cntl = 0;
-
-	if (hws->ctx->dc->debug.disable_hubp_power_gate)
-		return;
-	if (hws->ctx->dc->debug.ignore_pg)
-		return;
-	REG_GET(DC_IP_REQUEST_CNTL, IP_REQUEST_EN, &org_ip_request_cntl);
-	if (org_ip_request_cntl == 0)
-		REG_SET(DC_IP_REQUEST_CNTL, 0, IP_REQUEST_EN, 1);
-	/* DCHUBP0/1/2/3/4/5 */
-	REG_UPDATE(DOMAIN0_PG_CONFIG, DOMAIN_POWER_FORCEON, force_on);
-	REG_UPDATE(DOMAIN2_PG_CONFIG, DOMAIN_POWER_FORCEON, force_on);
-	/* DPP0/1/2/3/4/5 */
-	REG_UPDATE(DOMAIN1_PG_CONFIG, DOMAIN_POWER_FORCEON, force_on);
-	REG_UPDATE(DOMAIN3_PG_CONFIG, DOMAIN_POWER_FORCEON, force_on);
-
-	force_on = true; /* disable power gating */
-	if (enable && !hws->ctx->dc->debug.disable_dsc_power_gate)
-		force_on = false;
-
-	/* DCS0/1/2/3/4 */
-	REG_UPDATE(DOMAIN16_PG_CONFIG, DOMAIN_POWER_FORCEON, force_on);
-	REG_UPDATE(DOMAIN17_PG_CONFIG, DOMAIN_POWER_FORCEON, force_on);
-	REG_UPDATE(DOMAIN18_PG_CONFIG, DOMAIN_POWER_FORCEON, force_on);
-	REG_UPDATE(DOMAIN19_PG_CONFIG, DOMAIN_POWER_FORCEON, force_on);
-
-
 }
 
 /* In headless boot cases, DIG may be turned
@@ -897,8 +817,6 @@ void dcn35_enable_plane(struct dc *dc, struct pipe_ctx *pipe_ctx,
 			       struct dc_state *context)
 {
 	struct dpp *dpp = pipe_ctx->plane_res.dpp;
-	struct dccg *dccg = dc->res_pool->dccg;
-
 
 	/* enable DCFCLK current DCHUB */
 	pipe_ctx->plane_res.hubp->funcs->hubp_clk_cntl(pipe_ctx->plane_res.hubp, true);
@@ -906,7 +824,6 @@ void dcn35_enable_plane(struct dc *dc, struct pipe_ctx *pipe_ctx,
 	/* initialize HUBP on power up */
 	pipe_ctx->plane_res.hubp->funcs->hubp_init(pipe_ctx->plane_res.hubp);
 	/*make sure DPPCLK is on*/
-	dccg->funcs->dccg_root_gate_disable_control(dccg, dpp->inst, true);
 	dpp->funcs->dpp_dppclk_control(dpp, false, true);
 	/* make sure OPP_PIPE_CLOCK_EN = 1 */
 	pipe_ctx->stream_res.opp->funcs->opp_pipe_clock_control(
@@ -940,7 +857,6 @@ void dcn35_plane_atomic_disable(struct dc *dc, struct pipe_ctx *pipe_ctx)
 {
 	struct hubp *hubp = pipe_ctx->plane_res.hubp;
 	struct dpp *dpp = pipe_ctx->plane_res.dpp;
-	struct dccg *dccg = dc->res_pool->dccg;
 
 
 	dc->hwss.wait_for_mpcc_disconnect(dc, dc->res_pool, pipe_ctx);
@@ -959,7 +875,6 @@ void dcn35_plane_atomic_disable(struct dc *dc, struct pipe_ctx *pipe_ctx)
 	hubp->funcs->hubp_clk_cntl(hubp, false);
 
 	dpp->funcs->dpp_dppclk_control(dpp, false, false);
-	dccg->funcs->dccg_root_gate_disable_control(dccg, dpp->inst, false);
 
 	hubp->power_gated = true;
 
@@ -1453,6 +1368,8 @@ void dcn35_prepare_bandwidth(
 	}
 
 	dcn20_prepare_bandwidth(dc, context);
+
+	print_pg_status(dc, __func__, ": after rcg and power up");
 }
 
 void dcn35_optimize_bandwidth(
@@ -1460,6 +1377,8 @@ void dcn35_optimize_bandwidth(
 		struct dc_state *context)
 {
 	struct pg_block_update pg_update_state;
+
+	print_pg_status(dc, __func__, ": before rcg and power up");
 
 	dcn20_optimize_bandwidth(dc, context);
 
@@ -1472,6 +1391,8 @@ void dcn35_optimize_bandwidth(
 		if (dc->hwss.root_clock_control)
 			dc->hwss.root_clock_control(dc, &pg_update_state, false);
 	}
+
+	print_pg_status(dc, __func__, ": after rcg and power up");
 }
 
 void dcn35_set_drr(struct pipe_ctx **pipe_ctx,
@@ -1666,4 +1587,195 @@ void dcn35_hardware_release(struct dc *dc)
 	/*power up required HW block*/
 	if (dc->hwss.hw_block_power_up)
 		dc->hwss.hw_block_power_up(dc, &pg_update_state);
+}
+
+void dcn35_abort_cursor_offload_update(struct dc *dc, const struct pipe_ctx *pipe)
+{
+	if (!dc_dmub_srv_is_cursor_offload_enabled(dc))
+		return;
+
+	/*
+	 * Insert a blank update to modify the write index and set pipe_mask to 0.
+	 *
+	 * While the DMU is interlocked with driver full pipe programming via
+	 * the DMU HW lock, if the cursor update begins to execute after a full
+	 * pipe programming occurs there are two possible issues:
+	 *
+	 * 1. Outdated cursor information is programmed, replacing the current update
+	 * 2. The cursor update in firmware holds the cursor lock, preventing
+	 *    the current update from being latched atomically in the same frame
+	 *    as the rest of the update.
+	 *
+	 * This blank update, treated as a no-op, will allow the firmware to skip
+	 * the programming.
+	 */
+
+	if (dc->hwss.begin_cursor_offload_update)
+		dc->hwss.begin_cursor_offload_update(dc, pipe);
+
+	if (dc->hwss.commit_cursor_offload_update)
+		dc->hwss.commit_cursor_offload_update(dc, pipe);
+}
+
+void dcn35_begin_cursor_offload_update(struct dc *dc, const struct pipe_ctx *pipe)
+{
+	volatile struct dmub_cursor_offload_v1 *cs = dc->ctx->dmub_srv->dmub->cursor_offload_v1;
+	const struct pipe_ctx *top_pipe = resource_get_otg_master(pipe);
+	uint32_t stream_idx, write_idx, payload_idx;
+
+	if (!top_pipe)
+		return;
+
+	stream_idx = top_pipe->pipe_idx;
+	write_idx = cs->offload_streams[stream_idx].write_idx + 1; /*  new payload (+1) */
+	payload_idx = write_idx % ARRAY_SIZE(cs->offload_streams[stream_idx].payloads);
+
+	cs->offload_streams[stream_idx].payloads[payload_idx].write_idx_start = write_idx;
+	cs->offload_streams[stream_idx].payloads[payload_idx].pipe_mask = 0;
+
+	if (pipe->plane_res.hubp)
+		pipe->plane_res.hubp->cursor_offload = true;
+
+	if (pipe->plane_res.dpp)
+		pipe->plane_res.dpp->cursor_offload = true;
+}
+
+void dcn35_commit_cursor_offload_update(struct dc *dc, const struct pipe_ctx *pipe)
+{
+	volatile struct dmub_cursor_offload_v1 *cs = dc->ctx->dmub_srv->dmub->cursor_offload_v1;
+	volatile struct dmub_shared_state_cursor_offload_stream_v1 *shared_stream;
+	const struct pipe_ctx *top_pipe = resource_get_otg_master(pipe);
+	uint32_t stream_idx, write_idx, payload_idx;
+
+	if (pipe->plane_res.hubp)
+		pipe->plane_res.hubp->cursor_offload = false;
+
+	if (pipe->plane_res.dpp)
+		pipe->plane_res.dpp->cursor_offload = false;
+
+	if (!top_pipe)
+		return;
+
+	stream_idx = top_pipe->pipe_idx;
+	write_idx = cs->offload_streams[stream_idx].write_idx + 1; /*  new payload (+1) */
+	payload_idx = write_idx % ARRAY_SIZE(cs->offload_streams[stream_idx].payloads);
+
+	shared_stream = &dc->ctx->dmub_srv->dmub->shared_state[DMUB_SHARED_STATE_FEATURE__CURSOR_OFFLOAD_V1]
+				 .data.cursor_offload_v1.offload_streams[stream_idx];
+
+	shared_stream->last_write_idx = write_idx;
+
+	cs->offload_streams[stream_idx].write_idx = write_idx;
+	cs->offload_streams[stream_idx].payloads[payload_idx].write_idx_finish = write_idx;
+}
+
+void dcn35_update_cursor_offload_pipe(struct dc *dc, const struct pipe_ctx *pipe)
+{
+	volatile struct dmub_cursor_offload_v1 *cs = dc->ctx->dmub_srv->dmub->cursor_offload_v1;
+	const struct pipe_ctx *top_pipe = resource_get_otg_master(pipe);
+	const struct hubp *hubp = pipe->plane_res.hubp;
+	const struct dpp *dpp = pipe->plane_res.dpp;
+	volatile struct dmub_cursor_offload_pipe_data_dcn30_v1 *p;
+	uint32_t stream_idx, write_idx, payload_idx;
+
+	if (!top_pipe || !hubp || !dpp)
+		return;
+
+	stream_idx = top_pipe->pipe_idx;
+	write_idx = cs->offload_streams[stream_idx].write_idx + 1; /*  new payload (+1) */
+	payload_idx = write_idx % ARRAY_SIZE(cs->offload_streams[stream_idx].payloads);
+
+	p = &cs->offload_streams[stream_idx].payloads[payload_idx].pipe_data[pipe->pipe_idx].dcn30;
+
+	p->CURSOR0_0_CURSOR_SURFACE_ADDRESS = hubp->att.SURFACE_ADDR;
+	p->CURSOR0_0_CURSOR_SURFACE_ADDRESS_HIGH = hubp->att.SURFACE_ADDR_HIGH;
+	p->CURSOR0_0_CURSOR_SIZE__CURSOR_WIDTH = hubp->att.size.bits.width;
+	p->CURSOR0_0_CURSOR_SIZE__CURSOR_HEIGHT = hubp->att.size.bits.height;
+	p->CURSOR0_0_CURSOR_POSITION__CURSOR_X_POSITION = hubp->pos.position.bits.x_pos;
+	p->CURSOR0_0_CURSOR_POSITION__CURSOR_Y_POSITION = hubp->pos.position.bits.y_pos;
+	p->CURSOR0_0_CURSOR_HOT_SPOT__CURSOR_HOT_SPOT_X = hubp->pos.hot_spot.bits.x_hot;
+	p->CURSOR0_0_CURSOR_HOT_SPOT__CURSOR_HOT_SPOT_Y = hubp->pos.hot_spot.bits.y_hot;
+	p->CURSOR0_0_CURSOR_DST_OFFSET__CURSOR_DST_X_OFFSET = hubp->pos.dst_offset.bits.dst_x_offset;
+	p->CURSOR0_0_CURSOR_CONTROL__CURSOR_ENABLE = hubp->pos.cur_ctl.bits.cur_enable;
+	p->CURSOR0_0_CURSOR_CONTROL__CURSOR_MODE = hubp->att.cur_ctl.bits.mode;
+	p->CURSOR0_0_CURSOR_CONTROL__CURSOR_2X_MAGNIFY = hubp->pos.cur_ctl.bits.cur_2x_magnify;
+	p->CURSOR0_0_CURSOR_CONTROL__CURSOR_PITCH = hubp->att.cur_ctl.bits.pitch;
+	p->CURSOR0_0_CURSOR_CONTROL__CURSOR_LINES_PER_CHUNK = hubp->att.cur_ctl.bits.line_per_chunk;
+
+	p->CNVC_CUR0_CURSOR0_CONTROL__CUR0_ENABLE = dpp->att.cur0_ctl.bits.cur0_enable;
+	p->CNVC_CUR0_CURSOR0_CONTROL__CUR0_MODE = dpp->att.cur0_ctl.bits.mode;
+	p->CNVC_CUR0_CURSOR0_CONTROL__CUR0_EXPANSION_MODE = dpp->att.cur0_ctl.bits.expansion_mode;
+	p->CNVC_CUR0_CURSOR0_CONTROL__CUR0_ROM_EN = dpp->att.cur0_ctl.bits.cur0_rom_en;
+	p->CNVC_CUR0_CURSOR0_COLOR0__CUR0_COLOR0 = 0x000000;
+	p->CNVC_CUR0_CURSOR0_COLOR1__CUR0_COLOR1 = 0xFFFFFF;
+	p->CNVC_CUR0_CURSOR0_FP_SCALE_BIAS__CUR0_FP_BIAS = dpp->att.fp_scale_bias.bits.fp_bias;
+	p->CNVC_CUR0_CURSOR0_FP_SCALE_BIAS__CUR0_FP_SCALE = dpp->att.fp_scale_bias.bits.fp_scale;
+
+	p->HUBPREQ0_CURSOR_SETTINGS__CURSOR0_DST_Y_OFFSET = hubp->att.settings.bits.dst_y_offset;
+	p->HUBPREQ0_CURSOR_SETTINGS__CURSOR0_CHUNK_HDL_ADJUST = hubp->att.settings.bits.chunk_hdl_adjust;
+
+	cs->offload_streams[stream_idx].payloads[payload_idx].pipe_mask |= (1u << pipe->pipe_idx);
+}
+
+void dcn35_notify_cursor_offload_drr_update(struct dc *dc, struct dc_state *context,
+					    const struct dc_stream_state *stream)
+{
+	dc_dmub_srv_control_cursor_offload(dc, context, stream, true);
+}
+
+void dcn35_program_cursor_offload_now(struct dc *dc, const struct pipe_ctx *pipe)
+{
+	dc_dmub_srv_program_cursor_now(dc, pipe);
+}
+
+static void disable_link_output_symclk_on_tx_off(struct dc_link *link, enum dp_link_encoding link_encoding)
+{
+	struct dc *dc = link->ctx->dc;
+	struct pipe_ctx *pipe_ctx = NULL;
+	uint8_t i;
+
+	for (i = 0; i < MAX_PIPES; i++) {
+		pipe_ctx = &dc->current_state->res_ctx.pipe_ctx[i];
+		if (pipe_ctx->stream && pipe_ctx->stream->link == link && pipe_ctx->top_pipe == NULL) {
+			pipe_ctx->clock_source->funcs->program_pix_clk(
+					pipe_ctx->clock_source,
+					&pipe_ctx->stream_res.pix_clk_params,
+					link_encoding,
+					&pipe_ctx->pll_settings);
+			break;
+		}
+	}
+}
+
+void dcn35_disable_link_output(struct dc_link *link,
+		const struct link_resource *link_res,
+		enum signal_type signal)
+{
+	struct dc *dc = link->ctx->dc;
+	const struct link_hwss *link_hwss = get_link_hwss(link, link_res);
+	struct dmcu *dmcu = dc->res_pool->dmcu;
+
+	if (signal == SIGNAL_TYPE_EDP &&
+			link->dc->hwss.edp_backlight_control &&
+			!link->skip_implict_edp_power_control)
+		link->dc->hwss.edp_backlight_control(link, false);
+	else if (dmcu != NULL && dmcu->funcs->lock_phy)
+		dmcu->funcs->lock_phy(dmcu);
+
+	if (dc_is_tmds_signal(signal) && link->phy_state.symclk_ref_cnts.otg > 0) {
+		disable_link_output_symclk_on_tx_off(link, DP_UNKNOWN_ENCODING);
+		link->phy_state.symclk_state = SYMCLK_ON_TX_OFF;
+	} else {
+		link_hwss->disable_link_output(link, link_res, signal);
+		link->phy_state.symclk_state = SYMCLK_OFF_TX_OFF;
+	}
+	/*
+	 * Add the logic to extract BOTH power up and power down sequences
+	 * from enable/disable link output and only call edp panel control
+	 * in enable_link_dp and disable_link_dp once.
+	 */
+	if (dmcu != NULL && dmcu->funcs->unlock_phy)
+		dmcu->funcs->unlock_phy(dmcu);
+
+	dc->link_srv->dp_trace_source_sequence(link, DPCD_SOURCE_SEQ_AFTER_DISABLE_LINK_PHY);
 }

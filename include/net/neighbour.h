@@ -92,15 +92,17 @@ struct neigh_parms {
 static inline void neigh_var_set(struct neigh_parms *p, int index, int val)
 {
 	set_bit(index, p->data_state);
-	p->data[index] = val;
+	WRITE_ONCE(p->data[index], val);
 }
 
-#define NEIGH_VAR(p, attr) ((p)->data[NEIGH_VAR_ ## attr])
+#define __NEIGH_VAR(p, attr) ((p)->data[NEIGH_VAR_ ## attr])
+#define NEIGH_VAR(p, attr) READ_ONCE(__NEIGH_VAR(p, attr))
+#define NEIGH_VAR_PTR(p, attr) (&(__NEIGH_VAR(p, attr)))
 
 /* In ndo_neigh_setup, NEIGH_VAR_INIT should be used.
  * In other cases, NEIGH_VAR_SET should be used.
  */
-#define NEIGH_VAR_INIT(p, attr, val) (NEIGH_VAR(p, attr) = val)
+#define NEIGH_VAR_INIT(p, attr, val) (__NEIGH_VAR(p, attr) = val)
 #define NEIGH_VAR_SET(p, attr, val) neigh_var_set(p, NEIGH_VAR_ ## attr, val)
 
 static inline void neigh_parms_data_state_setall(struct neigh_parms *p)
@@ -176,12 +178,17 @@ struct neigh_ops {
 };
 
 struct pneigh_entry {
-	struct pneigh_entry	*next;
+	struct pneigh_entry	__rcu *next;
 	possible_net_t		net;
 	struct net_device	*dev;
 	netdevice_tracker	dev_tracker;
+	union {
+		struct list_head	free_node;
+		struct rcu_head		rcu;
+	};
 	u32			flags;
 	u8			protocol;
+	bool			permanent;
 	u32			key[];
 };
 
@@ -231,11 +238,12 @@ struct neigh_table {
 	atomic_t		gc_entries;
 	struct list_head	gc_list;
 	struct list_head	managed_list;
-	rwlock_t		lock;
+	spinlock_t		lock;
 	unsigned long		last_rand;
 	struct neigh_statistics	__percpu *stats;
 	struct neigh_hash_table __rcu *nht;
-	struct pneigh_entry	**phash_buckets;
+	struct mutex		phash_lock;
+	struct pneigh_entry	__rcu **phash_buckets;
 };
 
 static inline int neigh_parms_family(struct neigh_parms *p)
@@ -260,13 +268,15 @@ static inline void *neighbour_priv(const struct neighbour *n)
 #define NEIGH_UPDATE_F_EXT_LEARNED		BIT(5)
 #define NEIGH_UPDATE_F_ISROUTER			BIT(6)
 #define NEIGH_UPDATE_F_ADMIN			BIT(7)
+#define NEIGH_UPDATE_F_EXT_VALIDATED		BIT(8)
 
 /* In-kernel representation for NDA_FLAGS_EXT flags: */
 #define NTF_OLD_MASK		0xff
 #define NTF_EXT_SHIFT		8
-#define NTF_EXT_MASK		(NTF_EXT_MANAGED)
+#define NTF_EXT_MASK		(NTF_EXT_MANAGED | NTF_EXT_EXT_VALIDATED)
 
 #define NTF_MANAGED		(NTF_EXT_MANAGED << NTF_EXT_SHIFT)
+#define NTF_EXT_VALIDATED	(NTF_EXT_EXT_VALIDATED << NTF_EXT_SHIFT)
 
 extern const struct nla_policy nda_policy[];
 
@@ -370,13 +380,20 @@ struct net *neigh_parms_net(const struct neigh_parms *parms)
 
 unsigned long neigh_rand_reach_time(unsigned long base);
 
+static inline void neigh_set_reach_time(struct neigh_parms *p)
+{
+	unsigned long base = NEIGH_VAR(p, BASE_REACHABLE_TIME);
+
+	WRITE_ONCE(p->reachable_time, neigh_rand_reach_time(base));
+}
+
 void pneigh_enqueue(struct neigh_table *tbl, struct neigh_parms *p,
 		    struct sk_buff *skb);
 struct pneigh_entry *pneigh_lookup(struct neigh_table *tbl, struct net *net,
-				   const void *key, struct net_device *dev,
-				   int creat);
-struct pneigh_entry *__pneigh_lookup(struct neigh_table *tbl, struct net *net,
-				     const void *key, struct net_device *dev);
+				   const void *key, struct net_device *dev);
+int pneigh_create(struct neigh_table *tbl, struct net *net, const void *key,
+		  struct net_device *dev, u32 flags, u8 protocol,
+		  bool permanent);
 int pneigh_delete(struct neigh_table *tbl, struct net *net, const void *key,
 		  struct net_device *dev);
 

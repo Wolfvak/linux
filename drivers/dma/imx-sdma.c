@@ -256,7 +256,7 @@ struct sdma_script_start_addrs {
 	/* End of v3 array */
 	union { s32 v3_end; s32 mcu_2_zqspi_addr; };
 	/* End of v4 array */
-	s32 v4_end[0];
+	s32 v4_end[];
 };
 
 /*
@@ -1544,7 +1544,7 @@ static struct sdma_desc *sdma_transfer_init(struct sdma_channel *sdmac,
 		goto err_out;
 	}
 
-	desc = kzalloc((sizeof(*desc)), GFP_NOWAIT);
+	desc = kzalloc_obj(*desc, GFP_NOWAIT);
 	if (!desc)
 		goto err_out;
 
@@ -2288,7 +2288,7 @@ static int sdma_probe(struct platform_device *pdev)
 
 	sdma->irq = irq;
 
-	sdma->script_addrs = kzalloc(sizeof(*sdma->script_addrs), GFP_KERNEL);
+	sdma->script_addrs = kzalloc_obj(*sdma->script_addrs);
 	if (!sdma->script_addrs) {
 		ret = -ENOMEM;
 		goto err_irq;

@@ -912,13 +912,39 @@ static int sve_set_common(struct task_struct *target,
 		return -EINVAL;
 
 	/*
-	 * Apart from SVE_PT_REGS_MASK, all SVE_PT_* flags are consumed by
-	 * vec_set_vector_length(), which will also validate them for us:
+	 * On systems without SVE we accept FPSIMD format writes with
+	 * a VL of 0 to allow exiting streaming mode, otherwise a VL
+	 * is required.
 	 */
-	ret = vec_set_vector_length(target, type, header.vl,
-		((unsigned long)header.flags & ~SVE_PT_REGS_MASK) << 16);
-	if (ret)
-		return ret;
+	if (header.vl) {
+		/*
+		 * If the system does not support SVE we can't
+		 * configure a SVE VL.
+		 */
+		if (!system_supports_sve() && type == ARM64_VEC_SVE)
+			return -EINVAL;
+
+		/*
+		 * Apart from SVE_PT_REGS_MASK, all SVE_PT_* flags are
+		 * consumed by vec_set_vector_length(), which will
+		 * also validate them for us:
+		 */
+		ret = vec_set_vector_length(target, type, header.vl,
+					    ((unsigned long)header.flags & ~SVE_PT_REGS_MASK) << 16);
+		if (ret)
+			return ret;
+	} else {
+		/* If the system supports SVE we require a VL. */
+		if (system_supports_sve())
+			return -EINVAL;
+
+		/*
+		 * Only FPSIMD formatted data with no flags set is
+		 * supported.
+		 */
+		if (header.flags != SVE_PT_REGS_FPSIMD)
+			return -EINVAL;
+	}
 
 	/* Allocate SME storage if necessary, preserving any existing ZA/ZT state */
 	if (type == ARM64_VEC_SME) {
@@ -942,20 +968,18 @@ static int sve_set_common(struct task_struct *target,
 	vq = sve_vq_from_vl(task_get_vl(target, type));
 
 	/* Enter/exit streaming mode */
-	if (system_supports_sme()) {
-		switch (type) {
-		case ARM64_VEC_SVE:
-			target->thread.svcr &= ~SVCR_SM_MASK;
-			set_tsk_thread_flag(target, TIF_SVE);
-			break;
-		case ARM64_VEC_SME:
-			target->thread.svcr |= SVCR_SM_MASK;
-			set_tsk_thread_flag(target, TIF_SME);
-			break;
-		default:
-			WARN_ON_ONCE(1);
-			return -EINVAL;
-		}
+	switch (type) {
+	case ARM64_VEC_SVE:
+		target->thread.svcr &= ~SVCR_SM_MASK;
+		set_tsk_thread_flag(target, TIF_SVE);
+		break;
+	case ARM64_VEC_SME:
+		target->thread.svcr |= SVCR_SM_MASK;
+		set_tsk_thread_flag(target, TIF_SME);
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		return -EINVAL;
 	}
 
 	/* Always zero V regs, FPSR, and FPCR */
@@ -1016,7 +1040,7 @@ static int sve_set(struct task_struct *target,
 		   unsigned int pos, unsigned int count,
 		   const void *kbuf, const void __user *ubuf)
 {
-	if (!system_supports_sve())
+	if (!system_supports_sve() && !system_supports_sme())
 		return -EINVAL;
 
 	return sve_set_common(target, regset, pos, count, kbuf, ubuf,
@@ -1460,6 +1484,9 @@ static int poe_get(struct task_struct *target,
 	if (!system_supports_poe())
 		return -EINVAL;
 
+	if (target == current)
+		current->thread.por_el0 = read_sysreg_s(SYS_POR_EL0);
+
 	return membuf_write(&to, &target->thread.por_el0,
 			    sizeof(target->thread.por_el0));
 }
@@ -1586,7 +1613,7 @@ enum aarch64_regset {
 
 static const struct user_regset aarch64_regsets[] = {
 	[REGSET_GPR] = {
-		.core_note_type = NT_PRSTATUS,
+		USER_REGSET_NOTE_TYPE(PRSTATUS),
 		.n = sizeof(struct user_pt_regs) / sizeof(u64),
 		.size = sizeof(u64),
 		.align = sizeof(u64),
@@ -1594,7 +1621,7 @@ static const struct user_regset aarch64_regsets[] = {
 		.set = gpr_set
 	},
 	[REGSET_FPR] = {
-		.core_note_type = NT_PRFPREG,
+		USER_REGSET_NOTE_TYPE(PRFPREG),
 		.n = sizeof(struct user_fpsimd_state) / sizeof(u32),
 		/*
 		 * We pretend we have 32-bit registers because the fpsr and
@@ -1607,7 +1634,7 @@ static const struct user_regset aarch64_regsets[] = {
 		.set = fpr_set
 	},
 	[REGSET_TLS] = {
-		.core_note_type = NT_ARM_TLS,
+		USER_REGSET_NOTE_TYPE(ARM_TLS),
 		.n = 2,
 		.size = sizeof(void *),
 		.align = sizeof(void *),
@@ -1616,7 +1643,7 @@ static const struct user_regset aarch64_regsets[] = {
 	},
 #ifdef CONFIG_HAVE_HW_BREAKPOINT
 	[REGSET_HW_BREAK] = {
-		.core_note_type = NT_ARM_HW_BREAK,
+		USER_REGSET_NOTE_TYPE(ARM_HW_BREAK),
 		.n = sizeof(struct user_hwdebug_state) / sizeof(u32),
 		.size = sizeof(u32),
 		.align = sizeof(u32),
@@ -1624,7 +1651,7 @@ static const struct user_regset aarch64_regsets[] = {
 		.set = hw_break_set,
 	},
 	[REGSET_HW_WATCH] = {
-		.core_note_type = NT_ARM_HW_WATCH,
+		USER_REGSET_NOTE_TYPE(ARM_HW_WATCH),
 		.n = sizeof(struct user_hwdebug_state) / sizeof(u32),
 		.size = sizeof(u32),
 		.align = sizeof(u32),
@@ -1633,7 +1660,7 @@ static const struct user_regset aarch64_regsets[] = {
 	},
 #endif
 	[REGSET_SYSTEM_CALL] = {
-		.core_note_type = NT_ARM_SYSTEM_CALL,
+		USER_REGSET_NOTE_TYPE(ARM_SYSTEM_CALL),
 		.n = 1,
 		.size = sizeof(int),
 		.align = sizeof(int),
@@ -1641,7 +1668,7 @@ static const struct user_regset aarch64_regsets[] = {
 		.set = system_call_set,
 	},
 	[REGSET_FPMR] = {
-		.core_note_type = NT_ARM_FPMR,
+		USER_REGSET_NOTE_TYPE(ARM_FPMR),
 		.n = 1,
 		.size = sizeof(u64),
 		.align = sizeof(u64),
@@ -1650,7 +1677,7 @@ static const struct user_regset aarch64_regsets[] = {
 	},
 #ifdef CONFIG_ARM64_SVE
 	[REGSET_SVE] = { /* Scalable Vector Extension */
-		.core_note_type = NT_ARM_SVE,
+		USER_REGSET_NOTE_TYPE(ARM_SVE),
 		.n = DIV_ROUND_UP(SVE_PT_SIZE(ARCH_SVE_VQ_MAX,
 					      SVE_PT_REGS_SVE),
 				  SVE_VQ_BYTES),
@@ -1662,7 +1689,7 @@ static const struct user_regset aarch64_regsets[] = {
 #endif
 #ifdef CONFIG_ARM64_SME
 	[REGSET_SSVE] = { /* Streaming mode SVE */
-		.core_note_type = NT_ARM_SSVE,
+		USER_REGSET_NOTE_TYPE(ARM_SSVE),
 		.n = DIV_ROUND_UP(SVE_PT_SIZE(SME_VQ_MAX, SVE_PT_REGS_SVE),
 				  SVE_VQ_BYTES),
 		.size = SVE_VQ_BYTES,
@@ -1671,7 +1698,7 @@ static const struct user_regset aarch64_regsets[] = {
 		.set = ssve_set,
 	},
 	[REGSET_ZA] = { /* SME ZA */
-		.core_note_type = NT_ARM_ZA,
+		USER_REGSET_NOTE_TYPE(ARM_ZA),
 		/*
 		 * ZA is a single register but it's variably sized and
 		 * the ptrace core requires that the size of any data
@@ -1687,7 +1714,7 @@ static const struct user_regset aarch64_regsets[] = {
 		.set = za_set,
 	},
 	[REGSET_ZT] = { /* SME ZT */
-		.core_note_type = NT_ARM_ZT,
+		USER_REGSET_NOTE_TYPE(ARM_ZT),
 		.n = 1,
 		.size = ZT_SIG_REG_BYTES,
 		.align = sizeof(u64),
@@ -1697,7 +1724,7 @@ static const struct user_regset aarch64_regsets[] = {
 #endif
 #ifdef CONFIG_ARM64_PTR_AUTH
 	[REGSET_PAC_MASK] = {
-		.core_note_type = NT_ARM_PAC_MASK,
+		USER_REGSET_NOTE_TYPE(ARM_PAC_MASK),
 		.n = sizeof(struct user_pac_mask) / sizeof(u64),
 		.size = sizeof(u64),
 		.align = sizeof(u64),
@@ -1705,7 +1732,7 @@ static const struct user_regset aarch64_regsets[] = {
 		/* this cannot be set dynamically */
 	},
 	[REGSET_PAC_ENABLED_KEYS] = {
-		.core_note_type = NT_ARM_PAC_ENABLED_KEYS,
+		USER_REGSET_NOTE_TYPE(ARM_PAC_ENABLED_KEYS),
 		.n = 1,
 		.size = sizeof(long),
 		.align = sizeof(long),
@@ -1714,7 +1741,7 @@ static const struct user_regset aarch64_regsets[] = {
 	},
 #ifdef CONFIG_CHECKPOINT_RESTORE
 	[REGSET_PACA_KEYS] = {
-		.core_note_type = NT_ARM_PACA_KEYS,
+		USER_REGSET_NOTE_TYPE(ARM_PACA_KEYS),
 		.n = sizeof(struct user_pac_address_keys) / sizeof(__uint128_t),
 		.size = sizeof(__uint128_t),
 		.align = sizeof(__uint128_t),
@@ -1722,7 +1749,7 @@ static const struct user_regset aarch64_regsets[] = {
 		.set = pac_address_keys_set,
 	},
 	[REGSET_PACG_KEYS] = {
-		.core_note_type = NT_ARM_PACG_KEYS,
+		USER_REGSET_NOTE_TYPE(ARM_PACG_KEYS),
 		.n = sizeof(struct user_pac_generic_keys) / sizeof(__uint128_t),
 		.size = sizeof(__uint128_t),
 		.align = sizeof(__uint128_t),
@@ -1733,7 +1760,7 @@ static const struct user_regset aarch64_regsets[] = {
 #endif
 #ifdef CONFIG_ARM64_TAGGED_ADDR_ABI
 	[REGSET_TAGGED_ADDR_CTRL] = {
-		.core_note_type = NT_ARM_TAGGED_ADDR_CTRL,
+		USER_REGSET_NOTE_TYPE(ARM_TAGGED_ADDR_CTRL),
 		.n = 1,
 		.size = sizeof(long),
 		.align = sizeof(long),
@@ -1743,7 +1770,7 @@ static const struct user_regset aarch64_regsets[] = {
 #endif
 #ifdef CONFIG_ARM64_POE
 	[REGSET_POE] = {
-		.core_note_type = NT_ARM_POE,
+		USER_REGSET_NOTE_TYPE(ARM_POE),
 		.n = 1,
 		.size = sizeof(long),
 		.align = sizeof(long),
@@ -1753,7 +1780,7 @@ static const struct user_regset aarch64_regsets[] = {
 #endif
 #ifdef CONFIG_ARM64_GCS
 	[REGSET_GCS] = {
-		.core_note_type = NT_ARM_GCS,
+		USER_REGSET_NOTE_TYPE(ARM_GCS),
 		.n = sizeof(struct user_gcs) / sizeof(u64),
 		.size = sizeof(u64),
 		.align = sizeof(u64),
@@ -1943,7 +1970,7 @@ static int compat_tls_set(struct task_struct *target,
 
 static const struct user_regset aarch32_regsets[] = {
 	[REGSET_COMPAT_GPR] = {
-		.core_note_type = NT_PRSTATUS,
+		USER_REGSET_NOTE_TYPE(PRSTATUS),
 		.n = COMPAT_ELF_NGREG,
 		.size = sizeof(compat_elf_greg_t),
 		.align = sizeof(compat_elf_greg_t),
@@ -1951,7 +1978,7 @@ static const struct user_regset aarch32_regsets[] = {
 		.set = compat_gpr_set
 	},
 	[REGSET_COMPAT_VFP] = {
-		.core_note_type = NT_ARM_VFP,
+		USER_REGSET_NOTE_TYPE(ARM_VFP),
 		.n = VFP_STATE_SIZE / sizeof(compat_ulong_t),
 		.size = sizeof(compat_ulong_t),
 		.align = sizeof(compat_ulong_t),
@@ -1968,7 +1995,7 @@ static const struct user_regset_view user_aarch32_view = {
 
 static const struct user_regset aarch32_ptrace_regsets[] = {
 	[REGSET_GPR] = {
-		.core_note_type = NT_PRSTATUS,
+		USER_REGSET_NOTE_TYPE(PRSTATUS),
 		.n = COMPAT_ELF_NGREG,
 		.size = sizeof(compat_elf_greg_t),
 		.align = sizeof(compat_elf_greg_t),
@@ -1976,7 +2003,7 @@ static const struct user_regset aarch32_ptrace_regsets[] = {
 		.set = compat_gpr_set
 	},
 	[REGSET_FPR] = {
-		.core_note_type = NT_ARM_VFP,
+		USER_REGSET_NOTE_TYPE(ARM_VFP),
 		.n = VFP_STATE_SIZE / sizeof(compat_ulong_t),
 		.size = sizeof(compat_ulong_t),
 		.align = sizeof(compat_ulong_t),
@@ -1984,7 +2011,7 @@ static const struct user_regset aarch32_ptrace_regsets[] = {
 		.set = compat_vfp_set
 	},
 	[REGSET_TLS] = {
-		.core_note_type = NT_ARM_TLS,
+		USER_REGSET_NOTE_TYPE(ARM_TLS),
 		.n = 1,
 		.size = sizeof(compat_ulong_t),
 		.align = sizeof(compat_ulong_t),
@@ -1993,7 +2020,7 @@ static const struct user_regset aarch32_ptrace_regsets[] = {
 	},
 #ifdef CONFIG_HAVE_HW_BREAKPOINT
 	[REGSET_HW_BREAK] = {
-		.core_note_type = NT_ARM_HW_BREAK,
+		USER_REGSET_NOTE_TYPE(ARM_HW_BREAK),
 		.n = sizeof(struct user_hwdebug_state) / sizeof(u32),
 		.size = sizeof(u32),
 		.align = sizeof(u32),
@@ -2001,7 +2028,7 @@ static const struct user_regset aarch32_ptrace_regsets[] = {
 		.set = hw_break_set,
 	},
 	[REGSET_HW_WATCH] = {
-		.core_note_type = NT_ARM_HW_WATCH,
+		USER_REGSET_NOTE_TYPE(ARM_HW_WATCH),
 		.n = sizeof(struct user_hwdebug_state) / sizeof(u32),
 		.size = sizeof(u32),
 		.align = sizeof(u32),
@@ -2010,7 +2037,7 @@ static const struct user_regset aarch32_ptrace_regsets[] = {
 	},
 #endif
 	[REGSET_SYSTEM_CALL] = {
-		.core_note_type = NT_ARM_SYSTEM_CALL,
+		USER_REGSET_NOTE_TYPE(ARM_SYSTEM_CALL),
 		.n = 1,
 		.size = sizeof(int),
 		.align = sizeof(int),
@@ -2317,9 +2344,10 @@ enum ptrace_syscall_dir {
 	PTRACE_SYSCALL_EXIT,
 };
 
-static void report_syscall(struct pt_regs *regs, enum ptrace_syscall_dir dir)
+static __always_inline unsigned long ptrace_save_reg(struct pt_regs *regs,
+						     enum ptrace_syscall_dir dir,
+						     int *regno)
 {
-	int regno;
 	unsigned long saved_reg;
 
 	/*
@@ -2338,15 +2366,34 @@ static void report_syscall(struct pt_regs *regs, enum ptrace_syscall_dir dir)
 	 * - Syscall stops behave differently to seccomp and pseudo-step traps
 	 *   (the latter do not nobble any registers).
 	 */
-	regno = (is_compat_task() ? 12 : 7);
-	saved_reg = regs->regs[regno];
-	regs->regs[regno] = dir;
+	*regno = (is_compat_task() ? 12 : 7);
+	saved_reg = regs->regs[*regno];
+	regs->regs[*regno] = dir;
 
-	if (dir == PTRACE_SYSCALL_ENTER) {
-		if (ptrace_report_syscall_entry(regs))
-			forget_syscall(regs);
-		regs->regs[regno] = saved_reg;
-	} else if (!test_thread_flag(TIF_SINGLESTEP)) {
+	return saved_reg;
+}
+
+static int report_syscall_entry(struct pt_regs *regs)
+{
+	unsigned long saved_reg;
+	int regno, ret;
+
+	saved_reg = ptrace_save_reg(regs, PTRACE_SYSCALL_ENTER, &regno);
+	ret = ptrace_report_syscall_entry(regs);
+	if (ret)
+		forget_syscall(regs);
+	regs->regs[regno] = saved_reg;
+
+	return ret;
+}
+
+static void report_syscall_exit(struct pt_regs *regs)
+{
+	unsigned long saved_reg;
+	int regno;
+
+	saved_reg = ptrace_save_reg(regs, PTRACE_SYSCALL_EXIT, &regno);
+	if (!test_thread_flag(TIF_SINGLESTEP)) {
 		ptrace_report_syscall_exit(regs, 0);
 		regs->regs[regno] = saved_reg;
 	} else {
@@ -2364,10 +2411,11 @@ static void report_syscall(struct pt_regs *regs, enum ptrace_syscall_dir dir)
 int syscall_trace_enter(struct pt_regs *regs)
 {
 	unsigned long flags = read_thread_flags();
+	int ret;
 
 	if (flags & (_TIF_SYSCALL_EMU | _TIF_SYSCALL_TRACE)) {
-		report_syscall(regs, PTRACE_SYSCALL_ENTER);
-		if (flags & _TIF_SYSCALL_EMU)
+		ret = report_syscall_entry(regs);
+		if (ret || (flags & _TIF_SYSCALL_EMU))
 			return NO_SYSCALL;
 	}
 
@@ -2394,7 +2442,7 @@ void syscall_trace_exit(struct pt_regs *regs)
 		trace_sys_exit(regs, syscall_get_return_value(current, regs));
 
 	if (flags & (_TIF_SYSCALL_TRACE | _TIF_SINGLESTEP))
-		report_syscall(regs, PTRACE_SYSCALL_EXIT);
+		report_syscall_exit(regs);
 
 	rseq_syscall(regs);
 }

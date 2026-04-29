@@ -182,7 +182,7 @@ static int mxs_spi_txrx_dma(struct mxs_spi *spi,
 	if (!len)
 		return -EINVAL;
 
-	dma_xfer = kcalloc(sgs, sizeof(*dma_xfer), GFP_KERNEL);
+	dma_xfer = kzalloc_objs(*dma_xfer, sgs);
 	if (!dma_xfer)
 		return -ENOMEM;
 
@@ -388,7 +388,7 @@ static int mxs_spi_transfer_one(struct spi_controller *host,
 		       TXRX_DEASSERT_CS : 0;
 
 		/*
-		 * Small blocks can be transfered via PIO.
+		 * Small blocks can be transferred via PIO.
 		 * Measured by empiric means:
 		 *
 		 * dd if=/dev/mtdblock0 of=/dev/null bs=1024k count=1

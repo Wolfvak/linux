@@ -103,6 +103,7 @@ const struct address_space_operations gfs2_meta_aops = {
 	.invalidate_folio = block_invalidate_folio,
 	.writepages = gfs2_aspace_writepages,
 	.release_folio = gfs2_release_folio,
+	.migrate_folio = buffer_migrate_folio_norefs,
 };
 
 const struct address_space_operations gfs2_rgrp_aops = {
@@ -110,6 +111,7 @@ const struct address_space_operations gfs2_rgrp_aops = {
 	.invalidate_folio = block_invalidate_folio,
 	.writepages = gfs2_aspace_writepages,
 	.release_folio = gfs2_release_folio,
+	.migrate_folio = buffer_migrate_folio_norefs,
 };
 
 /**
@@ -124,7 +126,7 @@ const struct address_space_operations gfs2_rgrp_aops = {
 struct buffer_head *gfs2_getbuf(struct gfs2_glock *gl, u64 blkno, int create)
 {
 	struct address_space *mapping = gfs2_glock2aspace(gl);
-	struct gfs2_sbd *sdp = gl->gl_name.ln_sbd;
+	struct gfs2_sbd *sdp = glock_sbd(gl);
 	struct folio *folio;
 	struct buffer_head *bh;
 	unsigned int shift;
@@ -228,7 +230,7 @@ static void gfs2_submit_bhs(blk_opf_t opf, struct buffer_head *bhs[], int num)
 		struct bio *bio;
 
 		bio = bio_alloc(bh->b_bdev, num, opf, GFP_NOIO);
-		bio->bi_iter.bi_sector = bh->b_blocknr * (bh->b_size >> 9);
+		bio->bi_iter.bi_sector = bh->b_blocknr * (bh->b_size >> SECTOR_SHIFT);
 		while (num > 0) {
 			bh = *bhs;
 			if (!bio_add_folio(bio, bh->b_folio, bh->b_size, bh_offset(bh))) {
@@ -257,12 +259,11 @@ static void gfs2_submit_bhs(blk_opf_t opf, struct buffer_head *bhs[], int num)
 int gfs2_meta_read(struct gfs2_glock *gl, u64 blkno, int flags,
 		   int rahead, struct buffer_head **bhp)
 {
-	struct gfs2_sbd *sdp = gl->gl_name.ln_sbd;
+	struct gfs2_sbd *sdp = glock_sbd(gl);
 	struct buffer_head *bh, *bhs[2];
 	int num = 0;
 
-	if (gfs2_withdrawing_or_withdrawn(sdp) &&
-	    !gfs2_withdraw_in_prog(sdp)) {
+	if (gfs2_withdrawn(sdp)) {
 		*bhp = NULL;
 		return -EIO;
 	}
@@ -301,7 +302,7 @@ int gfs2_meta_read(struct gfs2_glock *gl, u64 blkno, int flags,
 	if (unlikely(!buffer_uptodate(bh))) {
 		struct gfs2_trans *tr = current->journal_info;
 		if (tr && test_bit(TR_TOUCHED, &tr->tr_flags))
-			gfs2_io_error_bh_wd(sdp, bh);
+			gfs2_io_error_bh(sdp, bh);
 		brelse(bh);
 		*bhp = NULL;
 		return -EIO;
@@ -320,8 +321,7 @@ int gfs2_meta_read(struct gfs2_glock *gl, u64 blkno, int flags,
 
 int gfs2_meta_wait(struct gfs2_sbd *sdp, struct buffer_head *bh)
 {
-	if (gfs2_withdrawing_or_withdrawn(sdp) &&
-	    !gfs2_withdraw_in_prog(sdp))
+	if (gfs2_withdrawn(sdp))
 		return -EIO;
 
 	wait_on_buffer(bh);
@@ -329,11 +329,10 @@ int gfs2_meta_wait(struct gfs2_sbd *sdp, struct buffer_head *bh)
 	if (!buffer_uptodate(bh)) {
 		struct gfs2_trans *tr = current->journal_info;
 		if (tr && test_bit(TR_TOUCHED, &tr->tr_flags))
-			gfs2_io_error_bh_wd(sdp, bh);
+			gfs2_io_error_bh(sdp, bh);
 		return -EIO;
 	}
-	if (gfs2_withdrawing_or_withdrawn(sdp) &&
-	    !gfs2_withdraw_in_prog(sdp))
+	if (gfs2_withdrawn(sdp))
 		return -EIO;
 
 	return 0;
@@ -443,11 +442,9 @@ void gfs2_journal_wipe(struct gfs2_inode *ip, u64 bstart, u32 blen)
 	struct buffer_head *bh;
 	int ty;
 
-	if (!ip->i_gl) {
-		/* This can only happen during incomplete inode creation. */
-		BUG_ON(!test_bit(GIF_ALLOC_FAILED, &ip->i_flags));
+	/* This can only happen during incomplete inode creation. */
+	if (!ip->i_gl)
 		return;
-	}
 
 	gfs2_ail1_wipe(sdp, bstart, blen);
 	while (blen) {
@@ -516,7 +513,7 @@ int gfs2_meta_buffer(struct gfs2_inode *ip, u32 mtype, u64 num,
 
 struct buffer_head *gfs2_meta_ra(struct gfs2_glock *gl, u64 dblock, u32 extlen)
 {
-	struct gfs2_sbd *sdp = gl->gl_name.ln_sbd;
+	struct gfs2_sbd *sdp = glock_sbd(gl);
 	struct buffer_head *first_bh, *bh;
 	u32 max_ra = gfs2_tune_get(sdp, gt_max_readahead) >>
 			  sdp->sd_sb.sb_bsize_shift;

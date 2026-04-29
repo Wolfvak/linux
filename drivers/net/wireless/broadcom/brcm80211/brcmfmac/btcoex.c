@@ -362,7 +362,7 @@ int brcmf_btcoex_attach(struct brcmf_cfg80211_info *cfg)
 	struct brcmf_btcoex_info *btci;
 	brcmf_dbg(TRACE, "enter\n");
 
-	btci = kmalloc(sizeof(*btci), GFP_KERNEL);
+	btci = kmalloc_obj(*btci);
 	if (!btci)
 		return -ENOMEM;
 
@@ -393,10 +393,8 @@ void brcmf_btcoex_detach(struct brcmf_cfg80211_info *cfg)
 	if (!cfg->btcoex)
 		return;
 
-	if (cfg->btcoex->timer_on) {
-		cfg->btcoex->timer_on = false;
-		timer_shutdown_sync(&cfg->btcoex->timer);
-	}
+	timer_shutdown_sync(&cfg->btcoex->timer);
+	cfg->btcoex->timer_on = false;
 
 	cancel_work_sync(&cfg->btcoex->work);
 

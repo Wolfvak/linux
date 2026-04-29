@@ -13,6 +13,8 @@ enum bip_flags {
 	BIP_CHECK_GUARD		= 1 << 5, /* guard check */
 	BIP_CHECK_REFTAG	= 1 << 6, /* reftag check */
 	BIP_CHECK_APPTAG	= 1 << 7, /* apptag check */
+
+	BIP_MEMPOOL		= 1 << 15, /* buffer backed by mempool */
 };
 
 struct bio_integrity_payload {
@@ -139,4 +141,8 @@ static inline int bio_integrity_add_page(struct bio *bio, struct page *page,
 	return 0;
 }
 #endif /* CONFIG_BLK_DEV_INTEGRITY */
+
+void bio_integrity_alloc_buf(struct bio *bio, bool zero_buffer);
+void bio_integrity_free_buf(struct bio_integrity_payload *bip);
+
 #endif /* _LINUX_BIO_INTEGRITY_H */

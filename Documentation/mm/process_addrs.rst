@@ -48,7 +48,8 @@ Terminology
 * **VMA locks** - The VMA lock is at VMA granularity (of course) which behaves
   as a read/write semaphore in practice. A VMA read lock is obtained via
   :c:func:`!lock_vma_under_rcu` (and unlocked via :c:func:`!vma_end_read`) and a
-  write lock via :c:func:`!vma_start_write` (all VMA write locks are unlocked
+  write lock via vma_start_write() or vma_start_write_killable()
+  (all VMA write locks are unlocked
   automatically when the mmap write lock is released). To take a VMA write lock
   you **must** have already acquired an :c:func:`!mmap_write_lock`.
 * **rmap locks** - When trying to access VMAs through the reverse mapping via a
@@ -303,7 +304,9 @@ There are four key operations typically performed on page tables:
 1. **Traversing** page tables - Simply reading page tables in order to traverse
    them. This only requires that the VMA is kept stable, so a lock which
    establishes this suffices for traversal (there are also lockless variants
-   which eliminate even this requirement, such as :c:func:`!gup_fast`).
+   which eliminate even this requirement, such as :c:func:`!gup_fast`). There is
+   also a special case of page table traversal for non-VMA regions which we
+   consider separately below.
 2. **Installing** page table mappings - Whether creating a new mapping or
    modifying an existing one in such a way as to change its identity. This
    requires that the VMA is kept stable via an mmap or VMA lock (explicitly not
@@ -335,14 +338,12 @@ ahead and perform these operations on page tables (though internally, kernel
 operations that perform writes also acquire internal page table locks to
 serialise - see the page table implementation detail section for more details).
 
+.. note:: We free empty PTE tables on zap under the RCU lock - this does not
+          change the aforementioned locking requirements around zapping.
+
 When **installing** page table entries, the mmap or VMA lock must be held to
 keep the VMA stable. We explore why this is in the page table locking details
 section below.
-
-.. warning:: Page tables are normally only traversed in regions covered by VMAs.
-             If you want to traverse page tables in areas that might not be
-             covered by VMAs, heavier locking is required.
-             See :c:func:`!walk_page_range_novma` for details.
 
 **Freeing** page tables is an entirely internal memory management operation and
 has special requirements (see the page freeing section below for more details).
@@ -354,6 +355,44 @@ has special requirements (see the page freeing section below for more details).
              The :c:func:`!free_pgtables` function removes the relevant VMAs
              from the reverse mappings, but no other VMAs can be permitted to be
              accessible and span the specified range.
+
+Traversing non-VMA page tables
+------------------------------
+
+We've focused above on traversal of page tables belonging to VMAs. It is also
+possible to traverse page tables which are not represented by VMAs.
+
+Kernel page table mappings themselves are generally managed but whatever part of
+the kernel established them and the aforementioned locking rules do not apply -
+for instance vmalloc has its own set of locks which are utilised for
+establishing and tearing down page its page tables.
+
+However, for convenience we provide the :c:func:`!walk_kernel_page_table_range`
+function which is synchronised via the mmap lock on the :c:macro:`!init_mm`
+kernel instantiation of the :c:struct:`!struct mm_struct` metadata object.
+
+If an operation requires exclusive access, a write lock is used, but if not, a
+read lock suffices - we assert only that at least a read lock has been acquired.
+
+Since, aside from vmalloc and memory hot plug, kernel page tables are not torn
+down all that often - this usually suffices, however any caller of this
+functionality must ensure that any additionally required locks are acquired in
+advance.
+
+We also permit a truly unusual case is the traversal of non-VMA ranges in
+**userland** ranges, as provided for by :c:func:`!walk_page_range_debug`.
+
+This has only one user - the general page table dumping logic (implemented in
+:c:macro:`!mm/ptdump.c`) - which seeks to expose all mappings for debug purposes
+even if they are highly unusual (possibly architecture-specific) and are not
+backed by a VMA.
+
+We must take great care in this case, as the :c:func:`!munmap` implementation
+detaches VMAs under an mmap write lock before tearing down page tables under a
+downgraded mmap read lock.
+
+This means such an operation could race with this, and thus an mmap **write**
+lock is required.
 
 Lock ordering
 -------------
@@ -461,6 +500,10 @@ Locking Implementation Details
 Page table locking details
 --------------------------
 
+.. note:: This section explores page table locking requirements for page tables
+          encompassed by a VMA. See the above section on non-VMA page table
+          traversal for details on how we handle that case.
+
 In addition to the locks described in the terminology section above, we have
 additional locks dedicated to page tables:
 
@@ -540,7 +583,7 @@ To access PTE-level page tables, a helper like :c:func:`!pte_offset_map_lock` or
 :c:func:`!pte_offset_map` can be used depending on stability requirements.
 These map the page table into kernel memory if required, take the RCU lock, and
 depending on variant, may also look up or acquire the PTE lock.
-See the comment on :c:func:`!__pte_offset_map_lock`.
+See the comment on :c:func:`!pte_offset_map_lock`.
 
 Atomicity
 ^^^^^^^^^
@@ -624,7 +667,7 @@ must be released via :c:func:`!pte_unmap_unlock`.
 .. note:: There are some variants on this, such as
    :c:func:`!pte_offset_map_rw_nolock` when we know we hold the PTE stable but
    for brevity we do not explore this.  See the comment for
-   :c:func:`!__pte_offset_map_lock` for more details.
+   :c:func:`!pte_offset_map_lock` for more details.
 
 When modifying data in ranges we typically only wish to allocate higher page
 tables as necessary, using these locks to avoid races or overwriting anything,
@@ -643,7 +686,7 @@ At the leaf page table, that is the PTE, we can't entirely rely on this pattern
 as we have separate PMD and PTE locks and a THP collapse for instance might have
 eliminated the PMD entry as well as the PTE from under us.
 
-This is why :c:func:`!__pte_offset_map_lock` locklessly retrieves the PMD entry
+This is why :c:func:`!pte_offset_map_lock` locklessly retrieves the PMD entry
 for the PTE, carefully checking it is as expected, before acquiring the
 PTE-specific lock, and then *again* checking that the PMD entry is as expected.
 
@@ -865,3 +908,9 @@ Stack expansion
 Stack expansion throws up additional complexities in that we cannot permit there
 to be racing page faults, as a result we invoke :c:func:`!vma_start_write` to
 prevent this in :c:func:`!expand_downwards` or :c:func:`!expand_upwards`.
+
+------------------------
+Functions and structures
+------------------------
+
+.. kernel-doc:: include/linux/mmap_lock.h

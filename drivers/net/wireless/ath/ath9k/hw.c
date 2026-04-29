@@ -14,6 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <linux/export.h>
 #include <linux/io.h>
 #include <linux/slab.h>
 #include <linux/module.h>
@@ -3127,7 +3128,7 @@ struct ath_gen_timer *ath_gen_timer_alloc(struct ath_hw *ah,
 	    !AR_SREV_9300_20_OR_LATER(ah))
 		return NULL;
 
-	timer = kzalloc(sizeof(struct ath_gen_timer), GFP_KERNEL);
+	timer = kzalloc_obj(struct ath_gen_timer);
 	if (timer == NULL)
 		return NULL;
 

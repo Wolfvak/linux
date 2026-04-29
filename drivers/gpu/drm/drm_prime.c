@@ -37,6 +37,7 @@
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_prime.h>
+#include <drm/drm_print.h>
 
 #include "drm_internal.h"
 
@@ -93,13 +94,13 @@ struct drm_prime_member {
 	struct rb_node handle_rb;
 };
 
-static int drm_prime_add_buf_handle(struct drm_prime_file_private *prime_fpriv,
+int drm_prime_add_buf_handle(struct drm_prime_file_private *prime_fpriv,
 				    struct dma_buf *dma_buf, uint32_t handle)
 {
 	struct drm_prime_member *member;
 	struct rb_node **p, *rb;
 
-	member = kmalloc(sizeof(*member), GFP_KERNEL);
+	member = kmalloc_obj(*member);
 	if (!member)
 		return -ENOMEM;
 
@@ -190,8 +191,6 @@ void drm_prime_remove_buf_handle(struct drm_prime_file_private *prime_fpriv,
 {
 	struct rb_node *rb;
 
-	mutex_lock(&prime_fpriv->lock);
-
 	rb = prime_fpriv->handles.rb_node;
 	while (rb) {
 		struct drm_prime_member *member;
@@ -210,8 +209,6 @@ void drm_prime_remove_buf_handle(struct drm_prime_file_private *prime_fpriv,
 			rb = rb->rb_left;
 		}
 	}
-
-	mutex_unlock(&prime_fpriv->lock);
 }
 
 void drm_prime_init_file_private(struct drm_prime_file_private *prime_fpriv)
@@ -605,6 +602,7 @@ int drm_gem_map_attach(struct dma_buf *dma_buf,
 		       struct dma_buf_attachment *attach)
 {
 	struct drm_gem_object *obj = dma_buf->priv;
+	int ret;
 
 	/*
 	 * drm_gem_map_dma_buf() requires obj->get_sg_table(), but drivers
@@ -614,7 +612,16 @@ int drm_gem_map_attach(struct dma_buf *dma_buf,
 	    !obj->funcs->get_sg_table)
 		return -ENOSYS;
 
-	return drm_gem_pin(obj);
+	if (!obj->funcs->pin)
+		return 0;
+
+	ret = dma_resv_lock(obj->resv, NULL);
+	if (ret)
+		return ret;
+	ret = obj->funcs->pin(obj);
+	dma_resv_unlock(obj->resv);
+
+	return ret;
 }
 EXPORT_SYMBOL(drm_gem_map_attach);
 
@@ -631,8 +638,16 @@ void drm_gem_map_detach(struct dma_buf *dma_buf,
 			struct dma_buf_attachment *attach)
 {
 	struct drm_gem_object *obj = dma_buf->priv;
+	int ret;
 
-	drm_gem_unpin(obj);
+	if (!obj->funcs->unpin)
+		return;
+
+	ret = dma_resv_lock(obj->resv, NULL);
+	if (drm_WARN_ON(obj->dev, ret))
+		return;
+	obj->funcs->unpin(obj);
+	dma_resv_unlock(obj->resv);
 }
 EXPORT_SYMBOL(drm_gem_map_detach);
 
@@ -765,8 +780,8 @@ int drm_gem_prime_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma)
 		return 0;
 	}
 
-	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
-	fil = kzalloc(sizeof(*fil), GFP_KERNEL);
+	priv = kzalloc_obj(*priv);
+	fil = kzalloc_obj(*fil);
 	if (!priv || !fil) {
 		ret = -ENOMEM;
 		goto out;
@@ -839,7 +854,7 @@ struct sg_table *drm_prime_pages_to_sg(struct drm_device *dev,
 	size_t max_segment = 0;
 	int err;
 
-	sg = kmalloc(sizeof(struct sg_table), GFP_KERNEL);
+	sg = kmalloc_obj(struct sg_table);
 	if (!sg)
 		return ERR_PTR(-ENOMEM);
 
@@ -916,6 +931,26 @@ struct dma_buf *drm_gem_prime_export(struct drm_gem_object *obj,
 }
 EXPORT_SYMBOL(drm_gem_prime_export);
 
+
+/**
+ * drm_gem_is_prime_exported_dma_buf -
+ * checks if the DMA-BUF was exported from a GEM object belonging to @dev.
+ * @dev: drm_device to check against
+ * @dma_buf: dma-buf object to import
+ *
+ * Return: true if the DMA-BUF was exported from a GEM object belonging
+ * to @dev, false otherwise.
+ */
+
+bool drm_gem_is_prime_exported_dma_buf(struct drm_device *dev,
+				       struct dma_buf *dma_buf)
+{
+	struct drm_gem_object *obj = dma_buf->priv;
+
+	return (dma_buf->ops == &drm_gem_prime_dmabuf_ops) && (obj->dev == dev);
+}
+EXPORT_SYMBOL(drm_gem_is_prime_exported_dma_buf);
+
 /**
  * drm_gem_prime_import_dev - core implementation of the import callback
  * @dev: drm_device to import into
@@ -939,16 +974,14 @@ struct drm_gem_object *drm_gem_prime_import_dev(struct drm_device *dev,
 	struct drm_gem_object *obj;
 	int ret;
 
-	if (dma_buf->ops == &drm_gem_prime_dmabuf_ops) {
+	if (drm_gem_is_prime_exported_dma_buf(dev, dma_buf)) {
+		/*
+		 * Importing dmabuf exported from our own gem increases
+		 * refcount on gem itself instead of f_count of dmabuf.
+		 */
 		obj = dma_buf->priv;
-		if (obj->dev == dev) {
-			/*
-			 * Importing dmabuf exported from our own gem increases
-			 * refcount on gem itself instead of f_count of dmabuf.
-			 */
-			drm_gem_object_get(obj);
-			return obj;
-		}
+		drm_gem_object_get(obj);
+		return obj;
 	}
 
 	if (!dev->driver->gem_prime_import_sg_table)

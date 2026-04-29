@@ -66,17 +66,35 @@ new_port_store(struct device *dev, struct device_attribute *attr,
 	       const char *buf, size_t count)
 {
 	struct nsim_bus_dev *nsim_bus_dev = to_nsim_bus_dev(dev);
+	u8 eth_addr[ETH_ALEN] = {};
 	unsigned int port_index;
+	bool addr_set = false;
 	int ret;
 
 	/* Prevent to use nsim_bus_dev before initialization. */
 	if (!smp_load_acquire(&nsim_bus_dev->init))
 		return -EBUSY;
-	ret = kstrtouint(buf, 0, &port_index);
-	if (ret)
-		return ret;
 
-	ret = nsim_drv_port_add(nsim_bus_dev, NSIM_DEV_PORT_TYPE_PF, port_index);
+	ret = sscanf(buf, "%u %hhx:%hhx:%hhx:%hhx:%hhx:%hhx", &port_index,
+		     &eth_addr[0], &eth_addr[1], &eth_addr[2], &eth_addr[3],
+		     &eth_addr[4], &eth_addr[5]);
+	switch (ret) {
+	case 7:
+		if (!is_valid_ether_addr(eth_addr)) {
+			pr_err("The supplied perm_addr is not a valid MAC address\n");
+			return -EINVAL;
+		}
+		addr_set = true;
+		fallthrough;
+	case 1:
+		break;
+	default:
+		pr_err("Format for adding new port is \"id [perm_addr]\" (uint MAC).\n");
+		return -EINVAL;
+	}
+
+	ret = nsim_drv_port_add(nsim_bus_dev, NSIM_DEV_PORT_TYPE_PF, port_index,
+				addr_set ? eth_addr : NULL);
 	return ret ? ret : count;
 }
 
@@ -314,6 +332,11 @@ static ssize_t link_device_store(const struct bus_type *bus, const char *buf, si
 	rcu_assign_pointer(nsim_a->peer, nsim_b);
 	rcu_assign_pointer(nsim_b->peer, nsim_a);
 
+	if (netif_running(dev_a) && netif_running(dev_b)) {
+		netif_carrier_on(dev_a);
+		netif_carrier_on(dev_b);
+	}
+
 out_err:
 	put_net(ns_b);
 	put_net(ns_a);
@@ -363,9 +386,15 @@ static ssize_t unlink_device_store(const struct bus_type *bus, const char *buf, 
 	if (!peer)
 		goto out_put_netns;
 
+	netif_carrier_off(dev);
+	netif_carrier_off(peer->netdev);
+
 	err = 0;
 	RCU_INIT_POINTER(nsim->peer, NULL);
 	RCU_INIT_POINTER(peer->peer, NULL);
+	synchronize_net();
+	netif_tx_wake_all_queues(dev);
+	netif_tx_wake_all_queues(peer->netdev);
 
 out_put_netns:
 	put_net(ns);
@@ -422,7 +451,7 @@ nsim_bus_dev_new(unsigned int id, unsigned int port_count, unsigned int num_queu
 	struct nsim_bus_dev *nsim_bus_dev;
 	int err;
 
-	nsim_bus_dev = kzalloc(sizeof(*nsim_bus_dev), GFP_KERNEL);
+	nsim_bus_dev = kzalloc_obj(*nsim_bus_dev);
 	if (!nsim_bus_dev)
 		return ERR_PTR(-ENOMEM);
 

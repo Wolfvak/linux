@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: ISC
+// SPDX-License-Identifier: BSD-3-Clause-Clear
 /* Copyright (C) 2021 MediaTek Inc.
  *
  */
@@ -149,6 +149,8 @@ static int mt7921s_probe(struct sdio_func *func,
 	ret = mt76s_hw_init(mdev, func, MT76_CONNAC2_SDIO);
 	if (ret)
 		goto error;
+
+	atomic_set(&mdev->bus_hung, false);
 
 	mdev->rev = (mt76_rr(dev, MT_HW_CHIPID) << 16) |
 		    (mt76_rr(dev, MT_HW_REV) & 0xff);

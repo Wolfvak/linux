@@ -270,7 +270,7 @@ enum _pcs_reg {
 	PCS_ESR = 15,
 };
 
-/* IEEE Extened Status Register */
+/* IEEE Extended Status Register */
 enum _mii_esr {
 	MII_ESR_1000BX_FD = 0x8000,
 	MII_ESR_1000BX_HD = 0x4000,
@@ -403,6 +403,8 @@ struct netdev_private {
 	u16 negotiate;		/* Negotiated media */
 	int phy_addr;		/* PHY addresses. */
 	u16 led_mode;		/* LED mode read from EEPROM (IP1000A only) */
+
+	bool rmon_enable;
 };
 
 /* The station address location in the EEPROM. */

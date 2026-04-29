@@ -318,6 +318,14 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
+
+		afe_dma_mem: audio-dma-pool {
+			compatible = "shared-dma-pool";
+			size = <0 0x100000>;
+			alignment = <0 0x10>;
+			no-map;
+		};
+
 		vpu_dma_reserved: vpu-dma-mem@b7000000 {
 			compatible = "shared-dma-pool";
 			reg = <0 0xb7000000 0 0x500000>;
@@ -383,58 +391,58 @@
 				     <GIC_SPI 146 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 147 IRQ_TYPE_LEVEL_HIGH>;
 
-			hdmi_pin: xxx {
+			hdmi_pin: hdmi-hotplug-pins {
 
 				/*hdmi htplg pin*/
-				pins1 {
+				pins-htplg {
 					pinmux = <MT8173_PIN_21_HTPLG__FUNC_HTPLG>;
 					input-enable;
 					bias-pull-down;
 				};
 			};
 
-			i2c0_pins_a: i2c0 {
-				pins1 {
+			i2c0_pins_a: i2c0-pins {
+				pins-bus {
 					pinmux = <MT8173_PIN_45_SDA0__FUNC_SDA0>,
 						 <MT8173_PIN_46_SCL0__FUNC_SCL0>;
 					bias-disable;
 				};
 			};
 
-			i2c1_pins_a: i2c1 {
-				pins1 {
+			i2c1_pins_a: i2c1-pins {
+				pins-bus {
 					pinmux = <MT8173_PIN_125_SDA1__FUNC_SDA1>,
 						 <MT8173_PIN_126_SCL1__FUNC_SCL1>;
 					bias-disable;
 				};
 			};
 
-			i2c2_pins_a: i2c2 {
-				pins1 {
+			i2c2_pins_a: i2c2-pins {
+				pins-bus {
 					pinmux = <MT8173_PIN_43_SDA2__FUNC_SDA2>,
 						 <MT8173_PIN_44_SCL2__FUNC_SCL2>;
 					bias-disable;
 				};
 			};
 
-			i2c3_pins_a: i2c3 {
-				pins1 {
+			i2c3_pins_a: i2c3-pins {
+				pins-bus {
 					pinmux = <MT8173_PIN_106_SDA3__FUNC_SDA3>,
 						 <MT8173_PIN_107_SCL3__FUNC_SCL3>;
 					bias-disable;
 				};
 			};
 
-			i2c4_pins_a: i2c4 {
-				pins1 {
+			i2c4_pins_a: i2c4-pins {
+				pins-bus {
 					pinmux = <MT8173_PIN_133_SDA4__FUNC_SDA4>,
 						 <MT8173_PIN_134_SCL4__FUNC_SCL4>;
 					bias-disable;
 				};
 			};
 
-			i2c6_pins_a: i2c6 {
-				pins1 {
+			i2c6_pins_a: i2c6-pins {
+				pins-bus {
 					pinmux = <MT8173_PIN_100_MSDC2_DAT0__FUNC_SDA5>,
 						 <MT8173_PIN_101_MSDC2_DAT1__FUNC_SCL5>;
 					bias-disable;
@@ -887,6 +895,7 @@
 					  <&topckgen CLK_TOP_AUD_2_SEL>;
 			assigned-clock-parents = <&topckgen CLK_TOP_APLL1>,
 						 <&topckgen CLK_TOP_APLL2>;
+			memory-region = <&afe_dma_mem>;
 		};
 
 		mmc0: mmc@11230000 {

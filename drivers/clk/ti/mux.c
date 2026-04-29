@@ -84,7 +84,7 @@ static int ti_clk_mux_set_parent(struct clk_hw *hw, u8 index)
 }
 
 /**
- * clk_mux_save_context - Save the parent selcted in the mux
+ * clk_mux_save_context - Save the parent selected in the mux
  * @hw: pointer  struct clk_hw
  *
  * Save the parent mux value.
@@ -129,7 +129,7 @@ static struct clk *_register_mux(struct device_node *node, const char *name,
 	struct clk_init_data init;
 
 	/* allocate the mux */
-	mux = kzalloc(sizeof(*mux), GFP_KERNEL);
+	mux = kzalloc_obj(*mux);
 	if (!mux)
 		return ERR_PTR(-ENOMEM);
 
@@ -227,7 +227,7 @@ struct clk_hw *ti_clk_build_component_mux(struct ti_clk_mux *setup)
 	if (!setup)
 		return NULL;
 
-	mux = kzalloc(sizeof(*mux), GFP_KERNEL);
+	mux = kzalloc_obj(*mux);
 	if (!mux)
 		return ERR_PTR(-ENOMEM);
 
@@ -253,7 +253,7 @@ static void __init of_ti_composite_mux_clk_setup(struct device_node *node)
 	struct clk_omap_mux *mux;
 	unsigned int num_parents;
 
-	mux = kzalloc(sizeof(*mux), GFP_KERNEL);
+	mux = kzalloc_obj(*mux);
 	if (!mux)
 		return;
 

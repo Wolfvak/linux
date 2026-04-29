@@ -42,7 +42,7 @@ void acpi_enable_wakeup_devices(u8 sleep_state)
 	list_for_each_entry_safe(dev, tmp, &acpi_wakeup_device_list,
 				 wakeup_list) {
 		if (!dev->wakeup.flags.valid
-		    || sleep_state > (u32) dev->wakeup.sleep_state
+		    || sleep_state > dev->wakeup.sleep_state
 		    || !(device_may_wakeup(&dev->dev)
 			 || dev->wakeup.prepare_count))
 			continue;
@@ -67,7 +67,7 @@ void acpi_disable_wakeup_devices(u8 sleep_state)
 	list_for_each_entry_safe(dev, tmp, &acpi_wakeup_device_list,
 				 wakeup_list) {
 		if (!dev->wakeup.flags.valid
-		    || sleep_state > (u32) dev->wakeup.sleep_state
+		    || sleep_state > dev->wakeup.sleep_state
 		    || !(device_may_wakeup(&dev->dev)
 			 || dev->wakeup.prepare_count))
 			continue;
@@ -120,7 +120,7 @@ int acpi_register_wakeup_handler(int wake_irq, bool (*wakeup)(void *context),
 	if (!acpi_sci_irq_valid() || wake_irq != acpi_sci_irq)
 		return 0;
 
-	handler = kmalloc(sizeof(*handler), GFP_KERNEL);
+	handler = kmalloc_obj(*handler);
 	if (!handler)
 		return -ENOMEM;
 

@@ -77,7 +77,6 @@ static int rt9123_enable_event(struct snd_soc_dapm_widget *w, struct snd_kcontro
 	/* AMPON bit is located in volatile RG, use pm_runtime to guarantee the RG access */
 	snd_soc_component_write_field(comp, RT9123_REG_AMPCTRL, RT9123_MASK_AMPON, enable);
 
-	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 
 	return 0;
@@ -108,7 +107,7 @@ static const struct soc_enum rt9123_i2sch_select_enum =
 
 static int rt9123_kcontrol_name_comp(struct snd_kcontrol *kcontrol, const char *s)
 {
-	struct snd_soc_component *comp = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_component *comp = snd_kcontrol_chip(kcontrol);
 	const char *kctlname = kcontrol->id.name;
 
 	if (comp && comp->name_prefix)
@@ -119,7 +118,7 @@ static int rt9123_kcontrol_name_comp(struct snd_kcontrol *kcontrol, const char *
 
 static int rt9123_xhandler_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *comp = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_component *comp = snd_kcontrol_chip(kcontrol);
 	struct device *dev = comp->dev;
 	int ret;
 
@@ -140,14 +139,13 @@ static int rt9123_xhandler_get(struct snd_kcontrol *kcontrol, struct snd_ctl_ele
 	if (ret < 0)
 		dev_err(dev, "Failed to get control (%d)\n", ret);
 
-	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 	return ret;
 }
 
 static int rt9123_xhandler_put(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *comp = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_component *comp = snd_kcontrol_chip(kcontrol);
 	struct device *dev = comp->dev;
 	int ret;
 
@@ -168,7 +166,6 @@ static int rt9123_xhandler_put(struct snd_kcontrol *kcontrol, struct snd_ctl_ele
 	if (ret < 0)
 		dev_err(dev, "Failed to put control (%d)\n", ret);
 
-	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 	return ret;
 }

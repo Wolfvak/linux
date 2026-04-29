@@ -2662,7 +2662,7 @@ static void b43legacy_set_retry_limits(struct b43legacy_wldev *dev,
 	b43legacy_shm_write16(dev, B43legacy_SHM_WIRELESS, 0x0007, long_retry);
 }
 
-static int b43legacy_op_dev_config(struct ieee80211_hw *hw,
+static int b43legacy_op_dev_config(struct ieee80211_hw *hw, int radio_idx,
 				   u32 changed)
 {
 	struct b43legacy_wl *wl = hw_to_b43legacy_wl(hw);
@@ -3269,9 +3269,8 @@ static int b43legacy_wireless_core_init(struct b43legacy_wldev *dev)
 
 	if ((phy->type == B43legacy_PHYTYPE_B) ||
 	    (phy->type == B43legacy_PHYTYPE_G)) {
-		phy->_lo_pairs = kcalloc(B43legacy_LO_COUNT,
-					 sizeof(struct b43legacy_lopair),
-					 GFP_KERNEL);
+		phy->_lo_pairs = kzalloc_objs(struct b43legacy_lopair,
+					      B43legacy_LO_COUNT);
 		if (!phy->_lo_pairs)
 			return -ENOMEM;
 	}
@@ -3739,7 +3738,7 @@ static int b43legacy_one_core_attach(struct ssb_device *dev,
 	struct b43legacy_wldev *wldev;
 	int err = -ENOMEM;
 
-	wldev = kzalloc(sizeof(*wldev), GFP_KERNEL);
+	wldev = kzalloc_obj(*wldev);
 	if (!wldev)
 		goto out;
 

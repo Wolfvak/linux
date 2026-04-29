@@ -8,6 +8,8 @@
 
 #include <linux/types.h>
 
+#include "abi/guc_scheduler_abi.h"
+
 /**
  * DOC: GuC KLV
  *
@@ -16,6 +18,8 @@
  *  +===+=======+==============================================================+
  *  | 0 | 31:16 | **KEY** - KLV key identifier                                 |
  *  |   |       |   - `GuC Self Config KLVs`_                                  |
+ *  |   |       |   - `GuC Opt In Feature KLVs`_                               |
+ *  |   |       |   - `GuC Scheduling Policies KLVs`_                          |
  *  |   |       |   - `GuC VGT Policy KLVs`_                                   |
  *  |   |       |   - `GuC VF Configuration KLVs`_                             |
  *  |   |       |                                                              |
@@ -44,10 +48,17 @@
  *      Refers to 32 bit architecture version as reported by the HW IP.
  *      This key is supported on MTL+ platforms only.
  *      Requires GuC ABI 1.2+.
+ *
+ * _`GUC_KLV_GLOBAL_CFG_GROUP_SCHEDULING_AVAILABLE` : 0x3001
+ *      Tells the driver whether scheduler groups are enabled or not.
+ *      Requires GuC ABI 1.26+
  */
 
 #define GUC_KLV_GLOBAL_CFG_GMD_ID_KEY			0x3000u
 #define GUC_KLV_GLOBAL_CFG_GMD_ID_LEN			1u
+
+#define GUC_KLV_GLOBAL_CFG_GROUP_SCHEDULING_AVAILABLE_KEY	0x3001u
+#define GUC_KLV_GLOBAL_CFG_GROUP_SCHEDULING_AVAILABLE_LEN	1u
 
 /**
  * DOC: GuC Self Config KLVs
@@ -125,6 +136,57 @@ enum  {
 };
 
 /**
+ * DOC: GuC Opt In Feature KLVs
+ *
+ * `GuC KLV`_ keys available for use with OPT_IN_FEATURE_KLV
+ *
+ *  _`GUC_KLV_OPT_IN_FEATURE_EXT_CAT_ERR_TYPE` : 0x4001
+ *      Adds an extra dword to the XE_GUC_ACTION_NOTIFY_MEMORY_CAT_ERROR G2H
+ *      containing the type of the CAT error. On HW that does not support
+ *      reporting the CAT error type, the extra dword is set to 0xdeadbeef.
+ *
+ * _`GUC_KLV_OPT_IN_FEATURE_DYNAMIC_INHIBIT_CONTEXT_SWITCH` : 0x4003
+ *      This KLV enables the Dynamic Inhibit Context Switch optimization, which
+ *      consists in the GuC setting the CTX_CTRL_INHIBIT_SYN_CTX_SWITCH bit to
+ *      zero in the CTX_CONTEXT_CONTROL register of LRCs that are submitted
+ *      to an oversubscribed engine. This will cause those contexts to be
+ *      switched out immediately if they hit an unsatisfied semaphore wait
+ *      (instead of waiting the full timeslice duration). The bit is instead set
+ *      to one if a single context is queued on the engine, to avoid it being
+ *      switched out if there isn't another context that can run in its place.
+ */
+
+#define GUC_KLV_OPT_IN_FEATURE_EXT_CAT_ERR_TYPE_KEY 0x4001
+#define GUC_KLV_OPT_IN_FEATURE_EXT_CAT_ERR_TYPE_LEN 0u
+
+#define GUC_KLV_OPT_IN_FEATURE_DYNAMIC_INHIBIT_CONTEXT_SWITCH_KEY 0x4003
+#define GUC_KLV_OPT_IN_FEATURE_DYNAMIC_INHIBIT_CONTEXT_SWITCH_LEN 0u
+
+/**
+ * DOC: GuC Scheduling Policies KLVs
+ *
+ * `GuC KLV`_ keys available for use with UPDATE_SCHEDULING_POLICIES_KLV.
+ *
+ * _`GUC_KLV_SCHEDULING_POLICIES_RENDER_COMPUTE_YIELD` : 0x1001
+ *      Some platforms do not allow concurrent execution of RCS and CCS
+ *      workloads from different address spaces. By default, the GuC prioritizes
+ *      RCS submissions over CCS ones, which can lead to CCS workloads being
+ *      significantly (or completely) starved of execution time. This KLV allows
+ *      the driver to specify a quantum (in ms) and a ratio (percentage value
+ *      between 0 and 100), and the GuC will prioritize the CCS for that
+ *      percentage of each quantum. For example, specifying 100ms and 30% will
+ *      make the GuC prioritize the CCS for 30ms of every 100ms.
+ *      Note that this does not necessarly mean that RCS and CCS engines will
+ *      only be active for their percentage of the quantum, as the restriction
+ *      only kicks in if both classes are fully busy with non-compatible address
+ *      spaces; i.e., if one engine is idle or running the same address space,
+ *      a pending job on the other engine will still be submitted to the HW no
+ *      matter what the ratio is
+ */
+#define GUC_KLV_SCHEDULING_POLICIES_RENDER_COMPUTE_YIELD_KEY	0x1001
+#define GUC_KLV_SCHEDULING_POLICIES_RENDER_COMPUTE_YIELD_LEN	2u
+
+/**
  * DOC: GuC VGT Policy KLVs
  *
  * `GuC KLV`_ keys available for use with PF2GUC_UPDATE_VGT_POLICY.
@@ -147,6 +209,20 @@ enum  {
  *      :0: adverse events are not counted (default)
  *      :n: sample period in milliseconds
  *
+ * _`GUC_KLV_VGT_POLICY_ENGINE_GROUP_CONFIG` : 0x8004
+ *      This config allows the PF to split the engines across scheduling groups.
+ *      Each group is independently timesliced across VFs, allowing different
+ *      VFs to be active on the HW at the same time. When enabling this feature,
+ *      all engines must be assigned to a group (and only one group), or they
+ *      will be excluded from scheduling after this KLV is sent. To enable
+ *      the groups, the driver must provide a masks array with
+ *      GUC_MAX_ENGINE_CLASSES entries for each group, with each mask indicating
+ *      which logical instances of that class belong to the group. Therefore,
+ *      the length of this KLV when enabling groups is
+ *      num_groups * GUC_MAX_ENGINE_CLASSES. To disable the groups, the driver
+ *      must send the KLV without any payload (i.e. len = 0). The maximum
+ *      number of groups is 8.
+ *
  * _`GUC_KLV_VGT_POLICY_RESET_AFTER_VF_SWITCH` : 0x8D00
  *      This enum is to reset utilized HW engine after VF Switch (i.e to clean
  *      up Stale HW register left behind by previous VF)
@@ -160,6 +236,12 @@ enum  {
 
 #define GUC_KLV_VGT_POLICY_ADVERSE_SAMPLE_PERIOD_KEY	0x8002
 #define GUC_KLV_VGT_POLICY_ADVERSE_SAMPLE_PERIOD_LEN	1u
+
+#define GUC_KLV_VGT_POLICY_ENGINE_GROUP_CONFIG_KEY	0x8004
+#define GUC_KLV_VGT_POLICY_ENGINE_GROUP_MAX_COUNT	GUC_MAX_SCHED_GROUPS
+#define GUC_KLV_VGT_POLICY_ENGINE_GROUP_CONFIG_MIN_LEN 0
+#define GUC_KLV_VGT_POLICY_ENGINE_GROUP_CONFIG_MAX_LEN \
+	(GUC_KLV_VGT_POLICY_ENGINE_GROUP_MAX_COUNT * GUC_MAX_ENGINE_CLASSES)
 
 #define GUC_KLV_VGT_POLICY_RESET_AFTER_VF_SWITCH_KEY	0x8D00
 #define GUC_KLV_VGT_POLICY_RESET_AFTER_VF_SWITCH_LEN	1u
@@ -215,6 +297,10 @@ enum  {
  *      it to take effect. Such cases might typically happen on a 1PF+1VF
  *      Virtualization config enabled for heavier workloads like AI/ML.
  *
+ *      If scheduling groups are supported, the provided value is applied to all
+ *      groups (even if they've not yet been enabled). Support for this feature
+ *      is available from GuC 70.53.0.
+ *
  *      The max value for this KLV is 100 seconds, anything exceeding that
  *      will be clamped to the max.
  *
@@ -236,6 +322,10 @@ enum  {
  *      the KLV to force it to take effect. Such cases might typically happen
  *      on a 1PF+1VF Virtualization config enabled for heavier workloads like
  *      AI/ML.
+ *
+ *      If scheduling groups are supported, the provided value is applied to all
+ *      groups (even if they've not yet been enabled). Support for this feature
+ *      is available from GuC 70.53.0.
  *
  *      The max value for this KLV is 100 seconds, anything exceeding that
  *      will be clamped to the max.
@@ -299,6 +389,32 @@ enum  {
  *      :1: NORMAL = schedule VF always, irrespective of whether it has work or not
  *      :2: HIGH = schedule VF in the next time-slice after current active
  *          time-slice completes if it has active work
+ *
+ * _`GUC_KLV_VF_CFG_THRESHOLD_MULTI_LRC_COUNT` : 0x8A0D
+ *      Given that multi-LRC contexts are incompatible with SRIOV scheduler
+ *      groups and cause the latter to be turned off when registered with the
+ *      GuC, this config allows the PF to set a threshold for multi-LRC context
+ *      registrations by VFs to monitor their behavior.
+ *
+ * _`GUC_KLV_VF_CFG_ENGINE_GROUP_EXEC_QUANTUM' : 0x8A0E
+ *      This config sets the VFs-execution-quantum for each scheduling group in
+ *      milliseconds. The driver must provide an array of values, with each of
+ *      them matching the respective group index (first value goes to group 0,
+ *      second to group 1, etc). The setting of group values follows the same
+ *      behavior and rules as setting via GUC_KLV_VF_CFG_EXEC_QUANTUM. Note that
+ *      the GuC always sets the EQ for all groups (even the non-enabled ones),
+ *      so if we provide fewer values than the max the GuC will use 0 for the
+ *      remaining groups. This KLV is available starting from GuC 70.53.0.
+ *
+ * _`GUC_KLV_VF_CFG_ENGINE_GROUP_PREEMPT_TIMEOUT' : 0x8A0F
+ *      This config sets the VFs-preemption-timeout for each scheduling group in
+ *      microseconds. The driver must provide an array of values, with each of
+ *      them matching the respective group index (first value goes to group 0,
+ *      second to group 1, etc). The setting of group values follows the same
+ *      behavior and rules as setting via GUC_KLV_VF_CFG_PREEMPT_TIMEOUT. Note
+ *      that the GuC always sets the EQ for all groups (even the non-enabled
+ *      ones), so if we provide fewer values than the max the GuC will use 0 for
+ *      the remaining groups. This KLV is available starting from GuC 70.53.0.
  */
 
 #define GUC_KLV_VF_CFG_GGTT_START_KEY		0x0001
@@ -357,17 +473,29 @@ enum  {
 #define   GUC_SCHED_PRIORITY_NORMAL		1u
 #define   GUC_SCHED_PRIORITY_HIGH		2u
 
+#define GUC_KLV_VF_CFG_THRESHOLD_MULTI_LRC_COUNT_KEY	0x8a0d
+#define GUC_KLV_VF_CFG_THRESHOLD_MULTI_LRC_COUNT_LEN	1u
+
+#define GUC_KLV_VF_CFG_ENGINE_GROUP_EXEC_QUANTUM_KEY		0x8a0e
+#define GUC_KLV_VF_CFG_ENGINE_GROUP_EXEC_QUANTUM_MIN_LEN	1u
+#define GUC_KLV_VF_CFG_ENGINE_GROUP_EXEC_QUANTUM_MAX_LEN	GUC_MAX_SCHED_GROUPS
+
+#define GUC_KLV_VF_CFG_ENGINE_GROUP_PREEMPT_TIMEOUT_KEY		0x8a0f
+#define GUC_KLV_VF_CFG_ENGINE_GROUP_PREEMPT_TIMEOUT_MIN_LEN	1u
+#define GUC_KLV_VF_CFG_ENGINE_GROUP_PREEMPT_TIMEOUT_MAX_LEN	GUC_MAX_SCHED_GROUPS
 /*
  * Workaround keys:
  */
 enum xe_guc_klv_ids {
 	GUC_WORKAROUND_KLV_BLOCK_INTERRUPTS_WHEN_MGSR_BLOCKED				= 0x9002,
+	GUC_WORKAROUND_KLV_DISABLE_PSMI_INTERRUPTS_AT_C6_ENTRY_RESTORE_AT_EXIT		= 0x9004,
 	GUC_WORKAROUND_KLV_ID_GAM_PFQ_SHADOW_TAIL_POLLING				= 0x9005,
 	GUC_WORKAROUND_KLV_ID_DISABLE_MTP_DURING_ASYNC_COMPUTE				= 0x9007,
 	GUC_WA_KLV_NP_RD_WRITE_TO_CLEAR_RCSM_AT_CGP_LATE_RESTORE			= 0x9008,
 	GUC_WORKAROUND_KLV_ID_BACK_TO_BACK_RCS_ENGINE_RESET				= 0x9009,
 	GUC_WA_KLV_WAKE_POWER_DOMAINS_FOR_OUTBOUND_MMIO					= 0x900a,
 	GUC_WA_KLV_RESET_BB_STACK_PTR_ON_VF_SWITCH					= 0x900b,
+	GUC_WA_KLV_RESTORE_UNSAVED_MEDIA_CONTROL_REG					= 0x900c,
 };
 
 #endif

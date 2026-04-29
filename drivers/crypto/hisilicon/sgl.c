@@ -83,7 +83,7 @@ struct hisi_acc_sgl_pool *hisi_acc_create_sgl_pool(struct device *dev,
 	    (remain_sgl > 0 && block_num > HISI_ACC_MEM_BLOCK_NR - 1))
 		return ERR_PTR(-EINVAL);
 
-	pool = kzalloc(sizeof(*pool), GFP_KERNEL);
+	pool = kzalloc_obj(*pool);
 	if (!pool)
 		return ERR_PTR(-ENOMEM);
 	block = pool->mem_block;
@@ -210,15 +210,15 @@ static void clear_hw_sgl_sge(struct hisi_acc_hw_sgl *hw_sgl)
  * @pool: Pool which hw sgl memory will be allocated in.
  * @index: Index of hisi_acc_hw_sgl in pool.
  * @hw_sgl_dma: The dma address of allocated hw sgl.
+ * @dir: DMA direction.
  *
  * This function builds hw sgl according input sgl, user can use hw_sgl_dma
  * as src/dst in its BD. Only support single hw sgl currently.
  */
 struct hisi_acc_hw_sgl *
-hisi_acc_sg_buf_map_to_hw_sgl(struct device *dev,
-			      struct scatterlist *sgl,
-			      struct hisi_acc_sgl_pool *pool,
-			      u32 index, dma_addr_t *hw_sgl_dma)
+hisi_acc_sg_buf_map_to_hw_sgl(struct device *dev, struct scatterlist *sgl,
+			      struct hisi_acc_sgl_pool *pool, u32 index,
+			      dma_addr_t *hw_sgl_dma, enum dma_data_direction dir)
 {
 	struct hisi_acc_hw_sgl *curr_hw_sgl;
 	unsigned int i, sg_n_mapped;
@@ -232,7 +232,7 @@ hisi_acc_sg_buf_map_to_hw_sgl(struct device *dev,
 
 	sg_n = sg_nents(sgl);
 
-	sg_n_mapped = dma_map_sg(dev, sgl, sg_n, DMA_BIDIRECTIONAL);
+	sg_n_mapped = dma_map_sg(dev, sgl, sg_n, dir);
 	if (!sg_n_mapped) {
 		dev_err(dev, "DMA mapping for SG error!\n");
 		return ERR_PTR(-EINVAL);
@@ -245,11 +245,6 @@ hisi_acc_sg_buf_map_to_hw_sgl(struct device *dev,
 	}
 
 	curr_hw_sgl = acc_get_sgl(pool, index, &curr_sgl_dma);
-	if (IS_ERR(curr_hw_sgl)) {
-		dev_err(dev, "Get SGL error!\n");
-		ret = -ENOMEM;
-		goto err_unmap;
-	}
 	curr_hw_sgl->entry_length_in_sgl = cpu_to_le16(pool->sge_nr);
 	curr_hw_sge = curr_hw_sgl->sge_entries;
 
@@ -265,7 +260,7 @@ hisi_acc_sg_buf_map_to_hw_sgl(struct device *dev,
 	return curr_hw_sgl;
 
 err_unmap:
-	dma_unmap_sg(dev, sgl, sg_n, DMA_BIDIRECTIONAL);
+	dma_unmap_sg(dev, sgl, sg_n, dir);
 
 	return ERR_PTR(ret);
 }
@@ -276,16 +271,17 @@ EXPORT_SYMBOL_GPL(hisi_acc_sg_buf_map_to_hw_sgl);
  * @dev: The device which hw sgl belongs to.
  * @sgl: Related scatterlist.
  * @hw_sgl: Virtual address of hw sgl.
+ * @dir: DMA direction.
  *
  * This function unmaps allocated hw sgl.
  */
 void hisi_acc_sg_buf_unmap(struct device *dev, struct scatterlist *sgl,
-			   struct hisi_acc_hw_sgl *hw_sgl)
+			   struct hisi_acc_hw_sgl *hw_sgl, enum dma_data_direction dir)
 {
 	if (!dev || !sgl || !hw_sgl)
 		return;
 
-	dma_unmap_sg(dev, sgl, sg_nents(sgl), DMA_BIDIRECTIONAL);
+	dma_unmap_sg(dev, sgl, sg_nents(sgl), dir);
 	clear_hw_sgl_sge(hw_sgl);
 	hw_sgl->entry_sum_in_chain = 0;
 	hw_sgl->entry_sum_in_sgl = 0;

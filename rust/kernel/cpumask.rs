@@ -14,9 +14,6 @@ use crate::{
 #[cfg(CONFIG_CPUMASK_OFFSTACK)]
 use core::ptr::{self, NonNull};
 
-#[cfg(not(CONFIG_CPUMASK_OFFSTACK))]
-use core::mem::MaybeUninit;
-
 use core::ops::{Deref, DerefMut};
 
 /// A CPU Mask.
@@ -30,7 +27,7 @@ use core::ops::{Deref, DerefMut};
 /// The callers must ensure that the `struct cpumask` is valid for access and
 /// remains valid for the lifetime of the returned reference.
 ///
-/// ## Examples
+/// # Examples
 ///
 /// The following example demonstrates how to update a [`Cpumask`].
 ///
@@ -42,7 +39,7 @@ use core::ops::{Deref, DerefMut};
 /// fn set_clear_cpu(ptr: *mut bindings::cpumask, set_cpu: CpuId, clear_cpu: CpuId) {
 ///     // SAFETY: The `ptr` is valid for writing and remains valid for the lifetime of the
 ///     // returned reference.
-///     let mask = unsafe { Cpumask::as_mut_ref(ptr) };
+///     let mask = unsafe { Cpumask::from_raw_mut(ptr) };
 ///
 ///     mask.set(set_cpu);
 ///     mask.clear(clear_cpu);
@@ -52,13 +49,13 @@ use core::ops::{Deref, DerefMut};
 pub struct Cpumask(Opaque<bindings::cpumask>);
 
 impl Cpumask {
-    /// Creates a mutable reference to an existing `struct cpumask` pointer.
+    /// Creates a mutable reference from an existing `struct cpumask` pointer.
     ///
     /// # Safety
     ///
     /// The caller must ensure that `ptr` is valid for writing and remains valid for the lifetime
     /// of the returned reference.
-    pub unsafe fn as_mut_ref<'a>(ptr: *mut bindings::cpumask) -> &'a mut Self {
+    pub unsafe fn from_raw_mut<'a>(ptr: *mut bindings::cpumask) -> &'a mut Self {
         // SAFETY: Guaranteed by the safety requirements of the function.
         //
         // INVARIANT: The caller ensures that `ptr` is valid for writing and remains valid for the
@@ -66,13 +63,13 @@ impl Cpumask {
         unsafe { &mut *ptr.cast() }
     }
 
-    /// Creates a reference to an existing `struct cpumask` pointer.
+    /// Creates a reference from an existing `struct cpumask` pointer.
     ///
     /// # Safety
     ///
     /// The caller must ensure that `ptr` is valid for reading and remains valid for the lifetime
     /// of the returned reference.
-    pub unsafe fn as_ref<'a>(ptr: *const bindings::cpumask) -> &'a Self {
+    pub unsafe fn from_raw<'a>(ptr: *const bindings::cpumask) -> &'a Self {
         // SAFETY: Guaranteed by the safety requirements of the function.
         //
         // INVARIANT: The caller ensures that `ptr` is valid for reading and remains valid for the
@@ -175,7 +172,7 @@ impl Cpumask {
 /// The callers must ensure that the `struct cpumask_var_t` is valid for access and remains valid
 /// for the lifetime of [`CpumaskVar`].
 ///
-/// ## Examples
+/// # Examples
 ///
 /// The following example demonstrates how to create and update a [`CpumaskVar`].
 ///
@@ -215,6 +212,7 @@ impl Cpumask {
 /// }
 /// assert_eq!(mask2.weight(), count);
 /// ```
+#[repr(transparent)]
 pub struct CpumaskVar {
     #[cfg(CONFIG_CPUMASK_OFFSTACK)]
     ptr: NonNull<Cpumask>,
@@ -239,10 +237,7 @@ impl CpumaskVar {
             },
 
             #[cfg(not(CONFIG_CPUMASK_OFFSTACK))]
-            // SAFETY: FFI type is valid to be zero-initialized.
-            //
-            // INVARIANT: The associated memory is freed when the `CpumaskVar` goes out of scope.
-            mask: unsafe { core::mem::zeroed() },
+            mask: Cpumask(Opaque::zeroed()),
         })
     }
 
@@ -266,10 +261,7 @@ impl CpumaskVar {
                 NonNull::new(ptr.cast()).ok_or(AllocError)?
             },
             #[cfg(not(CONFIG_CPUMASK_OFFSTACK))]
-            // SAFETY: Guaranteed by the safety requirements of the function.
-            //
-            // INVARIANT: The associated memory is freed when the `CpumaskVar` goes out of scope.
-            mask: unsafe { MaybeUninit::uninit().assume_init() },
+            mask: Cpumask(Opaque::uninit()),
         })
     }
 
@@ -279,7 +271,7 @@ impl CpumaskVar {
     ///
     /// The caller must ensure that `ptr` is valid for writing and remains valid for the lifetime
     /// of the returned reference.
-    pub unsafe fn as_mut_ref<'a>(ptr: *mut bindings::cpumask_var_t) -> &'a mut Self {
+    pub unsafe fn from_raw_mut<'a>(ptr: *mut bindings::cpumask_var_t) -> &'a mut Self {
         // SAFETY: Guaranteed by the safety requirements of the function.
         //
         // INVARIANT: The caller ensures that `ptr` is valid for writing and remains valid for the
@@ -293,7 +285,7 @@ impl CpumaskVar {
     ///
     /// The caller must ensure that `ptr` is valid for reading and remains valid for the lifetime
     /// of the returned reference.
-    pub unsafe fn as_ref<'a>(ptr: *const bindings::cpumask_var_t) -> &'a Self {
+    pub unsafe fn from_raw<'a>(ptr: *const bindings::cpumask_var_t) -> &'a Self {
         // SAFETY: Guaranteed by the safety requirements of the function.
         //
         // INVARIANT: The caller ensures that `ptr` is valid for reading and remains valid for the

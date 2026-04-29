@@ -1184,7 +1184,7 @@ static int setup(struct spi_device *spi)
 	/* Only allocate on the first setup */
 	chip = spi_get_ctldata(spi);
 	if (!chip) {
-		chip = kzalloc(sizeof(struct chip_data), GFP_KERNEL);
+		chip = kzalloc_obj(struct chip_data);
 		if (!chip)
 			return -ENOMEM;
 	}
@@ -1283,14 +1283,12 @@ int pxa2xx_spi_probe(struct device *dev, struct ssp_device *ssp,
 	else
 		controller = devm_spi_alloc_host(dev, sizeof(*drv_data));
 	if (!controller)
-		return dev_err_probe(dev, -ENOMEM, "cannot alloc spi_controller\n");
+		return -ENOMEM;
 
 	drv_data = spi_controller_get_devdata(controller);
 	drv_data->controller = controller;
 	drv_data->controller_info = platform_info;
 	drv_data->ssp = ssp;
-
-	device_set_node(&controller->dev, dev_fwnode(dev));
 
 	/* The spi->mode bits understood by this driver: */
 	controller->mode_bits = SPI_CPOL | SPI_CPHA | SPI_CS_HIGH | SPI_LOOP;

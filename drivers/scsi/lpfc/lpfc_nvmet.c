@@ -1243,7 +1243,7 @@ lpfc_nvmet_defer_rcv(struct nvmet_fc_target_port *tgtport,
 	struct lpfc_nvmet_tgtport *tgtp;
 	struct lpfc_async_xchg_ctx *ctxp =
 		container_of(rsp, struct lpfc_async_xchg_ctx, hdlrctx.fcp_req);
-	struct rqb_dmabuf *nvmebuf = ctxp->rqb_buffer;
+	struct rqb_dmabuf *nvmebuf;
 	struct lpfc_hba *phba = ctxp->phba;
 	unsigned long iflag;
 
@@ -1251,13 +1251,18 @@ lpfc_nvmet_defer_rcv(struct nvmet_fc_target_port *tgtport,
 	lpfc_nvmeio_data(phba, "NVMET DEFERRCV: xri x%x sz %d CPU %02x\n",
 			 ctxp->oxid, ctxp->size, raw_smp_processor_id());
 
+	spin_lock_irqsave(&ctxp->ctxlock, iflag);
+	nvmebuf = ctxp->rqb_buffer;
 	if (!nvmebuf) {
+		spin_unlock_irqrestore(&ctxp->ctxlock, iflag);
 		lpfc_printf_log(phba, KERN_INFO, LOG_NVME_IOERR,
 				"6425 Defer rcv: no buffer oxid x%x: "
 				"flg %x ste %x\n",
 				ctxp->oxid, ctxp->flag, ctxp->state);
 		return;
 	}
+	ctxp->rqb_buffer = NULL;
+	spin_unlock_irqrestore(&ctxp->ctxlock, iflag);
 
 	tgtp = phba->targetport->private;
 	if (tgtp)
@@ -1265,9 +1270,6 @@ lpfc_nvmet_defer_rcv(struct nvmet_fc_target_port *tgtport,
 
 	/* Free the nvmebuf since a new buffer already replaced it */
 	nvmebuf->hrq->rqbp->rqb_free_buffer(phba, nvmebuf);
-	spin_lock_irqsave(&ctxp->ctxlock, iflag);
-	ctxp->rqb_buffer = NULL;
-	spin_unlock_irqrestore(&ctxp->ctxlock, iflag);
 }
 
 /**
@@ -1505,9 +1507,8 @@ lpfc_nvmet_setup_io_context(struct lpfc_hba *phba)
 			"6403 Allocate NVMET resources for %d XRIs\n",
 			phba->sli4_hba.nvmet_xri_cnt);
 
-	phba->sli4_hba.nvmet_ctx_info = kcalloc(
-		phba->sli4_hba.num_possible_cpu * phba->cfg_nvmet_mrq,
-		sizeof(struct lpfc_nvmet_ctx_info), GFP_KERNEL);
+	phba->sli4_hba.nvmet_ctx_info = kzalloc_objs(struct lpfc_nvmet_ctx_info,
+						     phba->sli4_hba.num_possible_cpu * phba->cfg_nvmet_mrq);
 	if (!phba->sli4_hba.nvmet_ctx_info) {
 		lpfc_printf_log(phba, KERN_ERR, LOG_TRACE_EVENT,
 				"6419 Failed allocate memory for "
@@ -1565,15 +1566,14 @@ lpfc_nvmet_setup_io_context(struct lpfc_hba *phba)
 	idx = 0;
 	cpu = cpumask_first(cpu_present_mask);
 	for (i = 0; i < phba->sli4_hba.nvmet_xri_cnt; i++) {
-		ctx_buf = kzalloc(sizeof(*ctx_buf), GFP_KERNEL);
+		ctx_buf = kzalloc_obj(*ctx_buf);
 		if (!ctx_buf) {
 			lpfc_printf_log(phba, KERN_ERR, LOG_TRACE_EVENT,
 					"6404 Ran out of memory for NVMET\n");
 			return -ENOMEM;
 		}
 
-		ctx_buf->context = kzalloc(sizeof(*ctx_buf->context),
-					   GFP_KERNEL);
+		ctx_buf->context = kzalloc_obj(*ctx_buf->context);
 		if (!ctx_buf->context) {
 			kfree(ctx_buf);
 			lpfc_printf_log(phba, KERN_ERR, LOG_TRACE_EVENT,

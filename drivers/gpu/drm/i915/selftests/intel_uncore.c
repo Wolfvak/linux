@@ -64,7 +64,7 @@ static int intel_fw_table_check(const struct intel_forcewake_range *ranges,
 static int intel_shadow_table_check(void)
 {
 	struct {
-		const struct i915_range *regs;
+		const struct i915_mmio_range *regs;
 		unsigned int size;
 	} range_lists[] = {
 		{ gen8_shadowed_regs, ARRAY_SIZE(gen8_shadowed_regs) },
@@ -74,7 +74,7 @@ static int intel_shadow_table_check(void)
 		{ mtl_shadowed_regs, ARRAY_SIZE(mtl_shadowed_regs) },
 		{ xelpmp_shadowed_regs, ARRAY_SIZE(xelpmp_shadowed_regs) },
 	};
-	const struct i915_range *range;
+	const struct i915_mmio_range *range;
 	unsigned int i, j;
 	s32 prev;
 
@@ -277,13 +277,15 @@ static int live_forcewake_domains(void *arg)
 #define FW_RANGE 0x40000
 	struct intel_gt *gt = arg;
 	struct intel_uncore *uncore = gt->uncore;
+	struct drm_i915_private *i915 = gt->i915;
+	struct intel_display *display = i915->display;
 	unsigned long *valid;
 	u32 offset;
 	int err;
 
-	if (!HAS_FPGA_DBG_UNCLAIMED(gt->i915) &&
-	    !IS_VALLEYVIEW(gt->i915) &&
-	    !IS_CHERRYVIEW(gt->i915))
+	if (!HAS_FPGA_DBG_UNCLAIMED(display) &&
+	    !IS_VALLEYVIEW(i915) &&
+	    !IS_CHERRYVIEW(i915))
 		return 0;
 
 	/*

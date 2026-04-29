@@ -3,7 +3,7 @@
  * Copyright (C) 2016 Oracle.  All Rights Reserved.
  * Author: Darrick J. Wong <darrick.wong@oracle.com>
  */
-#include "xfs.h"
+#include "xfs_platform.h"
 #include "xfs_fs.h"
 #include "xfs_format.h"
 #include "xfs_log_format.h"
@@ -92,10 +92,9 @@ unsigned int xfs_rui_log_space(unsigned int nr)
 STATIC void
 xfs_rui_item_format(
 	struct xfs_log_item	*lip,
-	struct xfs_log_vec	*lv)
+	struct xlog_format_buf	*lfb)
 {
 	struct xfs_rui_log_item	*ruip = RUI_ITEM(lip);
-	struct xfs_log_iovec	*vecp = NULL;
 
 	ASSERT(atomic_read(&ruip->rui_next_extent) ==
 			ruip->rui_format.rui_nextents);
@@ -105,7 +104,7 @@ xfs_rui_item_format(
 	ruip->rui_format.rui_type = lip->li_type;
 	ruip->rui_format.rui_size = 1;
 
-	xlog_copy_iovec(lv, &vecp, XLOG_REG_TYPE_RUI_FORMAT, &ruip->rui_format,
+	xlog_format_copy(lfb, XLOG_REG_TYPE_RUI_FORMAT, &ruip->rui_format,
 			xfs_rui_log_format_sizeof(ruip->rui_format.rui_nextents));
 }
 
@@ -200,17 +199,16 @@ unsigned int xfs_rud_log_space(void)
 STATIC void
 xfs_rud_item_format(
 	struct xfs_log_item	*lip,
-	struct xfs_log_vec	*lv)
+	struct xlog_format_buf	*lfb)
 {
 	struct xfs_rud_log_item	*rudp = RUD_ITEM(lip);
-	struct xfs_log_iovec	*vecp = NULL;
 
 	ASSERT(lip->li_type == XFS_LI_RUD || lip->li_type == XFS_LI_RUD_RT);
 
 	rudp->rud_format.rud_type = lip->li_type;
 	rudp->rud_format.rud_size = 1;
 
-	xlog_copy_iovec(lv, &vecp, XLOG_REG_TYPE_RUD_FORMAT, &rudp->rud_format,
+	xlog_format_copy(lfb, XLOG_REG_TYPE_RUD_FORMAT, &rudp->rud_format,
 			sizeof(struct xfs_rud_log_format));
 }
 
@@ -746,18 +744,18 @@ xlog_recover_rui_commit_pass2(
 	struct xfs_rui_log_format	*rui_formatp;
 	size_t				len;
 
-	rui_formatp = item->ri_buf[0].i_addr;
+	rui_formatp = item->ri_buf[0].iov_base;
 
-	if (item->ri_buf[0].i_len < xfs_rui_log_format_sizeof(0)) {
+	if (item->ri_buf[0].iov_len < xfs_rui_log_format_sizeof(0)) {
 		XFS_CORRUPTION_ERROR(__func__, XFS_ERRLEVEL_LOW, mp,
-				item->ri_buf[0].i_addr, item->ri_buf[0].i_len);
+				item->ri_buf[0].iov_base, item->ri_buf[0].iov_len);
 		return -EFSCORRUPTED;
 	}
 
 	len = xfs_rui_log_format_sizeof(rui_formatp->rui_nextents);
-	if (item->ri_buf[0].i_len != len) {
+	if (item->ri_buf[0].iov_len != len) {
 		XFS_CORRUPTION_ERROR(__func__, XFS_ERRLEVEL_LOW, mp,
-				item->ri_buf[0].i_addr, item->ri_buf[0].i_len);
+				item->ri_buf[0].iov_base, item->ri_buf[0].iov_len);
 		return -EFSCORRUPTED;
 	}
 
@@ -788,18 +786,18 @@ xlog_recover_rtrui_commit_pass2(
 	struct xfs_rui_log_format	*rui_formatp;
 	size_t				len;
 
-	rui_formatp = item->ri_buf[0].i_addr;
+	rui_formatp = item->ri_buf[0].iov_base;
 
-	if (item->ri_buf[0].i_len < xfs_rui_log_format_sizeof(0)) {
+	if (item->ri_buf[0].iov_len < xfs_rui_log_format_sizeof(0)) {
 		XFS_CORRUPTION_ERROR(__func__, XFS_ERRLEVEL_LOW, mp,
-				item->ri_buf[0].i_addr, item->ri_buf[0].i_len);
+				item->ri_buf[0].iov_base, item->ri_buf[0].iov_len);
 		return -EFSCORRUPTED;
 	}
 
 	len = xfs_rui_log_format_sizeof(rui_formatp->rui_nextents);
-	if (item->ri_buf[0].i_len != len) {
+	if (item->ri_buf[0].iov_len != len) {
 		XFS_CORRUPTION_ERROR(__func__, XFS_ERRLEVEL_LOW, mp,
-				item->ri_buf[0].i_addr, item->ri_buf[0].i_len);
+				item->ri_buf[0].iov_base, item->ri_buf[0].iov_len);
 		return -EFSCORRUPTED;
 	}
 
@@ -820,7 +818,7 @@ xlog_recover_rtrui_commit_pass2(
 	xfs_lsn_t			lsn)
 {
 	XFS_CORRUPTION_ERROR(__func__, XFS_ERRLEVEL_LOW, log->l_mp,
-			item->ri_buf[0].i_addr, item->ri_buf[0].i_len);
+			item->ri_buf[0].iov_base, item->ri_buf[0].iov_len);
 	return -EFSCORRUPTED;
 }
 #endif
@@ -846,10 +844,10 @@ xlog_recover_rud_commit_pass2(
 {
 	struct xfs_rud_log_format	*rud_formatp;
 
-	rud_formatp = item->ri_buf[0].i_addr;
-	if (item->ri_buf[0].i_len != sizeof(struct xfs_rud_log_format)) {
+	rud_formatp = item->ri_buf[0].iov_base;
+	if (item->ri_buf[0].iov_len != sizeof(struct xfs_rud_log_format)) {
 		XFS_CORRUPTION_ERROR(__func__, XFS_ERRLEVEL_LOW, log->l_mp,
-				rud_formatp, item->ri_buf[0].i_len);
+				rud_formatp, item->ri_buf[0].iov_len);
 		return -EFSCORRUPTED;
 	}
 
@@ -872,10 +870,10 @@ xlog_recover_rtrud_commit_pass2(
 {
 	struct xfs_rud_log_format	*rud_formatp;
 
-	rud_formatp = item->ri_buf[0].i_addr;
-	if (item->ri_buf[0].i_len != sizeof(struct xfs_rud_log_format)) {
+	rud_formatp = item->ri_buf[0].iov_base;
+	if (item->ri_buf[0].iov_len != sizeof(struct xfs_rud_log_format)) {
 		XFS_CORRUPTION_ERROR(__func__, XFS_ERRLEVEL_LOW, log->l_mp,
-				rud_formatp, item->ri_buf[0].i_len);
+				rud_formatp, item->ri_buf[0].iov_len);
 		return -EFSCORRUPTED;
 	}
 

@@ -47,6 +47,9 @@
 
 #define	MAX_DMA_DELAY	20
 
+/* 300ms to get resume response */
+#define WAIT_FOR_RESUME_ACK_MS		300
+
 /* ISHTP device states */
 enum ishtp_dev_state {
 	ISHTP_DEV_INITIALIZING = 0,
@@ -171,6 +174,9 @@ struct ishtp_device {
 	bool recvd_hw_ready;
 	struct hbm_version version;
 	int transfer_path; /* Choice of transfer path: IPC or DMA */
+
+	/* Alloc a dedicated unbound workqueue for ishtp device */
+	struct workqueue_struct *unbound_wq;
 
 	/* work structure for scheduling firmware loading tasks */
 	struct work_struct work_fw_loader;
