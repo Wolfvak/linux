@@ -520,22 +520,20 @@ config NBPFAXI_DMA
 	help
 	  Support for "Type-AXI" NBPF DMA IPs from Renesas
 
-config NINTENDO_NTR_DMA
+config NTR_DMA_ENGINE
 	tristate "Nintendo DS DMA support"
+	depends on SOC_NTR || SOC_TWL
 	select DMA_ENGINE
 	select DMA_VIRTUAL_CHANNELS
-	depends on SOC_NINTENDO_NTR || SOC_NINTENDO_TWL
-	default y
 	help
 	  Support for the DMA controller in the Nintendo DS family
 	  of systems (DS, lite, DSi).
 
-config NINTENDO_TWL_NDMA
+config TWL_NDMA_ENGINE
 	tristate "Nintendo DS(i) New DMA support"
+	depends on SOC_TWL
 	select DMA_ENGINE
 	select DMA_VIRTUAL_CHANNELS
-	depends on SOC_NINTENDO_TWL && NINTENDO_NTR_DMA
-	default y
 	help
 	  Support for the New DMA controller in the Nintendo DSi system.
 

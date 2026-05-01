@@ -87,7 +87,7 @@ extern unsigned long arm_dma_pfn_limit;
 extern phys_addr_t arm_lowmem_limit;
 
 void __init bootmem_init(void);
-void arm_mm_memblock_reserve(void);
+void arm_mm_memblock_reserve(const struct machine_desc *mdesc);
 #ifdef CONFIG_CMA_AREAS
 void dma_contiguous_remap(void);
 #else

@@ -1339,7 +1339,7 @@ static __init void prepare_page_table(void)
 /*
  * Reserve the special regions of memory
  */
-void __init arm_mm_memblock_reserve(void)
+void __init arm_mm_memblock_reserve(const struct machine_desc *mdesc)
 {
 	/*
 	 * Reserve the page tables.  These are already in use,

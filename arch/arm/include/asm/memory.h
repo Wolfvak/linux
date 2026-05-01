@@ -99,7 +99,8 @@
 #else /* CONFIG_MMU */
 
 #ifndef __ASSEMBLY__
-extern unsigned long setup_vectors_base(void);
+struct machine_desc;
+extern unsigned long setup_vectors_base(const struct machine_desc *);
 extern unsigned long vectors_base;
 #define VECTORS_BASE		vectors_base
 #endif
@@ -143,8 +144,8 @@ extern unsigned long vectors_base;
  * locations
  */
 #ifdef CONFIG_HAVE_TCM
-#define ITCM_OFFSET	UL(0xfffe0000)
-#define DTCM_OFFSET	UL(0xfffe8000)
+#define ITCM_OFFSET	CONFIG_ITCM_OFFSET
+#define DTCM_OFFSET	CONFIG_DTCM_OFFSET
 #endif
 
 /*

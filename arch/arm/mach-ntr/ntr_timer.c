@@ -143,7 +143,7 @@ static int __init ntr_timer_of_init(struct device_node *np)
 {
 	int irq, err;
 
-	pr_info("starting NDS TIMER driver...\n");
+	pr_info("Starting NDS TIMER driver...\n");
 
 	irq = irq_of_parse_and_map(np, 0);
 	if (irq <= 0) {
@@ -153,8 +153,6 @@ static int __init ntr_timer_of_init(struct device_node *np)
 
 	ntr_timer.io = of_iomap(np, 0);
 	BUG_ON(IS_ERR_OR_NULL(ntr_timer.io));
-
-	pr_debug("mapped registers @ %px\n", ntr_timer.io);
 
 	/* Reset all the timers */
 	for (unsigned i = 0; i < 4; i++)
@@ -178,6 +176,7 @@ static int __init ntr_timer_of_init(struct device_node *np)
 	} else {
 		clockevents_config_and_register(&ntr_clkevt,
 			NTR_CLKEVT_FREQ, 0, 0xFFFF);
+		pr_info("loaded\n");
 	}
 	return err;
 }

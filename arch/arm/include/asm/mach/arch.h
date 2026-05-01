@@ -57,6 +57,7 @@ struct machine_desc {
 	void			(*init_machine)(void);
 	void			(*init_late)(void);
 	void			(*restart)(enum reboot_mode, const char *);
+	void			(*irq_vector_fixup)(unsigned long);
 };
 
 /*

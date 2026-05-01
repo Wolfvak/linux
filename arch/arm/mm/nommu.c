@@ -40,7 +40,7 @@ struct mpu_rgn_info mpu_rgn_info;
 
 #ifdef CONFIG_CPU_CP15
 #ifdef CONFIG_CPU_HIGH_VECTOR
-unsigned long setup_vectors_base(void)
+unsigned long setup_vectors_base(const struct machine_desc *mdesc)
 {
 	unsigned long reg = get_cr();
 
@@ -67,7 +67,7 @@ static inline bool security_extensions_enabled(void)
 	return 0;
 }
 
-unsigned long setup_vectors_base(void)
+unsigned long setup_vectors_base(const struct machine_desc *mdesc)
 {
 	unsigned long base = 0, reg = get_cr();
 
@@ -76,9 +76,13 @@ unsigned long setup_vectors_base(void)
 		if (IS_ENABLED(CONFIG_REMAP_VECTORS_TO_RAM))
 			base = CONFIG_DRAM_BASE;
 		set_vbar(base);
-	} else if (IS_ENABLED(CONFIG_REMAP_VECTORS_TO_RAM)) {
-		if (CONFIG_DRAM_BASE != 0)
-			pr_err("Security extensions not enabled, vectors cannot be remapped to RAM, vectors base will be 0x00000000\n");
+	} else if (IS_ENABLED(CONFIG_REMAP_VECTORS_TO_RAM) && (CONFIG_DRAM_BASE != 0)) {
+			if (mdesc->irq_vector_fixup) {
+				base = CONFIG_DRAM_BASE;
+				(mdesc->irq_vector_fixup)(base);
+			} else {
+				pr_err("Security extensions not enabled, vectors cannot be remapped to RAM, vectors base will be 0x00000000\n");
+			}
 	}
 
 	return base;
@@ -86,10 +90,10 @@ unsigned long setup_vectors_base(void)
 #endif /* CONFIG_CPU_HIGH_VECTOR */
 #endif /* CONFIG_CPU_CP15 */
 
-void __init arm_mm_memblock_reserve(void)
+void __init arm_mm_memblock_reserve(const struct machine_desc *mdesc)
 {
 #ifndef CONFIG_CPU_V7M
-	vectors_base = IS_ENABLED(CONFIG_CPU_CP15) ? setup_vectors_base() : 0;
+	vectors_base = IS_ENABLED(CONFIG_CPU_CP15) ? setup_vectors_base(mdesc) : 0;
 	/*
 	 * Register the exception vector page.
 	 * some architectures which the DRAM is the exception vector to trap,

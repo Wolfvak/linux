@@ -28,7 +28,6 @@ static struct {
 	struct irq_chip_generic *gc;
 } ntr_irqc;
 
-
 static asmlinkage
 void __exception_irq_entry ntr_irqc_handle_irq(struct pt_regs *regs)
 {
@@ -43,6 +42,7 @@ void __exception_irq_entry ntr_irqc_handle_irq(struct pt_regs *regs)
 		while(pending != 0) {
 			irq = ffs(pending) - 1;
 			pending &= ~BIT(irq);
+
 			generic_handle_domain_irq(irqd, irq);
 		}
 	} while(pending != 0);
@@ -54,12 +54,10 @@ static int __init ntr_irqc_of_init(struct device_node *node,
 	int irq_base;
 	struct irq_chip_generic *gc;
 
-	pr_info("starting nds irq controller driver...\n");
+	pr_info("Starting NDS IRQC driver\n");
 
 	ntr_irqc.io = of_iomap(node, 0);
 	BUG_ON(ntr_irqc.io == NULL);
-
-	pr_debug("mapped registers @ %px\n", ntr_irqc.io);
 
 	/* mask IME, acknowledge & mask interrupts, unmask IME */
 	iowrite32(0, ntr_irqc.io + REG_IME);
@@ -96,10 +94,8 @@ static int __init ntr_irqc_of_init(struct device_node *node,
 						 NTR_IRQC_NR_IRQS, irq_base, 0,
 						 &irq_domain_simple_ops, &ntr_irqc);
 
-	pr_debug("mapped %d interrupts\n", ntr_irqc.irqd->mapcount);
-
 	set_handle_irq(ntr_irqc_handle_irq);
-	pr_info("ready!\n");
+	pr_info("loaded\n");
 	return 0;
 }
 

@@ -1348,6 +1348,13 @@ choice
 		  If you have a ZC702 board and want early boot messages to
 		  appear on the USB serial adaptor, select this option.
 
+	config DEBUG_NTR_NOCASH
+		bool "Kernel low-level debugging via no$gba debug port"
+		depends on ARCH_NTR
+		help
+		  Say Y here if you wish the debug print routes to direct
+		  their output to the no$gba emulator debug port.
+
 	config DEBUG_ICEDCC
 		bool "Kernel low-level debugging via EmbeddedICE DCC channel"
 		help
@@ -1400,13 +1407,6 @@ choice
 		  This option is preferred over the platform specific
 		  options; the platform specific options are deprecated
 		  and will be soon removed.
-
-	config DEBUG_LL_NTR_NOCASH
-		bool "Kernel low-level debugging via no$gba debug port"
-		depends on SOC_NINTENDO_NTR
-		help
-		  Say Y here if you wish the debug print routes to direct
-		  their output to the no$gba emulator debug port.
 
 endchoice
 
@@ -1497,7 +1497,6 @@ config DEBUG_LL_INCLUDE
 	default "debug/pl01x.S" if DEBUG_LL_UART_PL01X || DEBUG_UART_PL01X
 	default "debug/exynos.S" if DEBUG_EXYNOS_UART
 	default "debug/icedcc.S" if DEBUG_ICEDCC
-	default "debug/nocash.S" if DEBUG_LL_NTR_NOCASH
 	default "debug/imx.S" if DEBUG_IMX1_UART || \
 				 DEBUG_IMX25_UART || \
 				 DEBUG_IMX27_UART || \
@@ -1538,6 +1537,7 @@ config DEBUG_LL_INCLUDE
 	default "debug/vf.S" if DEBUG_VF_UART
 	default "debug/vt8500.S" if DEBUG_VT8500_UART0
 	default "debug/zynq.S" if DEBUG_ZYNQ_UART0 || DEBUG_ZYNQ_UART1
+	default "debug/nocash.S" if DEBUG_NTR_NOCASH
 	default "debug/bcm63xx.S" if DEBUG_BCM63XX_UART || DEBUG_BCMBCA
 	default "debug/digicolor.S" if DEBUG_DIGICOLOR_UA0
 	default "debug/brcmstb.S" if DEBUG_BRCMSTB_UART
@@ -1561,7 +1561,7 @@ config DEBUG_UART_PHYS
 	default 0x02530c00 if DEBUG_KEYSTONE_UART0
 	default 0x02531000 if DEBUG_KEYSTONE_UART1
 	default 0x03010fe0 if ARCH_RPC
-	default 0x04fffa1c if DEBUG_LL_NTR_NOCASH
+	default 0x04fffa1c if DEBUG_NTR_NOCASH
 	default 0x07000000 if DEBUG_SUN9I_UART0
 	default 0x09530000 if DEBUG_STIH418_SBC_ASC0
 	default 0x10009000 if DEBUG_REALVIEW_STD_PORT || \
@@ -1667,7 +1667,7 @@ config DEBUG_UART_PHYS
 	default 0xffffee00 if DEBUG_AT91_SAM9263_DBGU
 	default 0xfffff200 if DEBUG_AT91_RM9200_DBGU
 	depends on ARCH_EP93XX || \
-		DEBUG_LL_UART_8250 || DEBUG_LL_UART_PL01X || DEBUG_LL_NTR_NOCASH || \
+		DEBUG_LL_UART_8250 || DEBUG_LL_UART_PL01X || DEBUG_NTR_NOCASH || \
 		DEBUG_UART_8250 || DEBUG_UART_PL01X || DEBUG_MESON_UARTAO || \
 		DEBUG_QCOM_UARTDM || DEBUG_R7S72100_SCIF2 || \
 		DEBUG_R7S9210_SCIF2 || DEBUG_R7S9210_SCIF4 || \

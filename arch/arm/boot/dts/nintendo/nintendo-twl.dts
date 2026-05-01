@@ -23,7 +23,7 @@
 
 	memory@2000000 {
 		device_type = "memory";
-		reg = <0x2000000 0x1000000>;
+		reg = <0x2000000 (0x1000000-32768)>;
 	};
 
 	aliases {
@@ -87,30 +87,28 @@
 			#size-cells = <0>;
 
 			compatible = "nintendo,ntr-slot1";
-			reg = <0x40001a0 16>;
+			reg = <0x40001a0 0x20>;
+		};
+
+		slot1_spi: spi@40001a0 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			compatible = "nintendo,ntr-slot1-spi";
+			reg = <0x40001a0 0x02>;
 
 			num-cs = <1>;
+
+			uart0: serial@0 {
+				compatible = "is,spi-usb-adapter";
+				reg = <0>;
+			};
+		};
+
+		slot1_rom: rom@40001a0 {
+			compatible = "nintendo,ntr-slot1-rom";
+			reg = <0x40001a0 0x20>;
 			interrupts = <19>, <20>;
-
-			slot1_auxspi: spi {
-				#address-cells = <1>;
-				#size-cells = <0>;
-
-				compatible = "nintendo,ntr-slot1-auxspi";
-				num-cs = <1>;
-
-				uart0: serial@0 {
-					compatible = "is,spi-usb-adapter";
-					reg = <0>;
-				};
-			};
-
-			cart: cart {
-				#address-cells = <0>;
-				#size-cells = <0>;
-
-				compatible = "nintendo,ntr-slot1-cart";
-			};
 		};
 	};
 

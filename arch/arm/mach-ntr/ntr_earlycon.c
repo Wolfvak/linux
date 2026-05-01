@@ -1,13 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0+
 
-#include <linux/module.h>
-#include <linux/ioport.h>
-#include <linux/init.h>
-#include <linux/serial_core.h>
-#include <linux/serial.h>
-#include <linux/delay.h>
-#include <linux/of.h>
 #include <linux/io.h>
+#include <linux/module.h>
+#include <linux/serial_core.h>
 
 /** no$gba specific, other emulators also support it, no-op in hardware */
 #define NTR_DEBUG_PUTC_IO	((void*)0x4fffa1c)

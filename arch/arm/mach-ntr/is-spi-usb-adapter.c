@@ -56,7 +56,7 @@ struct is_spi_usb_adapter_port {
 static struct uart_driver is_spi_usb_adapter_uart_driver = {
 	.owner		= THIS_MODULE,
 	.driver_name	= KBUILD_MODNAME,
-	.dev_name	= "ttyIS",
+	.dev_name	= "ttySC",
 	.nr		= 1,
 };
 

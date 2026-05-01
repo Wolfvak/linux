@@ -3,6 +3,8 @@ menuconfig ARCH_NTR
 	depends on CPU_LITTLE_ENDIAN && !MMU
 	select OF
 	select CPU_ARM946E
+	select REMAP_VECTORS_TO_RAM
+	select GENERIC_ALLOCATOR
 	help
 	  This enables support for the Nintendo DS generation handhelds (NDS, DSi).
 
@@ -18,42 +20,41 @@ config SOC_NTR
 
 config SOC_TWL
 	bool "Nintendo DSi support (TWL)"
-	depends on ARCH_NTR
-    depends on SOC_NTR
-	default y if SOC_NTR
+	depends on ARCH_NTR && SOC_NTR
+	default y
 	help
 	  Enable support for the extended DSi feature set (TWL SoC).
 
 # Driver support
 
-# Basic driver support (IRQs, timer, power management)
+# Core driver support (IRQs, timer, power management)
 config NTR_IRQC
 	bool "Nintendo DS interrupt controller driver"
 	depends on SOC_NTR || COMPILE_TEST
-	default y if SOC_NTR
+	default y
 	select IRQCHIP
 	select GENERIC_IRQ_CHIP
+	select NTR_DMA_ENGINE
 	help
 	  Support for the Nintendo DS (NTR) interrupt controller.
 
 config TWL_IRQC
 	bool "Nintendo DSi interrupt controller"
-	depends on SOC_TWL
-    depends on NTR_IRQC
-	default y if SOC_TWL
+	depends on SOC_TWL && NTR_IRQC
+	default y
+	select TWL_NDMA_ENGINE
 	help
 	  Support for the extended DSi (TWL) interrupts.
 
 config NTR_TIMER
 	bool "Nintendo DS family timer driver"
 	depends on SOC_NTR
-	default y if SOC_NTR
+	default y
 	select TIMER_OF
 	select CLKSRC_MMIO
 	select GENERIC_CLOCKEVENTS
 	help
 	  Enables support for the Nintendo DS generation timer hardware.
-
 
 # Peripheral support (HID, I/O)
 config NTR_SLOT1

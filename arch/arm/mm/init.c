@@ -184,7 +184,7 @@ void __init arm_memblock_init(const struct machine_desc *mdesc)
 
 	reserve_initrd_mem();
 
-	arm_mm_memblock_reserve();
+	arm_mm_memblock_reserve(mdesc);
 
 	/* reserve any platform specific memblock areas */
 	if (mdesc->reserve)
